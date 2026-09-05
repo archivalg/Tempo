@@ -48,7 +48,8 @@ class Worker(Base):
     employment_type: Mapped[str] = mapped_column(String)
     home_site: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, default="active")
-    source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_system: Mapped[str] = mapped_column(String, default="tempo_native")
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class SkillCertification(Base):
@@ -74,7 +75,8 @@ class Availability(Base):
     interval_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String)
     preference: Mapped[float | None] = mapped_column(Float, nullable=True)
-    source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_system: Mapped[str] = mapped_column(String, default="tempo_native")
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class AttendanceSession(Base):
@@ -89,7 +91,7 @@ class AttendanceSession(Base):
     approval: Mapped[str] = mapped_column(String, default="pending")
     pay_code: Mapped[str | None] = mapped_column(String, nullable=True)
     source_system: Mapped[str] = mapped_column(String)
-    source_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class ShiftAssignment(Base):
@@ -103,6 +105,8 @@ class ShiftAssignment(Base):
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String, default="proposed")
+    source_system: Mapped[str] = mapped_column(String, default="tempo_native")
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class DemandBucket(Base):
