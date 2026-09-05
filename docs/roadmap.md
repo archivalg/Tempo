@@ -8,8 +8,8 @@ re-reading the full integration spec.
 | Phase | Scope (§18) | Status | Where |
 |---|---|---|---|
 | 0 — Contract foundation | Tenant/identity mapping, canonical v1, readiness, run lifecycle, explanation contract, events, audit | **Done** | `services/tempo-api` |
-| A — Core Labour Intelligence | Demand forecast, labour requirement, workforce mix, named roster on Tempo-native data | **Not started** — Phase 0 stubs the four endpoints; real solver logic (GBM forecast, MILP mix, CP-SAT roster per AI Labour Optimisation Spec §3) is the next milestone | — |
-| B — Overlay ingestion | Deputy first; UKG Pro WFM / UKG Ready next; source parity tests | Not started | — |
+| A — Core Labour Intelligence | Demand forecast, labour requirement, workforce mix, named roster on Tempo-native data | **Done**, with tracked scope reductions (single site/run, fixed shift calendar, skill_code-as-role, static mix availability — see `services/tempo-api` README's "known simplifications") | `services/tempo-api/app/solvers` |
+| B — Overlay ingestion | Deputy first; UKG Pro WFM / UKG Ready next; source parity tests | **Not started** — next milestone. The solvers already read only canonical tables (no vendor-specific logic), so Phase B is additive: build the connectors, don't touch `app/solvers` | — |
 | C — Operational breadth | Intraday reallocation, training/certification, leave/RDO; WMS live backlog integration | Not started | — |
 | D — Enterprise intelligence | Team composition, 3PL cost-to-serve/margin, robust/scenario; restricted finance access | Not started | — |
 | E — Controlled action | Action validation, approvals, source staging/writeback, reconciliation | Not started — `ActionRequest` table exists in Phase 0's schema so this doesn't need a breaking migration later, but no endpoints | — |
@@ -18,7 +18,7 @@ re-reading the full integration spec.
 ## Recommended MVP cut (spec §18.1)
 
 Build Phase 0 + Phase A together, read-only Prime integration, before any
-writeback. Phase 0 is done; **Phase A is next**.
+writeback. Both are done; **Phase B (Deputy connector) is next**.
 
 ## Open decisions this roadmap depends on
 

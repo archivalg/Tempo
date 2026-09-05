@@ -14,8 +14,9 @@ Intelligence pack.
 
 ## Code
 
-- `services/tempo-api` — the Tempo Optimisation Service. Phase 0 of the
-  integration spec's roadmap is implemented here; see its README for details.
+- `services/tempo-api` — the Tempo Optimisation Service. Phases 0 and A of
+  the integration spec's roadmap are implemented here (contract foundation
+  plus real forecast/MILP/CP-SAT solvers); see its README for details.
 - `wiep-mvp.zip`, `wiep_mobile_app_expo.ts` — an earlier proof-of-concept
   scaffold (pre-dates the v2.0 specs). Kept as UI/interaction reference only;
   not the foundation for `services/tempo-api`.

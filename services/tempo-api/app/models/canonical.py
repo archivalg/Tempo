@@ -130,6 +130,26 @@ class WorkStandard(Base):
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ActivityRoleZoneMap(Base):
+    """β_(a,r,z,w) — activity-to-role-zone mapping (AI Labour Optimisation Spec §3.2).
+
+    Not one of the §6.1 canonical entities named in the Integration Spec, but
+    required input for the Labour Requirement translation it describes —
+    added here as Tempo governed configuration (same authority tier as
+    WorkStandard/OptimisationPolicy), not as a Maestro-sourced entity.
+    """
+
+    __tablename__ = "activity_role_zone_map"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String)
+    activity: Mapped[str] = mapped_column(String)
+    role: Mapped[str] = mapped_column(String)
+    zone: Mapped[str] = mapped_column(String)
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+
+
 class LabourCostRule(Base):
     __tablename__ = "labour_cost_rule"
 

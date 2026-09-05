@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     db_module.init_db()
 
     with TestClient(app) as test_client:
+        test_client.session_local = test_session_local
         yield test_client
 
 

@@ -1,6 +1,8 @@
 import uuid
+from datetime import datetime, timezone
 
 from .conftest import context_header
+from .factories import seed_named_roster_scenario
 
 VALID_REQUEST = {
     "request_id": "req_1",
@@ -12,6 +14,7 @@ VALID_REQUEST = {
         "bucket_minutes": 60,
     },
 }
+WINDOW_START = datetime(2026, 9, 8, tzinfo=timezone.utc)
 
 
 def _headers():
@@ -20,7 +23,13 @@ def _headers():
     return headers
 
 
+def _seed(client):
+    with client.session_local() as session:
+        seed_named_roster_scenario(session, tenant_id="ten_test", site_id="site_mel_01", window_start=WINDOW_START)
+
+
 def test_create_run_end_to_end(client):
+    _seed(client)
     response = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers())
     assert response.status_code == 202, response.text
     body = response.json()
@@ -46,9 +55,37 @@ def test_create_run_end_to_end(client):
     ]:
         assert field in explanation, f"missing mandatory explanation field: {field}"
     assert explanation["confidence"]["method"] == "tempo-confidence-1.0"
+    assert fetched_body["result"]["assignments"], "expected the CP-SAT roster to actually assign someone"
+
+
+def test_demand_forecast_produces_a_real_forecast(client):
+    _seed(client)
+    response = client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["forecast"]
+    assert result["kpis"]["activities_forecast"] == 1
+
+
+def test_workforce_mix_respects_internal_hire_ratio(client):
+    _seed(client)
+    response = client.post("/v1/optimisations/workforce_mix", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["assignments"]
+    assert float(result["kpis"]["labour_cost"]["amount"]) > 0
+
+
+def test_demand_forecast_without_history_returns_data_not_ready(client):
+    response = client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "TEMPO-DATA-004"
 
 
 def test_idempotent_replay_returns_same_run(client):
+    _seed(client)
     headers = _headers()
     first = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=headers)
     second = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=headers)
@@ -56,6 +93,7 @@ def test_idempotent_replay_returns_same_run(client):
 
 
 def test_idempotency_key_reuse_with_different_body_conflicts(client):
+    _seed(client)
     headers = _headers()
     other_request = {**VALID_REQUEST, "request_id": "req_2"}
     client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=headers)
@@ -97,6 +135,7 @@ def test_run_not_found_for_unknown_id(client):
 
 
 def test_cancel_terminal_run_is_a_noop(client):
+    _seed(client)
     created = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers())
     run_id = created.json()["run_id"]
     cancelled = client.post(f"/v1/runs/{run_id}/cancel", headers=context_header())
@@ -105,6 +144,7 @@ def test_cancel_terminal_run_is_a_noop(client):
 
 
 def test_run_comparisons_returns_kpis_for_each_run(client):
+    _seed(client)
     first = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers())
     second = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers())
     run_ids = [first.json()["run_id"], second.json()["run_id"]]

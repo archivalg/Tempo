@@ -1,19 +1,18 @@
 """Run creation and lifecycle endpoints — §8.2 capability catalogue.
 
-Phase 0 exit outcome (Integration Spec §18): "Prime can call a stubbed Tempo
-run end-to-end with governed evidence." The four run types below execute
-through the real snapshot/lifecycle/confidence/audit/event pipeline; the
-`result` numbers themselves are deterministic stand-ins until Phase A wires
-in the actual forecasting/MILP/CP-SAT solvers (see docs/roadmap.md). Every
-other run_type in Appendix C is a legal request that returns
-TEMPO-RUN-004 (not yet implemented for this phase) rather than a 404,
-so Prime's tool schema doesn't need to change as phases land.
+Phase A wires the four run types to real solvers (app/solvers/*): Holt
+linear demand forecasting, deterministic labour-requirement translation, an
+OR-Tools MILP workforce mix, and an OR-Tools CP-SAT named roster — see each
+module's docstring for the scope reductions taken to keep them tractable
+without a real Maestro feed yet. Every other run_type in Appendix C is
+still a legal request that returns TEMPO-RUN-004 rather than a 404, so
+Prime's tool schema doesn't need to change as later phases land.
 """
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -24,31 +23,30 @@ from app.core.confidence import compute_confidence
 from app.core.events import event_bus
 from app.core.idempotency import IdempotencyConflict, idempotency_store
 from app.dependencies import get_db, get_request_context, require_idempotency_key
-from app.errors import AuthForbidden, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
+from app.errors import AuthForbidden, DataNotReady, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
 from app.models.runs import OptimisationRun
-from app.schemas.readiness import CAPABILITY_REQUIRED_DOMAINS
-from app.schemas.runs import (
-    IMPLEMENTED_RUN_TYPES,
-    ConfidenceComponents,
-    RunRequest,
-    RunResponse,
-)
+from app.schemas.runs import IMPLEMENTED_RUN_TYPES, RunRequest, RunResponse
 from app.schemas.tenancy import RequestContext
+from app.solvers.base import InsufficientData, SolverOutcome
+from app.solvers.demand_forecast import forecast_demand
+from app.solvers.labour_requirement import translate_labour_requirement
+from app.solvers.named_roster import solve_named_roster
+from app.solvers.workforce_mix import solve_workforce_mix
 
 router = APIRouter(tags=["runs"])
 
-_RUN_TYPE_TO_CAPABILITY = {
-    "demand_forecast": "forecast.demand",
-    "labour_requirement": "forecast.labour_requirement",
-    "workforce_mix": "optimize.mix",
-    "named_roster": "optimize.roster",
+_RUN_TYPE_TO_MODEL = {
+    "demand_forecast": ("demand_forecast_holt_linear", "1.0.0", "holt-linear"),
+    "labour_requirement": ("labour_requirement_translation", "1.0.0", "deterministic"),
+    "workforce_mix": ("workforce_mix", "1.0.0", "milp-cbc"),
+    "named_roster": ("named_roster", "1.0.0", "cp-sat"),
 }
 
-_RUN_TYPE_TO_MODEL = {
-    "demand_forecast": ("demand_forecast_gbm", "1.0.0-stub", "gbm"),
-    "labour_requirement": ("labour_requirement_translation", "1.0.0-stub", "deterministic"),
-    "workforce_mix": ("workforce_mix", "1.0.0-stub", "milp"),
-    "named_roster": ("named_roster", "1.0.0-stub", "cp-sat"),
+_SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcome]] = {
+    "demand_forecast": forecast_demand,
+    "labour_requirement": translate_labour_requirement,
+    "workforce_mix": solve_workforce_mix,
+    "named_roster": solve_named_roster,
 }
 
 
@@ -57,20 +55,8 @@ def _enforce_scope(context: RequestContext, request: RunRequest) -> None:
         raise ScopeError("requested site_ids exceed the caller's authorised scope")
     if context.customer_ids and any(c not in context.customer_ids for c in request.scope.customer_ids):
         raise ScopeError("requested customer_ids exceed the caller's authorised scope")
-
-
-def _stub_result(run_type: str, request: RunRequest) -> dict[str, Any]:
-    # Deterministic placeholder numbers — Phase A replaces this function's
-    # body with a real solver call; the contract around it does not change.
-    if run_type == "workforce_mix" or run_type == "named_roster":
-        return {
-            "assignments": [],
-            "kpis": {
-                "labour_cost": {"amount": "0.00", "currency": "AUD"},
-                "coverage_pct": 0.0,
-            },
-        }
-    return {"forecast": [], "kpis": {}}
+    if not request.scope.site_ids:
+        raise ScopeError("request scope must specify at least one site_id — solvers run per-site")
 
 
 @router.post("/optimisations/{run_type}", response_model=RunResponse, status_code=202)
@@ -119,13 +105,6 @@ def create_run(
     lifecycle.require_transition(run.status, "validating")
     run.status = "validating"
 
-    capability = _RUN_TYPE_TO_CAPABILITY[run_type]
-    required_domains = CAPABILITY_REQUIRED_DOMAINS.get(capability, [])
-    # Phase 0 stub: readiness gating exists structurally (see readiness.py)
-    # but run creation does not yet block on it — Phase A wires the same
-    # check used by GET /v1/data-readiness in here before queuing.
-    warnings: list[str] = []
-
     lifecycle.require_transition(run.status, "queued")
     run.status = "queued"
     event_bus.publish(db, context.tenant_id, "run.started", {"run_id": run_id}, subject=run_id, correlation_id=context.correlation_id)
@@ -133,37 +112,35 @@ def create_run(
     lifecycle.require_transition(run.status, "running")
     run.status = "running"
 
-    model_name, model_version, solver = _RUN_TYPE_TO_MODEL[run_type]
-    result = _stub_result(run_type, request)
-    confidence = compute_confidence(
-        ConfidenceComponents(
-            completeness=0.7 if required_domains else 1.0,
-            freshness=1.0,
-            mapping_quality=0.9,
-            forecast_validation=0.8,
-            constraint_coverage=0.8,
-            solution_quality=1.0,
-        ),
-        reasons=warnings or ["Phase 0 stub result — no live canonical data consumed yet"],
-    )
+    try:
+        outcome = _SOLVERS[run_type](db, context.tenant_id, request.scope.site_ids, request)
+    except InsufficientData as exc:
+        # No persisted "failed" run for a validation-time rejection — the
+        # request never produced a snapshot worth auditing as a run; the
+        # whole transaction (including the run row above) rolls back.
+        raise DataNotReady(str(exc)) from exc
+
+    warnings = list(outcome.missing_evidence)
+    confidence = compute_confidence(outcome.confidence_components, reasons=warnings or ["no data-quality issues detected"])
     explanation = {
-        "baseline": {},
-        "proposed": {},
-        "delta": {},
-        "dollar_value": None,
+        "baseline": outcome.baseline,
+        "proposed": outcome.proposed,
+        "delta": outcome.delta,
+        "dollar_value": outcome.dollar_value,
         "confidence": confidence.model_dump(),
-        "primary_drivers": ["Phase 0 stub — deterministic placeholder, not a solver decision"],
-        "alternatives": [],
-        "data_lineage": {"snapshot_id": snapshot_id, "source_systems": ["tempo_native"]},
+        "primary_drivers": outcome.primary_drivers,
+        "alternatives": outcome.alternatives,
+        "data_lineage": {"snapshot_id": snapshot_id, "source_systems": outcome.source_systems},
         "freshness": {"source_max_age_seconds": 0},
-        "missing_evidence": warnings,
-        "assumptions": ["Phase A replaces this stub with the real solver"],
-        "feasibility": "feasible",
+        "missing_evidence": outcome.missing_evidence,
+        "assumptions": outcome.assumptions,
+        "feasibility": outcome.feasibility,
         "evidence_ref": f"evi_{uuid.uuid4().hex[:20]}",
     }
+    result = outcome.result
     lineage = {
         "snapshot_id": snapshot_id,
-        "source_systems": ["tempo_native"],
+        "source_systems": outcome.source_systems,
         "policy_version": request.configuration.policy_version,
     }
 
