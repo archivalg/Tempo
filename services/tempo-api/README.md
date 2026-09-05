@@ -1,12 +1,12 @@
-# Tempo Optimisation Service — Phase 0 + Phase A + Phase B (Deputy)
+# Tempo Optimisation Service — Phase 0 + Phase A + Phase B (Deputy, UKG)
 
 A FastAPI implementation of the contract foundation (Phase 0), the four
-core Labour Intelligence models (Phase A), and the Deputy overlay connector
-(Phase B) from `Tempo_Prime_AI_Integration_Specification_v2.0.docx` (§18):
-Phase 0's exit outcome — *"Prime can call a stubbed Tempo run end-to-end
-with governed evidence"* — Phase A's four real solvers, and Phase B's —
-*"customers retain T&A while using identical Prime/Tempo capability
-contracts."*
+core Labour Intelligence models (Phase A), and the overlay connectors
+(Phase B — Deputy, UKG Pro WFM, UKG Ready) from
+`Tempo_Prime_AI_Integration_Specification_v2.0.docx` (§18): Phase 0's exit
+outcome — *"Prime can call a stubbed Tempo run end-to-end with governed
+evidence"* — Phase A's four real solvers, and Phase B's — *"customers
+retain T&A while using identical Prime/Tempo capability contracts."*
 
 **Architecture note on where Phase B lives**: the spec's own architecture
 (§3.1 "Prohibited coupling", DP-03/INT-002) requires vendor-specific logic
@@ -59,32 +59,39 @@ spec's own pipeline (Strategy doc §4). Every other `run_type` in Appendix C
 is still a legal request that returns `TEMPO-RUN-004` rather than a 404, so
 Prime's tool schema doesn't need to change as later phases land.
 
-Phase B — the Deputy connector, in `app/maestro/deputy/` (§2.1, §2.3, §7.1):
+Phase B — three connectors in `app/maestro/` (§2.1, §2.2, §2.3, §7.1):
 
 | Component | What it does |
 |---|---|
-| `client.py` | Bearer-token REST client, 500-record pagination, retry-with-backoff-and-jitter on 429/5xx |
-| `mapping.py` | Employee/Timesheet/Roster/Leave → canonical envelope (§6.2), with data-quality classification (§6.3) — never silently defaults a required field |
-| `connector.py` | Bounded backfill with a resumable checkpoint (`ConnectorCheckpoint`); resolves each record's Deputy employee id to a canonical `worker_id`, quarantining (not dropping) anything that arrives before its dependency |
-| `app/core/ingestion.py` | Shared idempotent upsert + dead-letter routing (`IngestionDeadLetter`) — any future connector (UKG) calls this too, not its own copy |
+| `deputy/client.py` | Bearer-token REST client, 500-record pagination, retry-with-backoff-and-jitter on 429/5xx |
+| `deputy/mapping.py` | Employee/Timesheet/Roster/Leave → canonical envelope (§6.2), with data-quality classification (§6.3) — never silently defaults a required field |
+| `deputy/connector.py` | Bounded backfill with a resumable checkpoint (`ConnectorCheckpoint`); resolves each record's Deputy employee id to a canonical `worker_id`, quarantining (not dropping) anything that arrives before its dependency |
+| `ukg/pro_wfm_client.py`, `ukg/ready_client.py` | UKG "is not one API" (§2.2) — different auth (OAuth2 tenant key vs. plain API key) and endpoint shapes, but each client normalizes to the identical record shape, so... |
+| `ukg/mapping.py`, `ukg/connector.py` | ...there's exactly one UKG mapping module and one UKG connector algorithm, parametrized by which client (product line) was constructed at onboarding — not two near-duplicate connectors |
+| `app/core/ingestion.py` | Shared idempotent upsert + dead-letter routing (`IngestionDeadLetter`) — all three connectors call this, none has its own copy |
 
 `tests/test_source_parity.py` is the concrete proof this is wired right,
 not just architecturally asserted: it runs the identical `workforce_mix`
-solver against a Tempo-native tenant and a Deputy-sourced tenant seeded
-through the real connector pipeline, and checks the labour cost and
-coverage come out identical (Integration Spec AC-02).
+solver against a Tempo-native tenant and, in turn, a Deputy-sourced,
+UKG-Pro-WFM-sourced, and UKG-Ready-sourced tenant, each seeded through its
+real connector pipeline — and all four produce identical labour cost and
+coverage (Integration Spec AC-02, DP-04).
 
 **Not implemented in Phase B** — flagged, not silently skipped:
-- **Skill/Certification mapping** — §2.3 itself notes Deputy has no native
-  cert object ("map via custom fields"); this needs a per-tenant
-  custom-field schema this scaffold doesn't have.
-- **TimesheetPayReturn** (pay-rule/cost detail) — `AttendanceSession.pay_code`
-  is left unset; `LabourCostRule` is still tenant-configured directly.
-- **UKG Pro WFM / UKG Ready** — spec's own sequencing says Deputy first;
-  next up, same `app/maestro/<vendor>/` shape.
-- **Real webhook signature verification** — the connector only does bounded
-  backfill; incremental sync is a plain re-run with a watermark, not a
-  webhook receiver yet.
+- **Skill/Certification mapping** — §2.3 itself notes neither Deputy nor
+  UKG natively covers this ("typically sourced from a separate LMS/
+  compliance system" / "map via custom fields" for Deputy specifically);
+  needs a per-tenant custom-field/LMS integration this scaffold doesn't have.
+- **TimesheetPayReturn / UKG pay codes** (pay-rule/cost detail) —
+  `AttendanceSession.pay_code` is left unset either way; `LabourCostRule`
+  is still tenant-configured directly.
+- **Full UKG Pro HCM** — the spec itself deprioritizes this ("materially
+  heavier... only needed for employee master sync, not attendance"); only
+  Pro WFM (attendance/scheduling) is implemented.
+- **Real webhook signature verification** — every connector only does
+  bounded backfill; incremental sync is a plain re-run with a watermark,
+  not a webhook receiver yet (Deputy and UKG Pro WFM both support
+  webhooks per the spec).
 
 ## Known simplifications (tracked, not hidden)
 
@@ -121,16 +128,21 @@ Phase A (each solver module's own docstring has the full list):
   the same kind of gap).
 
 Phase B:
-- **Deputy field names are unverified against a live tenant** — see the
-  warning at the top of `app/maestro/deputy/client.py` and `mapping.py`.
-  The pagination/auth/retry *behaviour* and the canonical mapping *shape*
-  are real and tested; the literal Deputy JSON field names need a sandbox
-  check before pointing this at a real customer.
+- **Deputy and UKG field names are unverified against a live tenant** — see
+  the warnings at the top of each `client.py`/`mapping.py`. The
+  pagination/auth/retry *behaviour* and the canonical mapping *shape* are
+  real and tested; the literal JSON field names need a sandbox check
+  before pointing this at a real customer.
+- **UKG employment-category inference is a hardcoded keyword heuristic**
+  (`app/maestro/ukg/mapping.py`'s `_CATEGORY_KEYWORDS`) — real UKG
+  category taxonomies vary by tenant and should eventually be a per-tenant
+  policy mapping, not guessed from substring matches.
 - **Maestro shares Tempo's database and process** rather than being a
   separate service — see the architecture note above.
 - **Per-entity watermarks aren't independent** — one backfill call uses a
-  single `modified_since` across employees/timesheets/rosters/leave rather
-  than each entity type tracking its own delta cursor.
+  single `modified_since` across employees/timesheets/rosters/leave (or
+  punches/shifts/accruals for UKG) rather than each entity type tracking
+  its own delta cursor.
 
 ## Run it
 

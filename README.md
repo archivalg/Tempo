@@ -14,10 +14,10 @@ Intelligence pack.
 
 ## Code
 
-- `services/tempo-api` — the Tempo Optimisation Service. Phases 0, A and
-  part of B are implemented here (contract foundation, real
-  forecast/MILP/CP-SAT solvers, and a Deputy overlay connector); see its
-  README for details, including the architectural debt Phase B carries.
+- `services/tempo-api` — the Tempo Optimisation Service. Phases 0, A and B
+  are implemented here (contract foundation, real forecast/MILP/CP-SAT
+  solvers, and Deputy + UKG Pro WFM + UKG Ready overlay connectors); see
+  its README for details, including the architectural debt Phase B carries.
 - `wiep-mvp.zip`, `wiep_mobile_app_expo.ts` — an earlier proof-of-concept
   scaffold (pre-dates the v2.0 specs). Kept as UI/interaction reference only;
   not the foundation for `services/tempo-api`.
