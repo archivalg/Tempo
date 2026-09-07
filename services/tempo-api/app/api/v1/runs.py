@@ -22,6 +22,7 @@ from app.core.audit import write_audit
 from app.core.confidence import compute_confidence
 from app.core.events import event_bus
 from app.core.idempotency import IdempotencyConflict, idempotency_store
+from app.core.policy import resolve_policy
 from app.dependencies import get_db, get_request_context, require_idempotency_key
 from app.errors import AuthForbidden, DataNotReady, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
 from app.models.runs import OptimisationRun
@@ -84,6 +85,8 @@ def create_run(
 
     _enforce_scope(context, request)
 
+    policy = resolve_policy(db, context.tenant_id, request.configuration.policy_version)
+
     run_id = f"run_{uuid.uuid4().hex[:20]}"
     snapshot_id = f"snap_{uuid.uuid4().hex[:20]}"
     run = OptimisationRun(
@@ -93,7 +96,7 @@ def create_run(
         status="accepted",
         request=payload,
         snapshot_id=snapshot_id,
-        policy_version=request.configuration.policy_version,
+        policy_version=policy.policy_version,
         model_version=request.configuration.model_version,
         idempotency_key=idempotency_key,
         correlation_id=context.correlation_id,
@@ -121,7 +124,9 @@ def create_run(
         raise DataNotReady(str(exc)) from exc
 
     warnings = list(outcome.missing_evidence)
-    confidence = compute_confidence(outcome.confidence_components, reasons=warnings or ["no data-quality issues detected"])
+    confidence = compute_confidence(
+        outcome.confidence_components, reasons=warnings or ["no data-quality issues detected"], weights=policy.weights
+    )
     explanation = {
         "baseline": outcome.baseline,
         "proposed": outcome.proposed,
@@ -141,7 +146,7 @@ def create_run(
     lineage = {
         "snapshot_id": snapshot_id,
         "source_systems": outcome.source_systems,
-        "policy_version": request.configuration.policy_version,
+        "policy_version": policy.policy_version,
     }
 
     final_status = "completed_with_warnings" if warnings else "completed"

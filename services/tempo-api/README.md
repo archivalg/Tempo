@@ -93,6 +93,35 @@ coverage (Integration Spec AC-02, DP-04).
   not a webhook receiver yet (Deputy and UKG Pro WFM both support
   webhooks per the spec).
 
+## Phase C (in progress)
+
+First step before adding Phase C's three new models: generalize the
+hardcoded policy constants Phase A left behind, so those new models
+(leave/RDO approval weights, training-cost thresholds, intraday risk
+penalties) don't each reinvent the same gap.
+
+`app/core/policy.py` resolves a tenant's `OptimisationPolicy` — versioned
+code defaults, with a stored policy row overriding individual keys (not a
+full replacement). `workforce_mix.py`, `named_roster.py`, and
+`compute_confidence` all resolve through it now instead of reading module
+constants directly. See `tests/test_policy.py` for the override/fallback
+behaviour, including the case where a tenant requests another tenant's
+`policy_version` (rejected, falls back to their own).
+
+Wiring this up caught a real bug in `named_roster.py`: the fairness-weight
+objective term had the same `// 100` double-scaling mistake as the
+shortfall-penalty bug found during Phase A — it made the fairness term
+~100x weaker than intended, so hour-distribution fairness barely
+influenced the roster at all. Fixed alongside the policy wiring (the fix
+made named-roster test cases noticeably slower, ~10s vs ~2s, because
+fairness now genuinely competes with cost in the search — still well
+within the 10s per-solve limit and the spec's 30s target for these run
+types, not a regression to chase).
+
+Also wired: `Availability.preference` (defined in the canonical model since
+Phase 0, never read by any solver) now feeds Named Roster's objective per
+§3.4's `pref_(i,d,k)` term, weighted by policy's `preference_weight`.
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:
@@ -122,10 +151,14 @@ Phase A (each solver module's own docstring has the full list):
   window (day-level absence is Named Roster's job, via `Availability`).
 - **Productivity/performance multipliers are fixed at 1.0** — no
   per-worker productivity data is modelled yet.
-- **Internal-min / hire-max ratios and the shortfall penalty are hardcoded
-  defaults**, not sourced from `OptimisationPolicy` yet (OD-08 in the spec
-  covers the confidence weights; the mix/roster policy constants here are
-  the same kind of gap).
+- ~~Internal-min / hire-max ratios and the shortfall penalty are hardcoded
+  defaults, not sourced from `OptimisationPolicy` yet~~ — **closed** by
+  `app/core/policy.py` (Phase C prep): versioned code defaults
+  (`DEFAULT_POLICY_VERSION`) plus an admin-override slot (a tenant's
+  `OptimisationPolicy` row, partial-merged over the defaults). Confidence
+  weights (OD-08) now come from the same resolver, so a tenant override
+  applies to both the solver ratios and the explanation contract's
+  confidence score, not just one or the other.
 
 Phase B:
 - **Deputy and UKG field names are unverified against a live tenant** — see

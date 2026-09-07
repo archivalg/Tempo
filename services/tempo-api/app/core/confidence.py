@@ -1,22 +1,16 @@
 """Confidence calculation — §11.2, OD-08.
 
-Rule-based and versioned, never an LLM score (INT-009, OD-08). Weights are a
-Phase 0 default pending product/data-science sign-off (OD-08); they are
-returned alongside the score for audit precisely so they can be challenged.
+Rule-based and versioned, never an LLM score (INT-009, OD-08). Default
+weights live in app.core.policy (the single source of truth shared with the
+mix/roster policy constants) so a tenant's OptimisationPolicy override
+applies here too, not just to the solver-level ratios; they are returned
+alongside the score for audit precisely so they can be challenged.
 """
 from __future__ import annotations
 
 from app.config import settings
+from app.core.policy import DEFAULT_WEIGHTS
 from app.schemas.runs import Confidence, ConfidenceComponents
-
-DEFAULT_WEIGHTS: dict[str, float] = {
-    "completeness": 0.2,
-    "freshness": 0.15,
-    "mapping_quality": 0.15,
-    "forecast_validation": 0.2,
-    "constraint_coverage": 0.15,
-    "solution_quality": 0.15,
-}
 
 BAND_THRESHOLDS: list[tuple[float, str]] = [
     (0.85, "high"),

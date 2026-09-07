@@ -6,10 +6,11 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timezone
 
+from app.core.policy import DEFAULT_CONSTRAINTS
 from app.schemas.runs import PlanningWindow, RunRequest, RunScope
 from app.solvers.demand_forecast import forecast_demand
 from app.solvers.named_roster import solve_named_roster
-from app.solvers.workforce_mix import DEFAULT_HIRE_MAX_RATIO, DEFAULT_INTERNAL_MIN_RATIO, INTERNAL_TYPES, solve_workforce_mix
+from app.solvers.workforce_mix import INTERNAL_TYPES, solve_workforce_mix
 from .factories import seed_named_roster_scenario
 
 WINDOW_START = datetime(2026, 9, 8, tzinfo=timezone.utc)
@@ -58,8 +59,8 @@ def test_workforce_mix_never_breaches_hire_ratio(client):
         hire = sum(n for etype, n in counts.items() if etype == "labour_hire")
         if total == 0:
             continue
-        assert internal >= DEFAULT_INTERNAL_MIN_RATIO * total - 1e-6, f"{day}: internal ratio breached"
-        assert hire <= DEFAULT_HIRE_MAX_RATIO * total + 1e-6, f"{day}: hire ratio breached"
+        assert internal >= DEFAULT_CONSTRAINTS["internal_min_ratio"] * total - 1e-6, f"{day}: internal ratio breached"
+        assert hire <= DEFAULT_CONSTRAINTS["hire_max_ratio"] * total + 1e-6, f"{day}: hire ratio breached"
 
 
 def test_named_roster_never_double_books_a_worker_on_one_day(client):

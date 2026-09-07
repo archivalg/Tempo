@@ -22,19 +22,12 @@ from ortools.linear_solver import pywraplp
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.policy import resolve_policy
 from app.models.canonical import LabourCostRule, SkillCertification, Worker
 from app.schemas.runs import ConfidenceComponents, RunRequest
 from app.solvers.base import InsufficientData, SolverOutcome
 from app.solvers.labour_requirement import translate_labour_requirement
 
-HOURS_PER_WORKER_PER_DAY = 8.0
-MAX_OVERTIME_HOURS_PER_WORKER_PER_DAY = 2.0
-DEFAULT_INTERNAL_MIN_RATIO = 0.6
-DEFAULT_HIRE_MAX_RATIO = 0.4
-DEFAULT_RATE = 40.0
-DEFAULT_OVERTIME_MULTIPLIER = 1.5
-DEFAULT_HIRE_SURCHARGE = 8.0
-SLA_PENALTY_PER_HOUR = 250.0
 INTERNAL_TYPES = {"permanent", "part_time", "casual"}  # everyone except labour_hire counts as internal
 
 
@@ -86,6 +79,17 @@ def _rate_for(rules: dict[tuple[str, str], LabourCostRule], employment_type: str
 
 def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], request: RunRequest) -> SolverOutcome:
     site_id = site_ids[0]
+    policy = resolve_policy(db, tenant_id, request.configuration.policy_version)
+    c = policy.constraints
+    hours_per_worker_per_day = c["hours_per_worker_per_day"]
+    max_overtime_hours_per_worker_per_day = c["max_overtime_hours_per_worker_per_day"]
+    internal_min_ratio = c["internal_min_ratio"]
+    hire_max_ratio = c["hire_max_ratio"]
+    default_rate = c["default_rate"]
+    default_overtime_multiplier = c["default_overtime_multiplier"]
+    default_hire_surcharge = c["default_hire_surcharge"]
+    sla_penalty_per_hour = c["sla_penalty_per_hour"]
+
     labour_req = translate_labour_requirement(db, tenant_id, site_ids, request)
     hours_rows = labour_req.result["hours_requirement"]
     if not hours_rows:
@@ -107,7 +111,7 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
 
     for day, role, zone in buckets:
         u[(day, role, zone)] = solver.NumVar(0, solver.infinity(), f"u_{day}_{role}_{zone}")
-        objective_terms.append((u[(day, role, zone)], SLA_PENALTY_PER_HOUR))
+        objective_terms.append((u[(day, role, zone)], sla_penalty_per_hour))
 
         coverage_terms = []
         internal_terms = []
@@ -119,17 +123,17 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
             oi = solver.NumVar(0, solver.infinity(), f"o_{day}_{employment_type}_{role}_{zone}")
             x[(day, employment_type, role, zone)] = xi
             o[(day, employment_type, role, zone)] = oi
-            solver.Add(oi <= MAX_OVERTIME_HOURS_PER_WORKER_PER_DAY * xi)
+            solver.Add(oi <= max_overtime_hours_per_worker_per_day * xi)
 
             rule = _rate_for(rate_rules, employment_type, role)
-            rate = float(rule.rate) if rule else DEFAULT_RATE
-            ot_multiplier = float(rule.overtime_multiplier) if rule and rule.overtime_multiplier else DEFAULT_OVERTIME_MULTIPLIER
-            surcharge = float(rule.surcharge) if rule and rule.surcharge else (DEFAULT_HIRE_SURCHARGE if employment_type == "labour_hire" else 0.0)
+            rate = float(rule.rate) if rule else default_rate
+            ot_multiplier = float(rule.overtime_multiplier) if rule and rule.overtime_multiplier else default_overtime_multiplier
+            surcharge = float(rule.surcharge) if rule and rule.surcharge else (default_hire_surcharge if employment_type == "labour_hire" else 0.0)
 
-            objective_terms.append((xi, rate * HOURS_PER_WORKER_PER_DAY + surcharge * HOURS_PER_WORKER_PER_DAY))
+            objective_terms.append((xi, rate * hours_per_worker_per_day + surcharge * hours_per_worker_per_day))
             objective_terms.append((oi, rate * ot_multiplier))
 
-            coverage_terms.append((xi, HOURS_PER_WORKER_PER_DAY))
+            coverage_terms.append((xi, hours_per_worker_per_day))
             coverage_terms.append((oi, 1.0))
             total_terms.append(xi)
             if employment_type in INTERNAL_TYPES:
@@ -142,8 +146,8 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
             sum(coeff * var for var, coeff in coverage_terms) + u[(day, role, zone)] >= required
         )
         if total_terms:
-            solver.Add(sum(internal_terms) >= DEFAULT_INTERNAL_MIN_RATIO * sum(total_terms))
-            solver.Add(sum(hire_terms) <= DEFAULT_HIRE_MAX_RATIO * sum(total_terms))
+            solver.Add(sum(internal_terms) >= internal_min_ratio * sum(total_terms))
+            solver.Add(sum(hire_terms) <= hire_max_ratio * sum(total_terms))
 
     solver.Minimize(sum(coeff * var for var, coeff in objective_terms))
     status = solver.Solve()
@@ -159,8 +163,8 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
         if headcount <= 0 and overtime <= 0:
             continue
         rule = _rate_for(rate_rules, employment_type, role)
-        rate = float(rule.rate) if rule else DEFAULT_RATE
-        cost = headcount * HOURS_PER_WORKER_PER_DAY * rate
+        rate = float(rule.rate) if rule else default_rate
+        cost = headcount * hours_per_worker_per_day * rate
         total_labour_cost += cost
         assignments.append(
             {
@@ -179,7 +183,7 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
 
     labour_hire_rate = next(
         (float(rule.rate) + float(rule.surcharge or 0) for (etype, _), rule in rate_rules.items() if etype == "labour_hire"),
-        DEFAULT_RATE + DEFAULT_HIRE_SURCHARGE,
+        default_rate + default_hire_surcharge,
     )
     naive_hire_only_cost = total_required * labour_hire_rate
 
@@ -217,8 +221,8 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
         missing_evidence=labour_req.missing_evidence,
         assumptions=labour_req.assumptions
         + [
-            f"static availability pool for the whole window (no day-level absence)",
-            f"internal-min ratio {DEFAULT_INTERNAL_MIN_RATIO}, hire-max ratio {DEFAULT_HIRE_MAX_RATIO} (policy defaults, not tenant-configured yet)",
+            "static availability pool for the whole window (no day-level absence)",
+            f"policy '{policy.policy_version}': internal-min ratio {internal_min_ratio}, hire-max ratio {hire_max_ratio}",
         ],
         feasibility="feasible_with_slack" if total_unmet > 0 else "feasible",
     )

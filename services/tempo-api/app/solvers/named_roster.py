@@ -18,17 +18,13 @@ from ortools.sat.python import cp_model
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.policy import resolve_policy
 from app.models.canonical import Availability, LabourCostRule, ShiftAssignment as ShiftAssignmentRow, SkillCertification, Worker
 from app.schemas.runs import ConfidenceComponents, RunRequest
 from app.solvers.base import InsufficientData, SolverOutcome
 from app.solvers.shifts import SHIFT_CALENDAR
 from app.solvers.workforce_mix import solve_workforce_mix
 
-MAX_CONSECUTIVE_DAYS = 6
-CONSECUTIVE_WINDOW = 7
-FAIRNESS_WEIGHT_CENTS = 5000
-PREFERENCE_WEIGHT_CENTS = 2000
-SHORTFALL_PENALTY_CENTS_PER_HOUR = 25000
 SOLVE_TIME_LIMIT_SECONDS = 10.0
 MONEY_SCALE = 100  # dollars -> cents, for CP-SAT's integer objective
 
@@ -69,17 +65,23 @@ def _worker_skills(db: Session, tenant_id: str, window_end: datetime) -> dict[st
     return skills
 
 
-def _availability_by_day(db: Session, tenant_id: str) -> dict[tuple[str, str], str]:
+def _availability_by_day(db: Session, tenant_id: str) -> dict[tuple[str, str], Availability]:
     rows = db.scalars(select(Availability).where(Availability.tenant_id == tenant_id)).all()
-    status_by_worker_day: dict[tuple[str, str], str] = {}
+    by_worker_day: dict[tuple[str, str], Availability] = {}
     for row in rows:
         day = row.interval_start.date().isoformat()
-        status_by_worker_day[(row.worker_id, day)] = row.status
-    return status_by_worker_day
+        by_worker_day[(row.worker_id, day)] = row
+    return by_worker_day
 
 
 def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request: RunRequest) -> SolverOutcome:
     site_id = site_ids[0]
+    policy = resolve_policy(db, tenant_id, request.configuration.policy_version)
+    max_consecutive_days = int(policy.constraints["max_consecutive_days"])
+    fairness_weight_cents = round(policy.constraints["fairness_weight"] * MONEY_SCALE)
+    preference_weight_cents = round(policy.constraints["preference_weight"] * MONEY_SCALE)
+    shortfall_penalty_cents_per_hour = round(policy.constraints["shortfall_penalty_per_hour"] * MONEY_SCALE)
+
     mix_outcome = solve_workforce_mix(db, tenant_id, site_ids, request)
     targets = _target_headcount(mix_outcome.result["assignments"])
     if not targets:
@@ -118,7 +120,8 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
             eligible = role == "general" or role in worker_role_skills
             if not eligible:
                 continue
-            status = availability.get((worker.worker_id, day), "available")
+            availability_row = availability.get((worker.worker_id, day))
+            status = availability_row.status if availability_row else "available"
             if status in {"unavailable", "leave", "rdo"}:
                 continue
 
@@ -129,7 +132,10 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
 
             rule = rate_rules.get((worker.employment_type, role)) or rate_rules.get((worker.employment_type, "general"))
             rate = float(rule.rate) if rule else 40.0
-            cost_cents = round(rate * shift_hours[shift_code] * MONEY_SCALE)
+            preference = availability_row.preference if availability_row and availability_row.preference else 0.0
+            # §3.4: objective rewards preference-aligned assignments — a
+            # positive preference score reduces this var's effective cost.
+            cost_cents = round(rate * shift_hours[shift_code] * MONEY_SCALE - preference * preference_weight_cents)
             objective_terms.append((var, cost_cents))
             hours_terms[worker.worker_id].append((var, shift_hours[shift_code]))
 
@@ -141,15 +147,16 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
         # shortage by simply leaving it unmet (this was a real bug: an
         # earlier `// 100` here made the shortfall penalty cheaper than
         # assigning anyone, so every shift went unmet).
-        objective_terms.append((unmet, SHORTFALL_PENALTY_CENTS_PER_HOUR * shift_hours[shift_code]))
+        objective_terms.append((unmet, shortfall_penalty_cents_per_hour * shift_hours[shift_code]))
 
     for (worker_id, day), vars_for_day in by_worker_day.items():
         model.Add(sum(vars_for_day) <= 1)
 
-    if len(days) >= CONSECUTIVE_WINDOW:
+    consecutive_window = max_consecutive_days + 1  # smallest window that can actually bind the limit
+    if len(days) >= consecutive_window:
         for worker in workers:
-            for start in range(len(days) - CONSECUTIVE_WINDOW + 1):
-                window_days = set(days[start : start + CONSECUTIVE_WINDOW])
+            for start in range(len(days) - consecutive_window + 1):
+                window_days = set(days[start : start + consecutive_window])
                 window_vars = [
                     var
                     for (wid, day), vars_for_day in by_worker_day.items()
@@ -157,7 +164,7 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
                     for var in vars_for_day
                 ]
                 if window_vars:
-                    model.Add(sum(window_vars) <= MAX_CONSECUTIVE_DAYS)
+                    model.Add(sum(window_vars) <= max_consecutive_days)
 
     total_target_hours = sum(target * shift_hours[code] for (_, code, _, _), target in per_shift_targets.items())
     avg_hours = round(total_target_hours / len(workers)) if workers else 0
@@ -172,8 +179,12 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
         model.Add(sum(coeff * var for var, coeff in terms) - avg_hours == f_plus - f_minus)
         fairness_terms.append(f_plus)
         fairness_terms.append(f_minus)
-        objective_terms.append((f_plus, FAIRNESS_WEIGHT_CENTS // 100))
-        objective_terms.append((f_minus, FAIRNESS_WEIGHT_CENTS // 100))
+        # f_plus/f_minus are in hours; fairness_weight_cents is already
+        # cents-per-hour-of-deviation, so it's used directly here — the same
+        # `// 100` double-scaling bug as the earlier shortfall-penalty one
+        # would make fairness negligible against cost terms in the thousands.
+        objective_terms.append((f_plus, fairness_weight_cents))
+        objective_terms.append((f_minus, fairness_weight_cents))
 
     model.Minimize(sum(coeff * var for var, coeff in objective_terms))
 
@@ -259,7 +270,7 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
             solution_quality=1.0 if status == cp_model.OPTIMAL else 0.7,
         ),
         primary_drivers=[
-            f"CP-SAT over {len(workers)} workers x {len(days)} days, max {MAX_CONSECUTIVE_DAYS} consecutive days enforced",
+            f"CP-SAT over {len(workers)} workers x {len(days)} days, max {max_consecutive_days} consecutive days enforced",
         ]
         + ([f"{total_unmet_shifts} shift-slots understaffed — insufficient eligible/available workers"] if total_unmet_shifts > 0 else []),
         missing_evidence=missing_evidence,
@@ -267,6 +278,8 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
         + [
             "workforce mix headcount split evenly across the fixed shift calendar",
             "worker with no Availability record for a day defaults to available",
+            f"policy '{policy.policy_version}': max {max_consecutive_days} consecutive days, "
+            f"fairness weight ${policy.constraints['fairness_weight']}/hr, preference weight ${policy.constraints['preference_weight']}/hr",
         ],
         feasibility="feasible_with_slack" if total_unmet_shifts > 0 else "feasible",
     )

@@ -10,7 +10,7 @@ re-reading the full integration spec.
 | 0 — Contract foundation | Tenant/identity mapping, canonical v1, readiness, run lifecycle, explanation contract, events, audit | **Done** | `services/tempo-api` |
 | A — Core Labour Intelligence | Demand forecast, labour requirement, workforce mix, named roster on Tempo-native data | **Done**, with tracked scope reductions (single site/run, fixed shift calendar, skill_code-as-role, static mix availability — see `services/tempo-api` README's "known simplifications") | `services/tempo-api/app/solvers` |
 | B — Overlay ingestion | Deputy first; UKG Pro WFM / UKG Ready next; source parity tests | **Done** — Deputy, UKG Pro WFM and UKG Ready, one connector algorithm per vendor with per-product-line clients for UKG. Source parity proven by test (`test_source_parity.py`, parametrized over all three), not just asserted — see `services/tempo-api` README's Phase B section for what's covered vs flagged (full UKG Pro HCM, skill/cert mapping, and webhooks are explicitly out) | `services/tempo-api/app/maestro` |
-| C — Operational breadth | Intraday reallocation, training/certification, leave/RDO; WMS live backlog integration | Not started | — |
+| C — Operational breadth | Intraday reallocation, training/certification, leave/RDO; WMS live backlog integration | **In progress** — policy governance (`app/core/policy.py`) wired into the Phase A solvers first, so the three new models inherit it rather than each hardcoding their own ratios. New models not started yet | `services/tempo-api/app/core/policy.py` |
 | D — Enterprise intelligence | Team composition, 3PL cost-to-serve/margin, robust/scenario; restricted finance access | Not started | — |
 | E — Controlled action | Action validation, approvals, source staging/writeback, reconciliation | Not started — `ActionRequest` table exists in Phase 0's schema so this doesn't need a breaking migration later, but no endpoints | — |
 | F — Scale and optimisation | Capacity tests, model monitoring, connector catalogue, self-service onboarding | Not started | — |
@@ -41,8 +41,12 @@ sharing Tempo's process a real bottleneck).
 
 The integration spec's §19 (OD-01 to OD-10) lists unresolved architecture
 decisions — e.g. canonical DB technology (OD-02), event technology (OD-03),
-confidence weights sign-off (OD-08). Phase 0's implementation makes a
-concrete but reversible default choice for each where one was needed
+confidence weights sign-off (OD-08). OD-08 now has a governance *mechanism*
+(`app/core/policy.py` — versioned defaults + tenant override), which is a
+different thing from the *decision*: the actual weight values are still
+code defaults nobody outside this codebase has signed off on. Phase 0's
+implementation makes a concrete but reversible default choice for each
+open item where one was needed
 (documented in `services/tempo-api/README.md`'s "known simplifications"
 section) — these are stand-ins, not the actual decisions, which still need
 the owners named in the spec.
