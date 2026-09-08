@@ -78,6 +78,16 @@ def test_workforce_mix_respects_internal_hire_ratio(client):
     assert float(result["kpis"]["labour_cost"]["amount"]) > 0
 
 
+def test_training_coverage_reports_full_coverage_when_fully_certified(client):
+    _seed(client)
+    response = client.post("/v1/optimisations/training_coverage", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["training_plan"] == []
+    assert result["kpis"]["coverage_pct"] == 100.0
+
+
 def test_demand_forecast_without_history_returns_data_not_ready(client):
     response = client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
     assert response.status_code == 422

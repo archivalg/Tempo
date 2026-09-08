@@ -24,7 +24,7 @@ from app.models.canonical import OptimisationPolicy
 
 DEFAULT_POLICY_VERSION = "default-1.0"
 
-DEFAULT_CONSTRAINTS: dict[str, float] = {
+DEFAULT_CONSTRAINTS: dict[str, Any] = {
     "hours_per_worker_per_day": 8.0,
     "max_overtime_hours_per_worker_per_day": 2.0,
     "internal_min_ratio": 0.6,
@@ -37,6 +37,13 @@ DEFAULT_CONSTRAINTS: dict[str, float] = {
     "fairness_weight": 50.0,
     "preference_weight": 20.0,
     "shortfall_penalty_per_hour": 250.0,
+    # Training & Certification Coverage (§3.6) — no canonical entity prices
+    # an actual training program yet, so these are flat, tenant-overridable
+    # stand-ins, the same kind of gap as default_rate above.
+    "training_cost_per_certification": 500.0,
+    "training_benefit_per_certification_per_period": 50.0,
+    "training_shortage_penalty_per_worker": 300.0,
+    "training_budget": None,  # None = unconstrained
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {

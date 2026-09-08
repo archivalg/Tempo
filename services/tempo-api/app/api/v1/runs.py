@@ -1,12 +1,13 @@
 """Run creation and lifecycle endpoints — §8.2 capability catalogue.
 
-Phase A wires the four run types to real solvers (app/solvers/*): Holt
-linear demand forecasting, deterministic labour-requirement translation, an
-OR-Tools MILP workforce mix, and an OR-Tools CP-SAT named roster — see each
-module's docstring for the scope reductions taken to keep them tractable
-without a real Maestro feed yet. Every other run_type in Appendix C is
-still a legal request that returns TEMPO-RUN-004 rather than a 404, so
-Prime's tool schema doesn't need to change as later phases land.
+Phase A wired four run types to real solvers (app/solvers/*): Holt linear
+demand forecasting, deterministic labour-requirement translation, an
+OR-Tools MILP workforce mix, and an OR-Tools CP-SAT named roster. Phase C
+adds training_coverage (also MILP) on top — see each module's docstring
+for the scope reductions taken to keep them tractable without a real
+Maestro feed yet. Every other run_type in Appendix C is still a legal
+request that returns TEMPO-RUN-004 rather than a 404, so Prime's tool
+schema doesn't need to change as later phases land.
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from app.solvers.base import InsufficientData, SolverOutcome
 from app.solvers.demand_forecast import forecast_demand
 from app.solvers.labour_requirement import translate_labour_requirement
 from app.solvers.named_roster import solve_named_roster
+from app.solvers.training_coverage import solve_training_coverage
 from app.solvers.workforce_mix import solve_workforce_mix
 
 router = APIRouter(tags=["runs"])
@@ -41,6 +43,7 @@ _RUN_TYPE_TO_MODEL = {
     "labour_requirement": ("labour_requirement_translation", "1.0.0", "deterministic"),
     "workforce_mix": ("workforce_mix", "1.0.0", "milp-cbc"),
     "named_roster": ("named_roster", "1.0.0", "cp-sat"),
+    "training_coverage": ("training_coverage", "1.0.0", "milp-cbc"),
 }
 
 _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcome]] = {
@@ -48,6 +51,7 @@ _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcom
     "labour_requirement": translate_labour_requirement,
     "workforce_mix": solve_workforce_mix,
     "named_roster": solve_named_roster,
+    "training_coverage": solve_training_coverage,
 }
 
 

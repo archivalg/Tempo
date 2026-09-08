@@ -35,10 +35,17 @@ RunStatus = Literal[
     "expired",
 ]
 
-# §8's Phase 0/A run types — the rest of Appendix C's run_type values are legal
-# enum members but return TEMPO-RUN-004 (not yet implemented) until their phase
-# lands; see docs/roadmap.md.
-IMPLEMENTED_RUN_TYPES: set[str] = {"demand_forecast", "labour_requirement", "workforce_mix", "named_roster"}
+# §8's Phase 0/A run types plus Phase C additions as they land — the rest of
+# Appendix C's run_type values are legal enum members but return
+# TEMPO-RUN-004 (not yet implemented) until their phase lands; see
+# docs/roadmap.md.
+IMPLEMENTED_RUN_TYPES: set[str] = {
+    "demand_forecast",
+    "labour_requirement",
+    "workforce_mix",
+    "named_roster",
+    "training_coverage",
+}
 
 
 class Money(BaseModel):

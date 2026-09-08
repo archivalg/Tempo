@@ -122,6 +122,24 @@ Also wired: `Availability.preference` (defined in the canonical model since
 Phase 0, never read by any solver) now feeds Named Roster's objective per
 §3.4's `pref_(i,d,k)` term, weighted by policy's `preference_weight`.
 
+**First new model — `training_coverage`** (§3.6 / Appendix A.6, MILP,
+`app/solvers/training_coverage.py`): recommends which workers to train or
+re-certify to close a projected certification gap. Required coverage comes
+from Labour Requirement's hours need (converted to headcount), **not**
+from Workforce Mix's assigned headcount — that would be circular, since
+`workforce_mix`'s own availability lookup already gates headcount by
+current certification, so comparing current supply against a number that
+can never exceed current supply can never reveal a shortfall. Caught this
+while building `tests/test_training_coverage.py`'s scarcity case (a
+fully-staffed scenario correctly showed zero shortfall, but so did an
+artificially certification-scarce one — the required-coverage source was
+the bug, not the MILP). Cost/benefit/shortage-penalty are flat policy
+defaults, the same class of gap as `workforce_mix`'s `default_rate`.
+
+Still to come in Phase C: leave/RDO planning (similar MILP shape),
+intraday reallocation (min-cost flow — a new solver family), and WMS
+live-backlog integration (a connector, not a solver).
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:
