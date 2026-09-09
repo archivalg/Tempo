@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.events import event_bus
-from app.models.canonical import Availability, AttendanceSession, ShiftAssignment, Worker
+from app.models.canonical import Availability, AttendanceSession, ShiftAssignment, Worker, ZoneBacklog
 from app.models.connectors import IngestionDeadLetter
 from app.schemas.envelope import CanonicalEnvelope
 
@@ -96,11 +96,30 @@ def _upsert_availability(
     return existing
 
 
+def _upsert_zone_backlog(
+    db: Session, tenant_id: str, source_system: str, source_ref: str, fields: dict[str, Any]
+) -> ZoneBacklog:
+    existing = db.scalar(
+        select(ZoneBacklog)
+        .where(ZoneBacklog.tenant_id == tenant_id)
+        .where(ZoneBacklog.source_system == source_system)
+        .where(ZoneBacklog.source_ref == source_ref)
+    )
+    if existing is None:
+        existing = ZoneBacklog(tenant_id=tenant_id, source_system=source_system, source_ref=source_ref)
+        db.add(existing)
+    for key, value in fields.items():
+        setattr(existing, key, value)
+    db.flush()
+    return existing
+
+
 _UPSERT_BY_ENTITY = {
     "worker": _upsert_worker,
     "attendance_session": _upsert_attendance_session,
     "shift_assignment": _upsert_shift_assignment,
     "availability": _upsert_availability,
+    "zone_backlog": _upsert_zone_backlog,
 }
 
 

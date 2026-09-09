@@ -1,25 +1,30 @@
-# Tempo Optimisation Service — Phase 0 + Phase A + Phase B (Deputy, UKG)
+# Tempo Optimisation Service — Phases 0, A, B, C
 
 A FastAPI implementation of the contract foundation (Phase 0), the four
-core Labour Intelligence models (Phase A), and the overlay connectors
-(Phase B — Deputy, UKG Pro WFM, UKG Ready) from
-`Tempo_Prime_AI_Integration_Specification_v2.0.docx` (§18): Phase 0's exit
-outcome — *"Prime can call a stubbed Tempo run end-to-end with governed
-evidence"* — Phase A's four real solvers, and Phase B's — *"customers
-retain T&A while using identical Prime/Tempo capability contracts."*
+core Labour Intelligence models (Phase A), the overlay connectors (Phase
+B — Deputy, UKG Pro WFM, UKG Ready), and operational breadth (Phase C —
+training/certification, leave/RDO, intraday reallocation, WMS backlog
+ingestion) from `Tempo_Prime_AI_Integration_Specification_v2.0.docx`
+(§18): Phase 0's exit outcome — *"Prime can call a stubbed Tempo run
+end-to-end with governed evidence"* — Phase A's four real solvers, Phase
+B's — *"customers retain T&A while using identical Prime/Tempo capability
+contracts"* — and Phase C's three additional models plus their live
+data feed. **All four phases from the recommended MVP cut through
+operational breadth are now done.**
 
-**Architecture note on where Phase B lives**: the spec's own architecture
-(§3.1 "Prohibited coupling", DP-03/INT-002) requires vendor-specific logic
-to live only in Maestro, never in Tempo's solvers. That boundary is
-preserved in code — `app/maestro/` has zero imports from `app/solvers/` and
-vice versa, and the solvers never branch on `source_system`. What's
-**not** yet true to the target architecture: Maestro is supposed to be its
-own service with its own datastore, publishing to Tempo over an API/event
-boundary (§17.1's "Datastore decision" explicitly rules out shared
-tables). This scaffold keeps `app/maestro/` in-process with Tempo, sharing
-its database, because standing up a second service was out of scope for
-this pass. That's tracked debt, not an accepted design — see "Known
-simplifications" below and `docs/roadmap.md`.
+**Architecture note on where Phase B/C connectors live**: the spec's own
+architecture (§3.1 "Prohibited coupling", DP-03/INT-002) requires
+vendor-specific logic to live only in Maestro, never in Tempo's solvers.
+That boundary is preserved in code — `app/maestro/` has zero imports from
+`app/solvers/` and vice versa, and the solvers never branch on
+`source_system`. What's **not** yet true to the target architecture:
+Maestro is supposed to be its own service with its own datastore,
+publishing to Tempo over an API/event boundary (§17.1's "Datastore
+decision" explicitly rules out shared tables). This scaffold keeps
+`app/maestro/` in-process with Tempo, sharing its database, because
+standing up a second service was out of scope for this pass. That's
+tracked debt, not an accepted design — see "Known simplifications" below
+and `docs/roadmap.md`.
 
 This is not the WIEP MVP scaffold (`wiep-mvp.zip` at the repo root) — that
 was a UI/heuristic proof of concept with no tenancy, versioning, or run
@@ -161,18 +166,28 @@ single current interval (`planning_window.start` for one
 `bucket_minutes`), not the whole window — "intraday" means right now, and
 a real caller would invoke this again for the next interval.
 
-Its input, live per-zone backlog, has no real source yet — that's WMS
-integration, the next and last Phase C item. Added a new canonical table,
-`ZoneBacklog`, ahead of that connector the same way `DemandBucket` existed
-before any Phase A solver read it: accepts direct inserts/seed data for
-now, a real WMS connector populates it for real later.
+Added a new canonical table, `ZoneBacklog`, ahead of any real connector the
+same way `DemandBucket` existed before any Phase A solver read it.
 `tests/test_intraday_reallocation.py` checks the property that matters:
 an idle worker in a zone with no backlog gets moved to a zone that's
 short, while already-adequately-staffed zones see no movement at all.
 
-Still to come in Phase C: WMS live-backlog integration (a connector, not
-a solver) — the one piece `intraday_reallocation` needs to be more than a
-demo against seeded data.
+**Fourth Phase C item — WMS backlog ingestion** (§7.2's "Active tasks /
+backlog" domain, `app/maestro/wms/`): closes the loop `intraday_reallocation`
+needed. No specific WMS vendor is named in the spec (unlike Deputy/UKG),
+so `client.py` is explicitly illustrative REST (bearer token, generic
+`/backlog` resource) rather than matched against a real vendor API — same
+disclosed-uncertainty pattern as the Deputy/UKG clients, just with no
+vendor at all to eventually verify against; adapt the endpoint/field names
+to whichever WMS a real tenant runs. Simpler than Deputy/UKG's connectors
+in one respect: a backlog snapshot isn't tied to a worker, so there's no
+FK-resolution/quarantine-until-dependency-arrives step.
+`tests/test_intraday_wms_integration.py` is the same kind of proof
+`test_source_parity.py` is for Deputy/UKG: it runs `intraday_reallocation`
+against backlog ingested through the real `WmsConnector` pipeline, not a
+direct insert, and gets the same correct reassignment.
+
+**Phase C is now fully done.**
 
 ## Known simplifications (tracked, not hidden)
 
@@ -228,6 +243,19 @@ Phase B:
   single `modified_since` across employees/timesheets/rosters/leave (or
   punches/shifts/accruals for UKG) rather than each entity type tracking
   its own delta cursor.
+
+Phase C:
+- **No specific WMS vendor is named in the spec**, so `app/maestro/wms/client.py`
+  is illustrative REST rather than matched against a real vendor API —
+  there's no live tenant to eventually verify it against the way Deputy/UKG
+  have one; adapt it entirely when a real WMS is chosen.
+- **Training/leave/intraday's cost, benefit, and risk constants** are flat
+  policy defaults (`app.core.policy`), the same class of gap as
+  `workforce_mix`'s `default_rate` — see each solver's own docstring.
+- **Intraday reallocation processes one interval at a time**, not a
+  rolling window — a real deployment calls it again for the next interval.
+- **Intraday reallocation's productivity/move-cost are flat**, same
+  simplification as Workforce Mix's productivity-fixed-at-1.0.
 
 ## Run it
 

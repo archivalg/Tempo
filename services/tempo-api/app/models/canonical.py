@@ -126,10 +126,11 @@ class ZoneBacklog(Base):
     """B_(z,t') — live outstanding-work backlog per zone/interval (AI Labour
     Optimisation Spec §3.5). Not one of the §6.1 canonical entities named in
     the Integration Spec — its real source is a WMS connector (§13's
-    "Active tasks / backlog" domain), not yet built (tracked in
-    docs/roadmap.md). Added now, ahead of that connector, the same way
-    DemandBucket existed before any Phase A solver read it: accepts direct
-    inserts/seed data until the WMS connector populates it for real.
+    "Active tasks / backlog" domain). Added ahead of that connector, the
+    same way DemandBucket existed before any Phase A solver read it:
+    accepted direct inserts/seed data until app/maestro/wms/ landed
+    (source_system/source_ref follow the same idempotent-upsert convention
+    as Worker/Availability/AttendanceSession/ShiftAssignment since Phase B).
     """
 
     __tablename__ = "zone_backlog"
@@ -140,7 +141,8 @@ class ZoneBacklog(Base):
     zone: Mapped[str] = mapped_column(String)
     interval_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     backlog_units: Mapped[float] = mapped_column(Float)
-    source: Mapped[str] = mapped_column(String, default="tempo_native")
+    source_system: Mapped[str] = mapped_column(String, default="tempo_native")
+    source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
 
 
 class WorkStandard(Base):
