@@ -112,6 +112,37 @@ def test_leave_rdo_approves_a_single_pending_request_with_ample_supply(client):
     assert result["kpis"]["rejected_count"] == 0
 
 
+def test_intraday_reallocation_moves_idle_worker_to_cover_backlog(client):
+    from datetime import timedelta
+
+    from app.models.canonical import ActivityRoleZoneMap, ShiftAssignment, SkillCertification, Worker, ZoneBacklog
+
+    with client.session_local() as session:
+        for index, zone in enumerate(["zone_a", "zone_a", "zone_b"]):
+            session.add(Worker(worker_id=f"iw{index}", tenant_id="ten_test", employment_type="permanent", home_site="site_mel_01", status="active"))
+            session.add(
+                SkillCertification(tenant_id="ten_test", worker_id=f"iw{index}", skill_code="picker", valid_from=WINDOW_START - timedelta(days=1), valid_to=None)
+            )
+            session.add(
+                ShiftAssignment(
+                    tenant_id="ten_test", worker_id=f"iw{index}", role="picker", zone=zone,
+                    start_at=WINDOW_START, end_at=WINDOW_START + timedelta(hours=8), status="committed",
+                )
+            )
+        session.add(ActivityRoleZoneMap(tenant_id="ten_test", site_id="site_mel_01", activity="picking", role="picker", zone="zone_a", weight=1.0))
+        session.add(ActivityRoleZoneMap(tenant_id="ten_test", site_id="site_mel_01", activity="picking", role="picker", zone="zone_b", weight=1.0))
+        session.add(ZoneBacklog(tenant_id="ten_test", site_id="site_mel_01", zone="zone_a", interval_start=WINDOW_START, backlog_units=3))
+        session.add(ZoneBacklog(tenant_id="ten_test", site_id="site_mel_01", zone="zone_b", interval_start=WINDOW_START, backlog_units=0))
+        session.commit()
+
+    response = client.post("/v1/optimisations/intraday_reallocation", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["kpis"]["workers_moved"] == 1
+    assert result["kpis"]["remaining_backlog"] == 0
+
+
 def test_demand_forecast_without_history_returns_data_not_ready(client):
     response = client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
     assert response.status_code == 422

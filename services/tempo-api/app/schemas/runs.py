@@ -46,6 +46,7 @@ IMPLEMENTED_RUN_TYPES: set[str] = {
     "named_roster",
     "training_coverage",
     "leave_rdo",
+    "intraday_reallocation",
 }
 
 

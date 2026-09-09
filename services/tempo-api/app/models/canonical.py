@@ -122,6 +122,27 @@ class DemandBucket(Base):
     source: Mapped[str] = mapped_column(String)
 
 
+class ZoneBacklog(Base):
+    """B_(z,t') — live outstanding-work backlog per zone/interval (AI Labour
+    Optimisation Spec §3.5). Not one of the §6.1 canonical entities named in
+    the Integration Spec — its real source is a WMS connector (§13's
+    "Active tasks / backlog" domain), not yet built (tracked in
+    docs/roadmap.md). Added now, ahead of that connector, the same way
+    DemandBucket existed before any Phase A solver read it: accepts direct
+    inserts/seed data until the WMS connector populates it for real.
+    """
+
+    __tablename__ = "zone_backlog"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String)
+    zone: Mapped[str] = mapped_column(String)
+    interval_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    backlog_units: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String, default="tempo_native")
+
+
 class WorkStandard(Base):
     __tablename__ = "work_standard"
 

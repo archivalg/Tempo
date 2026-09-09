@@ -3,9 +3,10 @@
 Phase A wired four run types to real solvers (app/solvers/*): Holt linear
 demand forecasting, deterministic labour-requirement translation, an
 OR-Tools MILP workforce mix, and an OR-Tools CP-SAT named roster. Phase C
-adds training_coverage and leave_rdo (both MILP) on top — see each
+adds training_coverage, leave_rdo (both MILP), and intraday_reallocation
+(OR-Tools min-cost flow — a different solver family) on top — see each
 module's docstring for the scope reductions taken to keep them tractable
-without a real Maestro feed yet. Every other run_type in Appendix C is
+without a real Maestro/WMS feed yet. Every other run_type in Appendix C is
 still a legal request that returns TEMPO-RUN-004 rather than a 404, so
 Prime's tool schema doesn't need to change as later phases land.
 """
@@ -32,6 +33,7 @@ from app.schemas.tenancy import RequestContext
 from app.solvers.base import InsufficientData, SolverOutcome
 from app.solvers.demand_forecast import forecast_demand
 from app.solvers.labour_requirement import translate_labour_requirement
+from app.solvers.intraday_reallocation import solve_intraday_reallocation
 from app.solvers.leave_rdo import solve_leave_rdo
 from app.solvers.named_roster import solve_named_roster
 from app.solvers.training_coverage import solve_training_coverage
@@ -46,6 +48,7 @@ _RUN_TYPE_TO_MODEL = {
     "named_roster": ("named_roster", "1.0.0", "cp-sat"),
     "training_coverage": ("training_coverage", "1.0.0", "milp-cbc"),
     "leave_rdo": ("leave_rdo_planning", "1.0.0", "milp-cbc"),
+    "intraday_reallocation": ("intraday_reallocation", "1.0.0", "min-cost-flow"),
 }
 
 _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcome]] = {
@@ -55,6 +58,7 @@ _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcom
     "named_roster": solve_named_roster,
     "training_coverage": solve_training_coverage,
     "leave_rdo": solve_leave_rdo,
+    "intraday_reallocation": solve_intraday_reallocation,
 }
 
 

@@ -150,9 +150,29 @@ planning run). `tests/test_leave_rdo.py`'s scarcity case checks the
 property that actually matters: when every request can't be granted, it
 rejects the lowest-priority ones first, not an arbitrary subset.
 
-Still to come in Phase C: intraday reallocation (min-cost flow — a new
-solver family) and WMS live-backlog integration (a connector, not a
-solver).
+**Third new model — `intraday_reallocation`** (§3.5 / Appendix A.5,
+**min-cost flow**, `app/solvers/intraday_reallocation.py`): the one
+genuinely new solver family in Phase C — a bipartite worker->zone
+assignment network solved with OR-Tools' `SimpleMinCostFlow`, not a MILP.
+Moves active workers between zones to cover live backlog at minimum
+disruption cost; a worker's current zone is always a zero-cost option, so
+surplus workers stay put rather than moving pointlessly. Processes a
+single current interval (`planning_window.start` for one
+`bucket_minutes`), not the whole window — "intraday" means right now, and
+a real caller would invoke this again for the next interval.
+
+Its input, live per-zone backlog, has no real source yet — that's WMS
+integration, the next and last Phase C item. Added a new canonical table,
+`ZoneBacklog`, ahead of that connector the same way `DemandBucket` existed
+before any Phase A solver read it: accepts direct inserts/seed data for
+now, a real WMS connector populates it for real later.
+`tests/test_intraday_reallocation.py` checks the property that matters:
+an idle worker in a zone with no backlog gets moved to a zone that's
+short, while already-adequately-staffed zones see no movement at all.
+
+Still to come in Phase C: WMS live-backlog integration (a connector, not
+a solver) — the one piece `intraday_reallocation` needs to be more than a
+demo against seeded data.
 
 ## Known simplifications (tracked, not hidden)
 

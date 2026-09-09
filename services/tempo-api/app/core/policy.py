@@ -49,6 +49,12 @@ DEFAULT_CONSTRAINTS: dict[str, Any] = {
     # flat, tenant-overridable defaults.
     "leave_shortage_penalty_per_worker": 300.0,
     "leave_rejection_penalty": 150.0,
+    # Intraday Reallocation (§3.5) — flat move cost/productivity/risk
+    # defaults; no canonical entity prices zone-to-zone movement or models
+    # per-worker-per-zone productivity yet (same gap as workforce_mix's
+    # productivity-fixed-at-1.0 simplification).
+    "intraday_move_cost": 15.0,
+    "intraday_backlog_risk_per_unit": 40.0,
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {
