@@ -88,6 +88,30 @@ def test_training_coverage_reports_full_coverage_when_fully_certified(client):
     assert result["kpis"]["coverage_pct"] == 100.0
 
 
+def test_leave_rdo_approves_a_single_pending_request_with_ample_supply(client):
+    from datetime import timedelta
+
+    from app.models.canonical import Availability
+
+    _seed(client)
+    with client.session_local() as session:
+        session.add(
+            Availability(
+                tenant_id="ten_test", worker_id="wrk_0",
+                interval_start=WINDOW_START, interval_end=WINDOW_START + timedelta(hours=8),
+                status="leave_requested", preference=1.0,
+            )
+        )
+        session.commit()
+
+    response = client.post("/v1/optimisations/leave_rdo", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["decisions"][0]["approved"] is True
+    assert result["kpis"]["rejected_count"] == 0
+
+
 def test_demand_forecast_without_history_returns_data_not_ready(client):
     response = client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
     assert response.status_code == 422

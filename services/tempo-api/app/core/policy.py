@@ -44,6 +44,11 @@ DEFAULT_CONSTRAINTS: dict[str, Any] = {
     "training_benefit_per_certification_per_period": 50.0,
     "training_shortage_penalty_per_worker": 300.0,
     "training_budget": None,  # None = unconstrained
+    # Leave & RDO Planning (§3.7) — same class of gap: no canonical entity
+    # prices staffing-gap risk or approval dissatisfaction, so these are
+    # flat, tenant-overridable defaults.
+    "leave_shortage_penalty_per_worker": 300.0,
+    "leave_rejection_penalty": 150.0,
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {

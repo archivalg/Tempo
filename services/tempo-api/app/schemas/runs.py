@@ -45,6 +45,7 @@ IMPLEMENTED_RUN_TYPES: set[str] = {
     "workforce_mix",
     "named_roster",
     "training_coverage",
+    "leave_rdo",
 }
 
 

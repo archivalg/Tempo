@@ -136,9 +136,23 @@ artificially certification-scarce one — the required-coverage source was
 the bug, not the MILP). Cost/benefit/shortage-penalty are flat policy
 defaults, the same class of gap as `workforce_mix`'s `default_rate`.
 
-Still to come in Phase C: leave/RDO planning (similar MILP shape),
-intraday reallocation (min-cost flow — a new solver family), and WMS
-live-backlog integration (a connector, not a solver).
+**Second new model — `leave_rdo`** (§3.7 / Appendix A.7, MILP,
+`app/solvers/leave_rdo.py`): approves or rejects pending leave/RDO
+requests, balancing staffing-gap risk against rejection dissatisfaction.
+Same required-coverage fix applies here (sourced from Labour Requirement's
+hours, not Workforce Mix's output). A pending request is an `Availability`
+row with a new status value (`leave_requested`/`rdo_requested`) alongside
+the `available`/`unavailable`/`leave`/`rdo` values Named Roster already
+reads; approval priority reuses `Availability.preference`. This model
+*decides* approve/reject — it doesn't write the outcome back to
+`Availability` (that's Phase E, controlled action/writeback, not a
+planning run). `tests/test_leave_rdo.py`'s scarcity case checks the
+property that actually matters: when every request can't be granted, it
+rejects the lowest-priority ones first, not an arbitrary subset.
+
+Still to come in Phase C: intraday reallocation (min-cost flow — a new
+solver family) and WMS live-backlog integration (a connector, not a
+solver).
 
 ## Known simplifications (tracked, not hidden)
 

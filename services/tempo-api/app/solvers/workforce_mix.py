@@ -151,7 +151,6 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
 
     solver.Minimize(sum(coeff * var for var, coeff in objective_terms))
     status = solver.Solve()
-    feasibility = "feasible"
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
         raise InsufficientData("workforce mix MILP did not return a usable solution")
 
