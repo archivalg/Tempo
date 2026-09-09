@@ -1,16 +1,19 @@
-# Tempo Optimisation Service — Phases 0, A, B, C
+# Tempo Optimisation Service — Phases 0, A, B, C, D
 
 A FastAPI implementation of the contract foundation (Phase 0), the four
 core Labour Intelligence models (Phase A), the overlay connectors (Phase
-B — Deputy, UKG Pro WFM, UKG Ready), and operational breadth (Phase C —
+B — Deputy, UKG Pro WFM, UKG Ready), operational breadth (Phase C —
 training/certification, leave/RDO, intraday reallocation, WMS backlog
-ingestion) from `Tempo_Prime_AI_Integration_Specification_v2.0.docx`
-(§18): Phase 0's exit outcome — *"Prime can call a stubbed Tempo run
-end-to-end with governed evidence"* — Phase A's four real solvers, Phase
-B's — *"customers retain T&A while using identical Prime/Tempo capability
-contracts"* — and Phase C's three additional models plus their live
-data feed. **All four phases from the recommended MVP cut through
-operational breadth are now done.**
+ingestion), and enterprise intelligence (Phase D — team composition, 3PL
+cost-to-serve/margin, robust/scenario planning) from
+`Tempo_Prime_AI_Integration_Specification_v2.0.docx` (§18): Phase 0's exit
+outcome — *"Prime can call a stubbed Tempo run end-to-end with governed
+evidence"* — Phase A's four real solvers, Phase B's — *"customers retain
+T&A while using identical Prime/Tempo capability contracts"* — Phase C's
+three additional models plus their live data feed, and Phase D's three
+remaining models from the AI Labour Optimisation Spec's full ten-model
+catalogue. **Every model and run_type Appendix C's enum names is now
+implemented.**
 
 **Architecture note on where Phase B/C connectors live**: the spec's own
 architecture (§3.1 "Prohibited coupling", DP-03/INT-002) requires
@@ -60,9 +63,9 @@ Phase A — real solvers reading real canonical data, in `app/solvers/`:
 The four models chain: named_roster calls workforce_mix for its headcount
 targets, workforce_mix calls labour_requirement for its hours, and
 labour_requirement calls demand_forecast for its volumes — matching the
-spec's own pipeline (Strategy doc §4). Every other `run_type` in Appendix C
-is still a legal request that returns `TEMPO-RUN-004` rather than a 404, so
-Prime's tool schema doesn't need to change as later phases land.
+spec's own pipeline (Strategy doc §4). Phases B, C and D (below) complete
+the rest of Appendix C's `run_type` enum; a run_type outside that enum
+entirely still returns `TEMPO-RUN-004` rather than a 404 or a stack trace.
 
 Phase B — three connectors in `app/maestro/` (§2.1, §2.2, §2.3, §7.1):
 
@@ -189,6 +192,70 @@ direct insert, and gets the same correct reassignment.
 
 **Phase C is now fully done.**
 
+## Phase D — enterprise intelligence
+
+The last three models from the AI Labour Optimisation Spec's ten-model
+catalogue (§18's "Team composition, 3PL cost-to-serve/margin, robust/
+scenario; restricted finance access").
+
+**`team_composition`** (§3.8 / Appendix A.8, MILP, `app/solvers/team_composition.py`):
+picks *which named workers* fill a role/zone team, given how many
+workforce_mix already decided are needed there — it doesn't re-decide
+headcount or the internal/labour-hire mix, it decides identity, trading
+off productivity/cost/quality targets against reliability and minimum
+internal/mentor coverage. Per-worker productivity/quality/reliability
+ratings and the mentor flag live in a new table, `WorkerPerformanceProfile`
+— a Tempo-governed addition (same tier as `ActivityRoleZoneMap`), not a §6.1
+canonical entity, since no connector in scope publishes these ratings; a
+worker with no row is assumed exactly average, not excluded. Building this
+surfaced a real property of the formal spec worth flagging rather than
+"fixing": Appendix A.8's deviation terms (`|Σprod·x − ProdTarget| ≤ u_prod`)
+are symmetric, so the model can prefer a low-productivity worker who
+exactly closes the gap over an average worker whose surplus would only
+inflate overshoot — verified deliberately with a manual before/after case
+(see the solver module's docstring), not silently patched with an
+asymmetric penalty the spec doesn't specify.
+
+**`margin_3pl`** (§3.9 / Appendix A.9, MILP, `app/solvers/margin_3pl.py`):
+the customer-profitability counterpart to workforce_mix's pure-cost view —
+maximises contribution margin (revenue − labour cost − overtime − overhead
+− SLA penalties) instead of minimising cost, deciding how much of each
+customer's demand to serve when serving all of it isn't profitable.
+Restricted per §5.2: `labour.margin.read` ("Finance, 3PL Commercial") gates
+both run creation and `GET /v1/runs/{run_id}` in `app/api/v1/runs.py` — a
+caller with `labour.plan` but not `labour.margin.read` is forbidden from
+this run_type specifically, even though every other run_type only needs
+`labour.plan`. Verified with a deliberately uneconomic customer (high
+volume, a sell rate below marginal capacity cost): the model leaves them
+partially unserved rather than treating all demand as equally worth
+serving (`tests/test_margin_3pl.py`).
+
+**`scenario`** (§3.10 / Appendix A.10, Monte Carlo, `app/solvers/scenario.py`):
+stress-tests a workforce_mix plan under demand volatility, absenteeism and
+productivity drift, reporting a cost distribution, SLA-breach probability
+and labour-risk range instead of a single point estimate.
+`request.configuration.objective_profile == "lowest_risk"` selects the
+formal spec's robust (worst-case) posture; every other profile uses the
+stochastic (expected-value) posture — reusing the existing enum rather than
+adding a scenario-specific request field. The biggest scope reduction in
+Phase D: the formal model's second stage is itself an optimisation to
+re-solve per scenario, which isn't tractable synchronously at the policy
+default of 200 scenarios (and this codebase has no async run worker yet —
+§18's "heavy scenario runs return async" is Phase D/F scope, tracked in
+`docs/roadmap.md`). Recourse per scenario is instead computed analytically
+in the same cost order a MILP would pick (overtime, then temp labour up to
+a surge cap, then unmet demand at `sla_penalty_per_hour`) — an
+approximation, not a re-solved MILP. Scenario draws use a seeded RNG
+(policy's `scenario_random_seed`) so a run is reproducible from its inputs
+and policy version alone, matching every other run's immutability
+requirement rather than being genuinely random each time
+(`tests/test_scenario.py` checks this directly, plus that the robust
+posture never reports a lower cost than the stochastic one over the exact
+same draws).
+
+**Phase D is now fully done — every model in the AI Labour Optimisation
+Spec's catalogue and every run_type in Appendix C's enum is implemented.**
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:
@@ -256,6 +323,33 @@ Phase C:
   rolling window — a real deployment calls it again for the next interval.
 - **Intraday reallocation's productivity/move-cost are flat**, same
   simplification as Workforce Mix's productivity-fixed-at-1.0.
+
+Phase D:
+- **`team_composition` sizes one stable named team per (role, zone)** to
+  the peak daily headcount workforce_mix assigned across the window, not a
+  different roster each day — matching the spec's framing ("the best
+  employee mix for a team or shift"), not named_roster's day-by-day
+  problem.
+- **`WorkerPerformanceProfile` is new, Tempo-governed configuration**, not
+  sourced from any connector — no vendor in scope publishes per-worker
+  productivity/quality/reliability ratings; a worker with no row is
+  assumed exactly average via policy defaults.
+- **`margin_3pl` reads customer-split demand directly from `demand_bucket`
+  for the planning window**, not forecast — Phase A's `forecast_demand`
+  doesn't carry `customer_id` through, and contracted per-customer volumes
+  are typically known in advance anyway. It also uses one representative
+  `LabourCostRule` per role (preferring `permanent`) rather than
+  re-optimising the internal/labour-hire mix — that trade-off stays
+  workforce_mix's job. SLA minimum-service floors aren't modelled; only
+  the missed-service penalty discourages leaving demand unserved.
+- **`scenario`'s recourse is computed analytically per scenario**, not by
+  re-solving a MILP per Monte Carlo draw — see the Phase D section above
+  for why. Scenario generation parameters (volatility, absenteeism,
+  productivity drift) are flat policy defaults, same class of gap as
+  `workforce_mix`'s `default_rate`.
+- **No async run worker yet** — §18's "heavy scenario runs return async
+  with progress state" isn't built; `scenario` runs synchronously like
+  every other run type, bounded by the policy default scenario count (200).
 
 ## Run it
 

@@ -11,15 +11,17 @@ re-reading the full integration spec.
 | A — Core Labour Intelligence | Demand forecast, labour requirement, workforce mix, named roster on Tempo-native data | **Done**, with tracked scope reductions (single site/run, fixed shift calendar, skill_code-as-role, static mix availability — see `services/tempo-api` README's "known simplifications") | `services/tempo-api/app/solvers` |
 | B — Overlay ingestion | Deputy first; UKG Pro WFM / UKG Ready next; source parity tests | **Done** — Deputy, UKG Pro WFM and UKG Ready, one connector algorithm per vendor with per-product-line clients for UKG. Source parity proven by test (`test_source_parity.py`, parametrized over all three), not just asserted — see `services/tempo-api` README's Phase B section for what's covered vs flagged (full UKG Pro HCM, skill/cert mapping, and webhooks are explicitly out) | `services/tempo-api/app/maestro` |
 | C — Operational breadth | Intraday reallocation, training/certification, leave/RDO; WMS live backlog integration | **Done** — policy governance, `training_coverage`, `leave_rdo` (both MILP), `intraday_reallocation` (min-cost flow, a new solver family), and WMS backlog ingestion (`app/maestro/wms/`, illustrative since no vendor is named in the spec) all done and tested, including an integration test proving the solver works against connector-ingested data, not just seeded rows | `services/tempo-api/app/solvers/`, `services/tempo-api/app/maestro/wms` |
-| D — Enterprise intelligence | Team composition, 3PL cost-to-serve/margin, robust/scenario; restricted finance access | **Not started — next** | — |
+| D — Enterprise intelligence | Team composition, 3PL cost-to-serve/margin, robust/scenario; restricted finance access | **Done** — `team_composition` and `margin_3pl` (both MILP) and `scenario` (Monte Carlo, analytic per-scenario recourse rather than a re-solved MILP — see `services/tempo-api` README). `margin_3pl` is gated behind `labour.margin.read` on both run creation and read, per §5.2's restricted finance access — the first run_type-specific permission check in this codebase | `services/tempo-api/app/solvers/` |
 | E — Controlled action | Action validation, approvals, source staging/writeback, reconciliation | Not started — `ActionRequest` table exists in Phase 0's schema so this doesn't need a breaking migration later, but no endpoints | — |
 | F — Scale and optimisation | Capacity tests, model monitoring, connector catalogue, self-service onboarding | Not started | — |
 
 ## Recommended MVP cut (spec §18.1)
 
 Build Phase 0 + Phase A together, read-only Prime integration, before any
-writeback. Phases 0, A, B and C are all done; **Phase D is next** (team
-composition, 3PL cost-to-serve/margin, robust/scenario optimisation).
+writeback. Phases 0, A, B, C and D are all done — every model in the AI
+Labour Optimisation Spec's ten-model catalogue and every run_type in
+Appendix C's enum is implemented. **Phase E is next** (action validation,
+approvals, source staging/writeback, reconciliation).
 
 ## Architectural debt carried from Phase B
 
@@ -35,6 +37,13 @@ standalone `services/maestro` is a mechanical extraction of that
 already-isolated code, not a rewrite, whenever it's warranted (likely
 Phase F, or sooner if ingestion volume across these connectors makes
 sharing Tempo's process a real bottleneck).
+
+Phase D adds a second, related piece of debt: `scenario`'s Monte Carlo
+recourse is computed analytically rather than by re-solving a MILP per
+scenario, because this codebase has no async run worker — §18's "heavy
+scenario runs return async with progress state" isn't built yet. That's
+also Phase F (or sooner) scope: a real async worker would let `scenario`
+re-solve the second-stage optimisation per draw instead of approximating it.
 
 ## Open decisions this roadmap depends on
 

@@ -14,12 +14,14 @@ Intelligence pack.
 
 ## Code
 
-- `services/tempo-api` — the Tempo Optimisation Service. Phases 0, A, B and
-  C are implemented here (contract foundation; real forecast/MILP/CP-SAT
-  solvers; Deputy + UKG Pro WFM + UKG Ready overlay connectors; and
+- `services/tempo-api` — the Tempo Optimisation Service. Phases 0, A, B, C
+  and D are implemented here (contract foundation; real forecast/MILP/
+  CP-SAT solvers; Deputy + UKG Pro WFM + UKG Ready overlay connectors;
   training/leave-RDO/intraday-reallocation models plus WMS backlog
-  ingestion); see its README for details, including the architectural debt
-  the Maestro connector layer carries.
+  ingestion; and team composition/3PL margin/scenario planning) — every
+  model in the AI Labour Optimisation Spec's catalogue is implemented; see
+  its README for details, including the architectural debt the Maestro
+  connector layer carries.
 - `wiep-mvp.zip`, `wiep_mobile_app_expo.ts` — an earlier proof-of-concept
   scaffold (pre-dates the v2.0 specs). Kept as UI/interaction reference only;
   not the foundation for `services/tempo-api`.

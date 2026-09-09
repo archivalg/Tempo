@@ -204,6 +204,31 @@ class SellRateContract(Base):
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WorkerPerformanceProfile(Base):
+    """cost_i, prod_i, qual_i, rel_i and the Mentor subset for Team
+    Composition Optimisation (AI Labour Optimisation Spec §3.8). Not one of
+    the §6.1 canonical entities — same tier as ActivityRoleZoneMap: Tempo
+    governed configuration, not a Maestro-sourced entity, since no vendor in
+    scope publishes per-worker productivity/quality/reliability ratings.
+    A worker with no row here is assumed exactly average (policy defaults
+    default_productivity_index / default_quality_index /
+    default_reliability_index); cost_per_hour is optional for the same
+    reason and falls back to LabourCostRule/default_rate like every other
+    solver. The Internal subset is Worker.employment_type (INTERNAL_TYPES
+    in app.solvers.workforce_mix), not duplicated here.
+    """
+
+    __tablename__ = "worker_performance_profile"
+
+    worker_id: Mapped[str] = mapped_column(String, ForeignKey("worker.worker_id"), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    cost_per_hour: Mapped[str | None] = mapped_column(String, nullable=True)
+    productivity_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reliability_index: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_mentor: Mapped[bool] = mapped_column(default=False)
+
+
 class OptimisationPolicy(Base):
     __tablename__ = "optimisation_policy"
 

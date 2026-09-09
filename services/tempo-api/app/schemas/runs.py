@@ -35,10 +35,11 @@ RunStatus = Literal[
     "expired",
 ]
 
-# §8's Phase 0/A run types plus Phase C additions as they land — the rest of
-# Appendix C's run_type values are legal enum members but return
-# TEMPO-RUN-004 (not yet implemented) until their phase lands; see
-# docs/roadmap.md.
+# Every run_type Appendix C's enum names — Phase D (docs/roadmap.md) landed
+# the last three (team_composition, margin_3pl, scenario), completing the
+# set RunType above declares. A run_type outside this set (and outside the
+# enum entirely, since it's a plain path parameter) still returns
+# TEMPO-RUN-004 rather than a 404 or a stack trace.
 IMPLEMENTED_RUN_TYPES: set[str] = {
     "demand_forecast",
     "labour_requirement",
@@ -47,6 +48,9 @@ IMPLEMENTED_RUN_TYPES: set[str] = {
     "training_coverage",
     "leave_rdo",
     "intraday_reallocation",
+    "team_composition",
+    "margin_3pl",
+    "scenario",
 }
 
 

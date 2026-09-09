@@ -55,6 +55,40 @@ DEFAULT_CONSTRAINTS: dict[str, Any] = {
     # productivity-fixed-at-1.0 simplification).
     "intraday_move_cost": 15.0,
     "intraday_backlog_risk_per_unit": 40.0,
+    # Team Composition (§3.8) — no canonical entity carries per-worker
+    # productivity/quality/reliability ratings yet (WorkerPerformanceProfile
+    # is a Tempo-governed addition, same tier as ActivityRoleZoneMap); a
+    # worker with no profile row is assumed exactly average. Deviation
+    # weights convert the model's abstract prod/qual/reliability units into
+    # the same dollar scale as CostTarget so all four objective terms are
+    # comparable — same role as named_roster's fairness_weight.
+    "default_productivity_index": 1.0,
+    "default_quality_index": 1.0,
+    "default_reliability_index": 1.0,
+    "team_internal_min_ratio": 0.5,
+    "team_mentor_min_ratio": 0.1,
+    "team_prod_deviation_weight": 200.0,
+    "team_qual_deviation_weight": 200.0,
+    "team_reliability_weight": 50.0,
+    # 3PL Cost-to-Serve & Margin (§3.9) — SellRateContract/LabourCostRule
+    # cover most of the model, but a customer/activity with no contract row,
+    # or overhead allocation, still needs a flat tenant-overridable default
+    # (same gap as default_rate above).
+    "margin_default_sell_rate": 60.0,
+    "margin_default_sla_penalty_per_unit": 20.0,
+    "margin_overhead_rate_per_hour": 5.0,
+    # Robust / Scenario Optimisation (§3.10, Monte Carlo) — scenario
+    # generation parameters; no canonical entity models demand volatility,
+    # absenteeism or productivity drift distributions yet, so these are flat
+    # tenant-overridable defaults, same class of gap as the others above.
+    # scenario_random_seed makes runs reproducible/auditable (Integration
+    # Spec run immutability) rather than genuinely random each time.
+    "scenario_count": 200,
+    "scenario_random_seed": 42,
+    "scenario_demand_volatility_cv": 0.15,
+    "scenario_absenteeism_rate_mean": 0.05,
+    "scenario_absenteeism_rate_std": 0.03,
+    "scenario_productivity_drift_std": 0.1,
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {

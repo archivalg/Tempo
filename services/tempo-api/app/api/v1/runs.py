@@ -4,11 +4,23 @@ Phase A wired four run types to real solvers (app/solvers/*): Holt linear
 demand forecasting, deterministic labour-requirement translation, an
 OR-Tools MILP workforce mix, and an OR-Tools CP-SAT named roster. Phase C
 adds training_coverage, leave_rdo (both MILP), and intraday_reallocation
-(OR-Tools min-cost flow — a different solver family) on top — see each
-module's docstring for the scope reductions taken to keep them tractable
-without a real Maestro/WMS feed yet. Every other run_type in Appendix C is
-still a legal request that returns TEMPO-RUN-004 rather than a 404, so
-Prime's tool schema doesn't need to change as later phases land.
+(OR-Tools min-cost flow — a different solver family). Phase D adds
+team_composition (MILP), margin_3pl (MILP) and scenario (Monte Carlo) —
+see each module's docstring for the scope reductions taken to keep them
+tractable without a real Maestro/WMS feed yet.
+
+That's every run_type Appendix C's enum names — Phase D completes the
+model catalogue this endpoint was built to serve. RunTypeNotImplemented /
+TEMPO-RUN-004 stays as a defensive guard (run_type is a plain path
+parameter FastAPI doesn't validate against the RunType literal, so an
+unrecognised string still needs a clean error rather than a stack trace),
+not a "not built yet" signal anymore.
+
+margin_3pl carries an extra permission gate on top of the usual
+labour.plan check: §5.2 restricts customer cost-to-serve/margin outputs to
+labour.margin.read ("Finance, 3PL Commercial"), so both run creation and
+GET /runs/{run_id} enforce it — a caller who can create every other run
+type may still be forbidden from margin_3pl specifically.
 """
 from __future__ import annotations
 
@@ -35,7 +47,10 @@ from app.solvers.demand_forecast import forecast_demand
 from app.solvers.labour_requirement import translate_labour_requirement
 from app.solvers.intraday_reallocation import solve_intraday_reallocation
 from app.solvers.leave_rdo import solve_leave_rdo
+from app.solvers.margin_3pl import solve_margin_3pl
 from app.solvers.named_roster import solve_named_roster
+from app.solvers.scenario import solve_scenario
+from app.solvers.team_composition import solve_team_composition
 from app.solvers.training_coverage import solve_training_coverage
 from app.solvers.workforce_mix import solve_workforce_mix
 
@@ -49,6 +64,9 @@ _RUN_TYPE_TO_MODEL = {
     "training_coverage": ("training_coverage", "1.0.0", "milp-cbc"),
     "leave_rdo": ("leave_rdo_planning", "1.0.0", "milp-cbc"),
     "intraday_reallocation": ("intraday_reallocation", "1.0.0", "min-cost-flow"),
+    "team_composition": ("team_composition", "1.0.0", "milp-cbc"),
+    "margin_3pl": ("margin_3pl", "1.0.0", "milp-cbc"),
+    "scenario": ("scenario", "1.0.0", "monte-carlo"),
 }
 
 _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcome]] = {
@@ -59,7 +77,12 @@ _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcom
     "training_coverage": solve_training_coverage,
     "leave_rdo": solve_leave_rdo,
     "intraday_reallocation": solve_intraday_reallocation,
+    "team_composition": solve_team_composition,
+    "margin_3pl": solve_margin_3pl,
+    "scenario": solve_scenario,
 }
+
+_FINANCE_RESTRICTED_RUN_TYPES = {"margin_3pl"}
 
 
 def _enforce_scope(context: RequestContext, request: RunRequest) -> None:
@@ -93,6 +116,8 @@ def create_run(
         raise RunTypeNotImplemented(f"run_type '{run_type}' is not implemented in the current roadmap phase")
     if not context.has_permission("labour.plan"):
         raise AuthForbidden("caller lacks labour.plan permission required to create optimisation runs")
+    if run_type in _FINANCE_RESTRICTED_RUN_TYPES and not context.has_permission("labour.margin.read"):
+        raise AuthForbidden(f"caller lacks labour.margin.read permission required for run_type '{run_type}'")
 
     _enforce_scope(context, request)
 
@@ -215,6 +240,8 @@ def get_run(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     run = _get_owned_run(db, context, run_id)
+    if run.run_type in _FINANCE_RESTRICTED_RUN_TYPES and not context.has_permission("labour.margin.read"):
+        raise AuthForbidden(f"caller lacks labour.margin.read permission required to view run_type '{run.run_type}'")
     if lifecycle.is_terminal(run.status) and run.status in {"completed", "completed_with_warnings"}:
         return {
             "run_id": run.run_id,

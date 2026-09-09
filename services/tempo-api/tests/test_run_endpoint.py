@@ -143,6 +143,78 @@ def test_intraday_reallocation_moves_idle_worker_to_cover_backlog(client):
     assert result["kpis"]["remaining_backlog"] == 0
 
 
+def test_team_composition_builds_a_named_team(client):
+    _seed(client)
+    response = client.post("/v1/optimisations/team_composition", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["teams"]
+    assert result["teams"][0]["selected_worker_ids"]
+
+
+def _headers_finance():
+    headers = context_header(roles=["operations_manager", "finance"])
+    headers["Idempotency-Key"] = str(uuid.uuid4())
+    return headers
+
+
+def test_margin_3pl_reports_contribution_margin_for_finance_role(client):
+    from datetime import timedelta
+
+    from app.models.canonical import ActivityRoleZoneMap, DemandBucket, LabourCostRule, SellRateContract, WorkStandard
+
+    with client.session_local() as session:
+        session.add(WorkStandard(tenant_id="ten_test", activity="picking", complexity_segment=None, time_per_unit_seconds=45.0, effective_from=WINDOW_START - timedelta(days=365)))
+        session.add(ActivityRoleZoneMap(tenant_id="ten_test", site_id="site_mel_01", activity="picking", role="picker", zone="zone_a", weight=1.0))
+        session.add(LabourCostRule(tenant_id="ten_test", labour_type="permanent", role="picker", rate="35.00", overtime_multiplier="1.5", surcharge=None, currency="AUD"))
+        session.add(DemandBucket(tenant_id="ten_test", activity="picking", site_id="site_mel_01", customer_id="cust_A", interval_start=WINDOW_START, volume=100.0, source="wms"))
+        session.add(SellRateContract(tenant_id="ten_test", customer_id="cust_A", activity="picking", rate="5.00", currency="AUD", sla_penalty="2.00", effective_from=WINDOW_START - timedelta(days=30), effective_to=None))
+        session.commit()
+
+    response = client.post("/v1/optimisations/margin_3pl", json=VALID_REQUEST, headers=_headers_finance())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header(roles=["operations_manager", "finance"])).json()["result"]
+    assert float(result["kpis"]["contribution_margin"]["amount"]) != 0
+
+
+def test_margin_3pl_forbidden_without_labour_margin_read(client):
+    headers = context_header(roles=["operations_manager"])
+    headers["Idempotency-Key"] = str(uuid.uuid4())
+    response = client.post("/v1/optimisations/margin_3pl", json=VALID_REQUEST, headers=headers)
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "TEMPO-AUTH-002"
+
+
+def test_margin_3pl_run_result_hidden_from_caller_without_margin_read(client):
+    from app.models.canonical import ActivityRoleZoneMap, DemandBucket, LabourCostRule, SellRateContract, WorkStandard
+    from datetime import timedelta
+
+    with client.session_local() as session:
+        session.add(WorkStandard(tenant_id="ten_test", activity="picking", complexity_segment=None, time_per_unit_seconds=45.0, effective_from=WINDOW_START - timedelta(days=365)))
+        session.add(ActivityRoleZoneMap(tenant_id="ten_test", site_id="site_mel_01", activity="picking", role="picker", zone="zone_a", weight=1.0))
+        session.add(LabourCostRule(tenant_id="ten_test", labour_type="permanent", role="picker", rate="35.00", overtime_multiplier="1.5", surcharge=None, currency="AUD"))
+        session.add(DemandBucket(tenant_id="ten_test", activity="picking", site_id="site_mel_01", customer_id="cust_A", interval_start=WINDOW_START, volume=100.0, source="wms"))
+        session.add(SellRateContract(tenant_id="ten_test", customer_id="cust_A", activity="picking", rate="5.00", currency="AUD", sla_penalty="2.00", effective_from=WINDOW_START - timedelta(days=30), effective_to=None))
+        session.commit()
+
+    run_id = client.post("/v1/optimisations/margin_3pl", json=VALID_REQUEST, headers=_headers_finance()).json()["run_id"]
+    forbidden = client.get(f"/v1/runs/{run_id}", headers=context_header(roles=["operations_manager"]))
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error_code"] == "TEMPO-AUTH-002"
+
+
+def test_scenario_reports_a_cost_distribution(client):
+    _seed(client)
+    response = client.post("/v1/optimisations/scenario", json=VALID_REQUEST, headers=_headers())
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    result = client.get(f"/v1/runs/{run_id}", headers=context_header()).json()["result"]
+    assert result["kpis"]["cost_distribution"]["mean"]
+    assert result["scenario_count"] > 0
+
+
 def test_demand_forecast_without_history_returns_data_not_ready(client):
     response = client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
     assert response.status_code == 422
@@ -173,7 +245,11 @@ def test_missing_idempotency_key_rejected(client):
 
 
 def test_unimplemented_run_type_returns_not_implemented(client):
-    response = client.post("/v1/optimisations/scenario", json=VALID_REQUEST, headers=_headers())
+    # Phase D completes every run_type in Appendix C's enum (see
+    # app/api/v1/runs.py's module docstring) — this now only guards a
+    # run_type string outside that enum entirely, since run_type is a plain
+    # path parameter FastAPI doesn't validate against the RunType literal.
+    response = client.post("/v1/optimisations/not_a_real_run_type", json=VALID_REQUEST, headers=_headers())
     assert response.status_code == 501
     assert response.json()["error_code"] == "TEMPO-RUN-004"
 
