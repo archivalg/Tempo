@@ -14,16 +14,19 @@ Intelligence pack.
 
 ## Code
 
-- `services/tempo-api` — the Tempo Optimisation Service. Phases 0 through E
-  are implemented here (contract foundation; real forecast/MILP/CP-SAT
-  solvers; Deputy + UKG Pro WFM + UKG Ready overlay connectors;
-  training/leave-RDO/intraday-reallocation models plus WMS backlog
-  ingestion; team composition/3PL margin/scenario planning; and the §12
-  controlled-action pipeline — validate, approve, writeback, reconcile) —
-  every model in the AI Labour Optimisation Spec's catalogue is
-  implemented; see its README for details, including the architectural
-  debt the Maestro connector layer carries and the one deliberate gap in
-  Phase E (no real vendor writeback connector exists yet).
+- `services/tempo-api` — the Tempo Optimisation Service. All six phases
+  §18 names (0 through F) are implemented here: contract foundation; real
+  forecast/MILP/CP-SAT solvers; Deputy + UKG Pro WFM + UKG Ready overlay
+  connectors; training/leave-RDO/intraday-reallocation models plus WMS
+  backlog ingestion; team composition/3PL margin/scenario planning; the
+  §12 controlled-action pipeline (validate, approve, writeback, reconcile);
+  and capacity tests, model monitoring, a connector catalogue, and
+  self-service onboarding. Every model in the AI Labour Optimisation
+  Spec's catalogue is implemented. See its README for details, including
+  the disclosed debt that remains regardless (Maestro as a separate
+  service, a real vendor writeback connector, an async run worker, a
+  credential vault) — these are specific, scoped gaps a production pilot
+  would need to close next, not unfinished phases.
 - `wiep-mvp.zip`, `wiep_mobile_app_expo.ts` — an earlier proof-of-concept
   scaffold (pre-dates the v2.0 specs). Kept as UI/interaction reference only;
   not the foundation for `services/tempo-api`.

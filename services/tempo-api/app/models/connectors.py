@@ -38,6 +38,33 @@ class ConnectorCheckpoint(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class MaestroConnection(Base):
+    """A tenant's declared connector instance — Phase F's "self-service
+    onboarding" (§18). Registering a row here does not create a live vendor
+    credential or trigger ingestion: no credential vault exists in this
+    scaffold (the same class of gap Phase E's writeback connector
+    discloses — see app/maestro/writeback.py), so `status` starts and stays
+    "pending_credentials" until a real deployment wires up an actual
+    client. What this *does* replace is the Phase 0-disclosed gap that
+    every canonical row so far only got there by direct DB insert or a
+    seed script (services/tempo-api/README.md's "Canonical ingestion"
+    simplification) — a tenant admin can now declare "this tenant has a
+    Deputy connection for this site" through the API, the first real step
+    of onboarding, even though wiring the actual HTTP client remains a
+    manual/engineering step.
+    """
+
+    __tablename__ = "maestro_connection"
+
+    connection_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    source_system: Mapped[str] = mapped_column(String)
+    site_id: Mapped[str] = mapped_column(String)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="pending_credentials")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class IngestionDeadLetter(Base):
     """§7.1 "Dead-letter/quarantine queue with replay after mapping or
     source correction" and §6.3's quarantined/rejected data-quality states.

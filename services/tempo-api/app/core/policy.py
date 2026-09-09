@@ -95,6 +95,14 @@ DEFAULT_CONSTRAINTS: dict[str, Any] = {
     # overridable defaults, same class of gap as default_rate above.
     "recommendation_ttl_seconds": 3600,
     "action_token_ttl_seconds": 300,
+    # Model monitoring (§15.2, Phase F) — thresholds for comparing a
+    # run_type's recent runs against its older ones (app.core.monitoring).
+    # No canonical entity defines "how much degradation counts as drift"
+    # either; flat, tenant-overridable defaults, same class of gap as the
+    # ones above.
+    "monitoring_min_runs_per_window": 4,
+    "drift_confidence_drop_threshold": 0.15,
+    "drift_mape_increase_ratio_threshold": 0.5,
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {

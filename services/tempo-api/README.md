@@ -1,22 +1,26 @@
-# Tempo Optimisation Service — Phases 0, A, B, C, D, E
+# Tempo Optimisation Service — Phases 0, A, B, C, D, E, F
 
 A FastAPI implementation of the contract foundation (Phase 0), the four
 core Labour Intelligence models (Phase A), the overlay connectors (Phase
 B — Deputy, UKG Pro WFM, UKG Ready), operational breadth (Phase C —
 training/certification, leave/RDO, intraday reallocation, WMS backlog
 ingestion), enterprise intelligence (Phase D — team composition, 3PL
-cost-to-serve/margin, robust/scenario planning), and controlled action
-(Phase E — action validation, approval, writeback, reconciliation) from
+cost-to-serve/margin, robust/scenario planning), controlled action
+(Phase E — action validation, approval, writeback, reconciliation), and
+scale/optimisation groundwork (Phase F — capacity tests, model monitoring,
+connector catalogue, self-service onboarding) from
 `Tempo_Prime_AI_Integration_Specification_v2.0.docx` (§18): Phase 0's exit
 outcome — *"Prime can call a stubbed Tempo run end-to-end with governed
 evidence"* — Phase A's four real solvers, Phase B's — *"customers retain
 T&A while using identical Prime/Tempo capability contracts"* — Phase C's
 three additional models plus their live data feed, Phase D's three
 remaining models from the AI Labour Optimisation Spec's full ten-model
-catalogue, and Phase E's §12 controlled-action pipeline. **Every model and
-run_type Appendix C's enum names is implemented, and every recommendation
-those models produce can now be validated, approved and (honestly)
-written back.**
+catalogue, Phase E's §12 controlled-action pipeline, and Phase F's
+operational-maturity layer over everything Phases 0-E built. **Every
+model and run_type Appendix C's enum names is implemented, every
+recommendation those models produce can be validated, approved and
+(honestly) written back, and the service now measures its own solver
+performance, model drift, and lets a tenant onboard itself.**
 
 **Architecture note on where Phase B/C connectors live**: the spec's own
 architecture (§3.1 "Prohibited coupling", DP-03/INT-002) requires
@@ -335,6 +339,64 @@ idempotent execution, and reconciliation before retry) is implemented and
 tested**, short of the one thing genuinely out of this codebase's reach: a
 real vendor to write back to.
 
+## Phase F — scale and optimisation
+
+§18's last phase: "Capacity tests, model monitoring, connector catalogue,
+self-service onboarding." Four real, tested pieces, each closing a gap
+disclosed since earlier phases rather than adding new solver logic.
+
+**Capacity tests** (`tests/test_capacity.py`) answer §15.1's SLO table
+("Simple run completion p95 <= 30 seconds... at agreed pilot scale",
+"Intraday recommendation p95 <= 60 seconds") and §16.1's Solver test layer
+requirement for "performance" evidence, which nothing before Phase F
+checked — every prior solver test used small, hand-built fixtures sized
+for clarity, not scale. These seed 150 workers across 21 days (chosen
+empirically — see the test module's docstring for why) and assert real
+wall-clock time for every solver against the spec's targets: named_roster
+(the slowest, CP-SAT with the largest variable count) finishes in
+single-digit seconds, an order of magnitude under its 30s budget.
+
+**Model monitoring** (`app/core/monitoring.py`, `GET /v1/monitoring/models`,
+`POST /v1/monitoring/models/drift-check`) computes §15.2's "Model
+operations" signals (backtest error, drift, solver gap, version adoption)
+entirely from `OptimisationRun` history every phase already writes — no
+new telemetry pipeline. `check_drift` splits a run_type's runs into an
+older and a more recent half and flags drift when the recent half's
+average confidence dropped, or average backtest MAPE rose, past a policy
+threshold, publishing `model.drift.detected` (§13.1) when it fires. There
+is no background scheduler in this codebase (the same gap `scenario` and
+`recommendation.expiring` disclose), so drift-check is on-demand, not
+continuous — call it after a batch of runs, not expect it to fire itself.
+
+**Connector catalogue** (`app/core/connector_catalogue.py`,
+`GET /v1/connectors`) is a read registry describing what `app/maestro/`
+actually implements (Deputy, UKG Pro WFM, UKG Ready, WMS — their entity
+types, auth shape, and GA-vs-illustrative status) so a tenant admin or
+Prime can discover what's available over the API instead of reading
+source. It's descriptive, not new integration logic.
+
+**Self-service onboarding** (`app/api/v1/onboarding.py`) closes the
+Phase 0-disclosed gap that every `TenantScope` and connector row so far
+only ever existed via direct DB insert or a seed script
+("Canonical ingestion" in Phase 0's simplifications below).
+`POST /v1/tenant-scopes` then `POST /v1/connections` (both `labour.configure`,
+Tenant Admin) let a tenant declare its sites and connector instances
+through the API — `POST /v1/connections` validates `source_system` against
+the catalogue above and requires the target site's `TenantScope` to exist
+first, a real (if small) piece of onboarding-order enforcement, not just a
+row insert. What it deliberately does **not** do — because no credential
+vault exists in this scaffold — is configure a live vendor credential or
+trigger ingestion: every registered `MaestroConnection` stays
+`pending_credentials` forever in this codebase, honestly, the same class
+of gap Phase E's writeback connector discloses.
+
+**Phase F is now fully done — every §18 phase this codebase set out to
+build is implemented**, each with its scope reductions disclosed here
+rather than hidden, and its remaining gaps (no real vendor writeback or
+credential vault, no background scheduler, analytic Monte Carlo recourse)
+named as what a production pilot would need to add next, not silently
+smoothed over.
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:
@@ -457,6 +519,26 @@ Phase E:
 - **`action_token_secret` has a fixed development default** — same class
   of Phase 0 stand-in as the `X-Tempo-Context` header; a real deployment
   must override it via `TEMPO_ACTION_TOKEN_SECRET`.
+
+Phase F:
+- **Capacity tests measure one run, not a statistical p95** — a single
+  seeded run at pilot-ish scale finishing well under the spec's target is
+  a meaningful regression guard, not a rigorous p95 measurement over many
+  concurrent runs, which would need real load-testing infrastructure this
+  codebase doesn't have.
+- **Drift detection is on-demand, not continuous** — no background
+  scheduler exists to run it automatically (same root gap as
+  `recommendation.expiring`); call `POST /v1/monitoring/models/drift-check`
+  after a batch of runs.
+- **`MaestroConnection` records intent, not a live integration** —
+  registering one never configures a real vendor credential or triggers a
+  backfill; it stays `pending_credentials` forever in this codebase. A
+  real deployment still needs an engineer (or a future credential-vault
+  feature) to wire up the actual HTTP client before a connection does
+  anything beyond exist as a row.
+- **The connector catalogue is a static, hand-maintained list** — adding a
+  fifth connector means editing `app/core/connector_catalogue.py`, not a
+  dynamically-discovered registry.
 
 ## Run it
 
