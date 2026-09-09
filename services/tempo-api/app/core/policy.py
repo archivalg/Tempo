@@ -89,6 +89,12 @@ DEFAULT_CONSTRAINTS: dict[str, Any] = {
     "scenario_absenteeism_rate_mean": 0.05,
     "scenario_absenteeism_rate_std": 0.03,
     "scenario_productivity_drift_std": 0.1,
+    # Controlled Action (§12) — how long a completed run's recommendation
+    # stays actionable, and how long a validated action_token stays valid
+    # for execution. No canonical entity prices either; flat tenant-
+    # overridable defaults, same class of gap as default_rate above.
+    "recommendation_ttl_seconds": 3600,
+    "action_token_ttl_seconds": 300,
 }
 
 DEFAULT_WEIGHTS: dict[str, float] = {

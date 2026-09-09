@@ -1,19 +1,22 @@
-# Tempo Optimisation Service — Phases 0, A, B, C, D
+# Tempo Optimisation Service — Phases 0, A, B, C, D, E
 
 A FastAPI implementation of the contract foundation (Phase 0), the four
 core Labour Intelligence models (Phase A), the overlay connectors (Phase
 B — Deputy, UKG Pro WFM, UKG Ready), operational breadth (Phase C —
 training/certification, leave/RDO, intraday reallocation, WMS backlog
-ingestion), and enterprise intelligence (Phase D — team composition, 3PL
-cost-to-serve/margin, robust/scenario planning) from
+ingestion), enterprise intelligence (Phase D — team composition, 3PL
+cost-to-serve/margin, robust/scenario planning), and controlled action
+(Phase E — action validation, approval, writeback, reconciliation) from
 `Tempo_Prime_AI_Integration_Specification_v2.0.docx` (§18): Phase 0's exit
 outcome — *"Prime can call a stubbed Tempo run end-to-end with governed
 evidence"* — Phase A's four real solvers, Phase B's — *"customers retain
 T&A while using identical Prime/Tempo capability contracts"* — Phase C's
-three additional models plus their live data feed, and Phase D's three
+three additional models plus their live data feed, Phase D's three
 remaining models from the AI Labour Optimisation Spec's full ten-model
-catalogue. **Every model and run_type Appendix C's enum names is now
-implemented.**
+catalogue, and Phase E's §12 controlled-action pipeline. **Every model and
+run_type Appendix C's enum names is implemented, and every recommendation
+those models produce can now be validated, approved and (honestly)
+written back.**
 
 **Architecture note on where Phase B/C connectors live**: the spec's own
 architecture (§3.1 "Prohibited coupling", DP-03/INT-002) requires
@@ -256,6 +259,82 @@ same draws).
 **Phase D is now fully done — every model in the AI Labour Optimisation
 Spec's catalogue and every run_type in Appendix C's enum is implemented.**
 
+## Phase E — controlled action
+
+§12's two-step action contract: a completed run's `Recommendation` (one
+per run, created in `app/api/v1/runs.py` right after completion) is a
+proposal, never an operational action, until `POST /v1/actions/validate`
+then `POST /v1/actions` confirm it — enforced in `app/api/v1/actions.py`,
+not just documented. `POST /v1/actions/{action_id}/reconcile` is a
+pragmatic addition beyond the two named endpoints (§8.2 only lists
+validate/execute), because the spec's own acceptance criteria require
+reconciliation to exist somewhere ("A failed/partial source writeback is
+reconciled with an auditable outcome").
+
+**Validate** (`app/api/v1/actions.py::validate_action`) checks, in order:
+caller has `labour.plan`; the recommendation exists, belongs to the
+caller's tenant, and hasn't expired (`recommendation_ttl_seconds`,
+policy-tunable); the requested `action_type` matches the recommendation's
+`run_type` via a fixed table (`publish_roster` ↔ `named_roster`,
+`update_assignment` ↔ `intraday_reallocation`, `approve_leave` ↔
+`leave_rdo`, `create_training_plan` ↔ `training_coverage` —
+`ACTION_TYPE_RUN_TYPE` in `app/schemas/actions.py`, not named explicitly
+in the spec text); the caller's `expected_source_version` matches a new
+`SourceVersionWatermark` table's tracked version for that
+(tenant, connection, site, resource) — a real optimistic-concurrency
+check, not a stub, though nothing populates the watermark except this
+service's own confirmed writebacks (there's no live vendor to poll one
+from). On success it issues an HMAC-signed, short-lived `action_token`
+(`app/core/action_tokens.py` — no JWT dependency, since this service is
+its only verifier) and returns an impact summary lifted directly from the
+recommendation's own baseline/proposed/delta/confidence — no separate
+diff computation needed, since every run already produces exactly that.
+
+**Execute** (`execute_action`) requires `labour.approve` — a distinct,
+narrower permission than `labour.plan`, so a Planner can preview an
+action's impact but only an Operations Manager can actually approve one,
+matching §5.2's role table precisely. It recomputes the payload hash from
+the resent request body and the token hash from the resent token, re-checks
+source-version drift (the source may have moved between validate and
+execute), then hands off to a `WritebackClient`
+(`app/maestro/writeback.py`).
+
+**The central honest simplification of Phase E**: there is no real vendor
+writeback connector. §18.1 itself says writeback shouldn't be MVP scope
+"unless a named pilot requires it and the source offers a reversible
+staging state," and there's no live tenant or sandbox credential to build
+one against — the same gap WMS's read-side client discloses, just with no
+partial credit this time. Rather than fabricate a `confirmed` outcome no
+real vendor ever returned, the default `NotImplementedWritebackClient`
+always answers `unknown`, which forces every execution down the same
+reconciliation path a real, still-processing vendor call would need. This
+is a stronger claim than "adapt the endpoint names later" — it's "this
+service currently cannot honestly tell you a write succeeded." Tests
+substitute a `FakeWritebackClient` (same pattern as Deputy/UKG/WMS's fake
+HTTP clients) to exercise the `confirmed`/`rejected` paths.
+
+Every execute/reconcile response is HTTP 202 with the business outcome in
+the body (`confirmed`/`rejected`/`partially_confirmed`/`unknown`) — the
+same design run completion already uses (`completed` vs
+`completed_with_warnings` is a 202 either way). HTTP-level errors
+(permission denied, expired token, version drift, type mismatch, not
+found) are the only things that raise a `TempoError`; a legitimately
+`rejected` writeback is not a request-level failure and must not roll back
+the audit trail recording that it happened.
+
+Two error codes extend beyond the Integration Spec's four named
+`TEMPO-ACTION-00x` codes (§8.6 only defines 001-004): `TEMPO-ACTION-005`
+(recommendation/action not found) and `TEMPO-ACTION-006` (action_type
+doesn't match the recommendation) — the same kind of disclosed, pragmatic
+extension `ZoneBacklog`/`ActivityRoleZoneMap` are on the canonical model
+side, for gaps the spec's own four codes don't cover.
+
+**Phase E is now fully done — every controlled-action guarantee the spec
+names (proposal-until-approved, expiring tokens, version-drift detection,
+idempotent execution, and reconciliation before retry) is implemented and
+tested**, short of the one thing genuinely out of this codebase's reach: a
+real vendor to write back to.
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:
@@ -350,6 +429,34 @@ Phase D:
 - **No async run worker yet** — §18's "heavy scenario runs return async
   with progress state" isn't built; `scenario` runs synchronously like
   every other run type, bounded by the policy default scenario count (200).
+
+Phase E:
+- **No real vendor writeback connector exists** — the central, deliberate
+  gap; see the Phase E section above. `NotImplementedWritebackClient`
+  always reports `unknown`, never a fabricated `confirmed`.
+- **`compensated` (approved reversal/compensating action) has no code path**
+  — Appendix C's action_status enum includes it, and `ActionRequest.status`
+  can hold the string, but nothing transitions an action there; a
+  reversal action_type isn't one of the four the spec names
+  (`publish_roster`/`update_assignment`/`approve_leave`/
+  `create_training_plan`), and building a whole reversal-action pipeline
+  wasn't part of this pass.
+- **One `Recommendation` per completed run**, not one per alternative —
+  `outcome.alternatives` isn't expanded into separately-actionable
+  recommendations.
+- **`recommendation.expiring` (§13.1) isn't published** — that requires a
+  background scheduler to notice an *approaching* expiry, which this
+  synchronous, no-async-worker service doesn't have; recommendations still
+  expire correctly (checked at validate time), they just don't warn ahead
+  of time.
+- **`SourceVersionWatermark` only reflects this service's own confirmed
+  writebacks** — nothing polls a real vendor for its actual current
+  version, since there's no real vendor connector to poll (same root gap
+  as above). A tenant's very first action against a given target always
+  validates against `expected_source_version: null`.
+- **`action_token_secret` has a fixed development default** — same class
+  of Phase 0 stand-in as the `X-Tempo-Context` header; a real deployment
+  must override it via `TEMPO_ACTION_TOKEN_SECRET`.
 
 ## Run it
 

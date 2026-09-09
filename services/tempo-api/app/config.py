@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     service_name: str = "tempo-optimisation-service"
     api_base_path: str = "/v1"
     confidence_method: str = "tempo-confidence-1.0"
+    # Signs Phase E's action_token (app/core/action_tokens.py). Same class of
+    # Phase 0 stand-in as X-Tempo-Context: a real deployment must override
+    # this via TEMPO_ACTION_TOKEN_SECRET — a fixed default is not a security
+    # control and must not reach production (tracked alongside OD-01).
+    action_token_secret: str = "dev-insecure-action-token-secret-change-in-production"
 
     model_config = {"env_prefix": "TEMPO_"}
 

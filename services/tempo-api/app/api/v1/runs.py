@@ -25,7 +25,7 @@ type may still be forbidden from margin_3pl specifically.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends
@@ -39,7 +39,7 @@ from app.core.idempotency import IdempotencyConflict, idempotency_store
 from app.core.policy import resolve_policy
 from app.dependencies import get_db, get_request_context, require_idempotency_key
 from app.errors import AuthForbidden, DataNotReady, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
-from app.models.runs import OptimisationRun
+from app.models.runs import OptimisationRun, Recommendation
 from app.schemas.runs import IMPLEMENTED_RUN_TYPES, RunRequest, RunResponse
 from app.schemas.tenancy import RequestContext
 from app.solvers.base import InsufficientData, SolverOutcome
@@ -194,6 +194,22 @@ def create_run(
     run.completed_at = datetime.now(timezone.utc)
     db.flush()
 
+    # §12's action pipeline (Phase E) acts on a Recommendation, not the run
+    # directly — one recommendation per completed run (never per
+    # alternative; `outcome.alternatives` isn't expanded into separate
+    # recommendations, a scope reduction — see services/tempo-api README).
+    recommendation_id = f"rec_{uuid.uuid4().hex[:20]}"
+    db.add(
+        Recommendation(
+            recommendation_id=recommendation_id,
+            run_id=run_id,
+            tenant_id=context.tenant_id,
+            body={"run_type": run_type, "result": result, "explanation": explanation},
+            expires_at=datetime.now(timezone.utc) + timedelta(seconds=policy.constraints["recommendation_ttl_seconds"]),
+        )
+    )
+    db.flush()
+
     event_bus.publish(
         db,
         context.tenant_id,
@@ -221,6 +237,7 @@ def create_run(
         input_snapshot_id=snapshot_id,
         effective_scope=request.scope,
         warnings=warnings,
+        recommendation_id=recommendation_id,
     )
     idempotency_store.store(context.tenant_id, endpoint, idempotency_key, payload, response.model_dump(mode="json"))
     return response

@@ -92,6 +92,45 @@ class SolverInfeasible(TempoError):
     title = "Model infeasible"
 
 
+class ActionTokenExpired(TempoError):
+    status = 409
+    error_code = "TEMPO-ACTION-001"
+    title = "Recommendation, approval or action token expired"
+    retryable = False
+
+
+class ActionVersionDrift(TempoError):
+    status = 409
+    error_code = "TEMPO-ACTION-002"
+    title = "Source version changed; revalidate and reconfirm"
+    retryable = False
+
+
+class ActionSourceRejected(TempoError):
+    status = 502
+    error_code = "TEMPO-ACTION-003"
+    title = "Source rejected or failed; inspect action status"
+
+
+class ActionNotFound(TempoError):
+    """Not one of the Integration Spec's four named TEMPO-ACTION-00x codes
+    (§8.6's error catalogue only defines 001-004) — a pragmatic extension
+    for a case the spec doesn't name, same as ZoneBacklog/ActivityRoleZoneMap
+    extend the canonical model where the spec's own entities don't cover a
+    gap this codebase actually needs to handle.
+    """
+
+    status = 404
+    error_code = "TEMPO-ACTION-005"
+    title = "Action or recommendation not found or not visible in caller scope"
+
+
+class ActionTypeMismatch(TempoError):
+    status = 400
+    error_code = "TEMPO-ACTION-006"
+    title = "action_type is not valid for the referenced recommendation"
+
+
 def problem_response(request: Request, error: TempoError) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", None)
     body = {

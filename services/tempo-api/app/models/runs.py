@@ -53,9 +53,16 @@ class Recommendation(Base):
 
 
 class ActionRequest(Base):
-    """Phase E (controlled action) — table defined now so the run/evidence
-    schema doesn't need a breaking migration later; endpoints stay disabled
-    until Phase E (see docs/roadmap.md and Integration Spec §12).
+    """Phase E controlled action — §12's two-step contract. `status` follows
+    Appendix C's action_status enum (validated/approved/submitted/confirmed/
+    partially_confirmed/rejected/unknown/compensated) as a plain string, the
+    same lightweight-not-a-DB-enum convention `OptimisationRun.status` uses.
+    `payload_hash` is `app.core.idempotency.hash_payload` over
+    (action_type, recommendation_id, target, expected_source_version) —
+    reused, not reinvented, so validate and execute agree on one definition
+    of "the same payload" (§12.2's "Execution requires... the same payload
+    hash"). `action_token_hash` stores a hash of the issued token, never the
+    token itself, so a leaked database row can't be replayed as a token.
     """
 
     __tablename__ = "action_request"
@@ -63,10 +70,39 @@ class ActionRequest(Base):
     action_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(String, index=True)
     recommendation_id: Mapped[str] = mapped_column(String, index=True)
+    action_type: Mapped[str] = mapped_column(String)
+    target: Mapped[dict] = mapped_column(JSON)
+    expected_source_version: Mapped[str | None] = mapped_column(String, nullable=True)
+    payload_hash: Mapped[str] = mapped_column(String)
+    action_token_hash: Mapped[str] = mapped_column(String)
     approver_id: Mapped[str | None] = mapped_column(String, nullable=True)
     scope: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String, default="validated")
+    detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class SourceVersionWatermark(Base):
+    """Tracks the source system's current version per (tenant, connection,
+    site, resource) so §12.2's optimistic-concurrency check ("Any drift in
+    source version... returns 409 and requires revalidation") has something
+    real to compare `expected_source_version` against. Not a §6.1 canonical
+    entity — Maestro's own operational state, same tier as
+    `ConnectorCheckpoint` (app/models/connectors.py), which tracks the
+    read-side equivalent (last-ingested watermark) rather than the
+    write-side one this tracks.
+    """
+
+    __tablename__ = "source_version_watermark"
+
+    tenant_id: Mapped[str] = mapped_column(String, primary_key=True)
+    connection_id: Mapped[str] = mapped_column(String, primary_key=True)
+    site_id: Mapped[str] = mapped_column(String, primary_key=True)
+    resource_type: Mapped[str] = mapped_column(String, primary_key=True)
+    version: Mapped[str] = mapped_column(String)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
 class AuditRecord(Base):

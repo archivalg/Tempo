@@ -117,6 +117,7 @@ class RunResponse(BaseModel):
     input_snapshot_id: str
     effective_scope: RunScope
     warnings: list[str] = Field(default_factory=list)
+    recommendation_id: str | None = None
 
 
 class ConfidenceComponents(BaseModel):
