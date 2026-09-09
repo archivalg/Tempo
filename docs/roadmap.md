@@ -98,19 +98,51 @@ deliberately doesn't cover yet (Worker, Supervisor, Labour Provider — all
 three need native Tempo capture on the backend, which doesn't exist; see
 below).
 
-## The other gap the same review surfaced: native Tempo capture
+## The other gap the same review surfaced: native Tempo capture — Done
 
 The Business Specification (§4/§5) names **Standalone mode** — Tempo's own
 PIN/GPS/NFC/biometric clock-in, a Scheduling/Roster Engine, a Performance
-Engine — as a first-class deployment path, not a fallback. This codebase
-has never built it: every canonical row today comes from either a direct
-DB seed (Tempo-native, for tests) or one of the four Overlay connectors
-(Deputy, UKG Pro WFM, UKG Ready, WMS). There is no clock-in API. That means
-"Standalone" is currently just "not Overlay," not a real, independent
-product path — Business Spec §10's requirement that "Tempo must be a
-complete, sellable product on its own" isn't met yet for a customer with
-no existing T&A system to overlay onto. This is the next candidate gap to
-close, tracked here rather than silently left for someone to rediscover.
+Engine — as a first-class deployment path, not a fallback. Before this,
+every canonical row came from either a direct DB seed (Tempo-native, for
+tests) or one of the four Overlay connectors (Deputy, UKG Pro WFM, UKG
+Ready, WMS); there was no clock-in API at all, so "Standalone" was really
+just "not Overlay."
+
+`app/api/v1/attendance.py` + `app/core/attendance.py` close it: PIN/NFC
+clock-in and clock-out (biometric is out — needs hardware this codebase
+can't provide), optional GPS geofencing per site (`SiteGeofence`), and a
+worker's-own-shifts read endpoint. Credential enrollment
+(`WorkerCredential` — a hash, never the plaintext PIN) is a Tenant Admin
+action; the clock-in/out endpoints themselves carry no RBAC gate beyond
+tenant/site scope, since a physical kiosk isn't an RBAC principal — the
+credential is the authentication, same as a real T&A kiosk.
+
+The other half: `app/maestro/native_writeback.py`'s
+`TempoNativeWritebackClient` is a second, genuinely working writeback
+client (Phase E's `NotImplementedWritebackClient` remains the honest
+default for every *Overlay* vendor target) — for `target.system ==
+"tempo_native"`, `publish_roster` and `approve_leave` really commit to
+Tempo's own canonical tables, no vendor call needed, because Standalone
+mode means Tempo owns those tables directly. Caught a real bug while
+building it: `publish_roster` must *promote* the `ShiftAssignment` rows
+`solve_named_roster` already writes at `status="proposed"` to
+`"committed"`, never insert a second row — an early version doubled every
+published run's rows (14 solved + 14 inserted = 28). `update_assignment`
+and `create_training_plan` still report `unknown` even for a
+`tempo_native` target — neither has a defined native write target, and
+that's disclosed rather than guessed at, not silently patched over.
+
+Business Spec §10's requirement that "Tempo must be a complete, sellable
+product on its own" is closer to met now: a customer with no existing T&A
+system can run Standalone mode end-to-end (clock in, get rostered,
+publish, approve leave) without any Overlay connector or Prime AI
+involved. What's still missing from that same §4/§5 module list: a
+**Scheduling/Roster Engine** UI and a **Performance Engine** are named
+alongside Time & Attendance as Standalone's core modules — the roster
+engine's *optimisation* exists (`named_roster`) and now *publishes* for
+real, but there's no dedicated scheduling UI beyond `services/tempo-console`'s
+existing runs/actions views, and "Performance Engine" has no detailed
+requirements anywhere in the source docs to build against yet.
 
 ## Open decisions this roadmap depends on
 

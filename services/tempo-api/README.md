@@ -422,6 +422,69 @@ Also added CORS (`app/main.py`, `TEMPO_CONSOLE_CORS_ORIGINS` /
 actual origin(s); the default is a local-dev convenience, same class of
 stand-in as `action_token_secret`.
 
+## Beyond §18 — native capture (Standalone mode)
+
+Business Spec §4/§5 names Standalone mode's own "Time & Attendance (native
+capture path)" — PIN/GPS/NFC clock-in — as a first-class deployment
+option, not a fallback behind Overlay. Before this, every canonical row
+came from either a direct DB seed or one of the four Overlay connectors;
+there was no clock-in API at all, so "Standalone" was really just "not
+Overlay." `app/api/v1/attendance.py` and `app/core/attendance.py` close
+that gap:
+
+- **`POST /v1/attendance/credentials`** (Tenant Admin, `labour.configure`)
+  enrolls a worker's PIN and/or NFC tag — `WorkerCredential`
+  (`app/models/attendance.py`), a hash never the plaintext, unique per
+  tenant so resolving "who just tapped in" has exactly one answer.
+- **`POST /v1/attendance/clock-in`** / **`clock-out`** resolve the worker
+  from the presented PIN or NFC tag and write directly to the existing
+  `AttendanceSession` canonical table — no Maestro connector involved,
+  no RBAC gate beyond tenant/site scope (a kiosk isn't an RBAC principal;
+  the credential itself is the authentication, same as a real T&A kiosk).
+  One open session per worker at a time; a clock-in that doesn't match any
+  rostered `ShiftAssignment` still succeeds but is flagged
+  `matched_rostered_shift: false` in the response — a starting point for
+  §9's "every exception visible... within 15 minutes," not a full
+  exception system.
+- **`POST /v1/site-geofences`** (Tenant Admin) configures optional GPS
+  bounds per site (`SiteGeofence`); a site with no geofence configured
+  skips the check rather than failing closed — PIN/NFC alone is a
+  legitimate configuration too.
+- **`GET /v1/workers/{worker_id}/shifts`** — the Worker UX role's "know
+  shifts" need, scoped by tenant only (no per-worker identity exists yet,
+  same Phase 0 stand-in as everything else here).
+
+**The other half of this gap, closed at the same time**: publishing a
+roster or approving leave previously always hit Phase E's
+`NotImplementedWritebackClient`, honestly reporting `unknown` even for a
+Tempo-native target — but Standalone mode doesn't need a vendor call to
+commit its own data. `app/maestro/native_writeback.py`'s
+`TempoNativeWritebackClient` is a second, genuinely *working* writeback
+client, selected in `app/api/v1/actions.py`'s `_get_writeback_client` when
+`target.system == "tempo_native"`:
+
+- `publish_roster` promotes the `ShiftAssignment` rows `solve_named_roster`
+  already writes at `status="proposed"` (every roster run gets a
+  canonical record, published or not) to `status="committed"` — it must
+  never insert a second row. This was a real bug caught while building it:
+  the first version blindly inserted a fresh row per assignment, silently
+  doubling every published run's `ShiftAssignment` rows (14 solved + 14
+  inserted = 28, one seeded test scenario's exact reproduction — caught by
+  comparing row counts before/after publish, not just checking the
+  response body).
+- `approve_leave` updates the matching `Availability` rows from
+  `leave_requested`/`rdo_requested` to `leave`/`rdo`. A recommendation that
+  approves nobody (a legitimate outcome under severe staffing shortage)
+  reports `confirmed`, not `rejected` — there's nothing wrong with
+  correctly applying zero approvals. A partial match (some approved
+  decisions found no corresponding row) reports `partially_confirmed` —
+  the first real use of that status value anywhere in this codebase.
+- `update_assignment` (intraday_reallocation) and `create_training_plan`
+  have no defined native write target — what "committing" an intraday
+  move or a training plan means for Tempo's own tables isn't specified
+  anywhere in the source docs — so both still report `unknown` even for a
+  `tempo_native` target, disclosed rather than guessed at.
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:
@@ -564,6 +627,26 @@ Phase F:
 - **The connector catalogue is a static, hand-maintained list** — adding a
   fifth connector means editing `app/core/connector_catalogue.py`, not a
   dynamically-discovered registry.
+
+Native capture:
+- **PIN/NFC only, no biometric** — the Business Spec also names biometric
+  clock-in; that needs a hardware integration this codebase can't provide.
+- **No per-worker identity** — `GET /v1/workers/{worker_id}/shifts` is
+  scoped by tenant only; any caller in the tenant's scope can view any
+  worker's shifts. A real deployment needs a worker to only ever see
+  their own, which needs actual worker-level auth this codebase doesn't
+  have (same root gap as everything gated only by `X-Tempo-Context`).
+- **A clock-in with no matching rostered shift still succeeds** — flagged
+  `matched_rostered_shift: false` in the response, not blocked or
+  escalated; there's no exception/alerting system built on top of that
+  flag yet.
+- **Native writeback covers `publish_roster` and `approve_leave` only** —
+  `update_assignment` and `create_training_plan` have no defined native
+  write target (see above) and still report `unknown` even for a
+  `tempo_native` action.
+- **One open `AttendanceSession` per worker** — a second clock-in before
+  clocking out is rejected outright, not treated as an implicit clock-out
+  of the previous session (a real kiosk usually asks first).
 
 ## Run it
 

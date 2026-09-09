@@ -19,7 +19,12 @@ call it is here.
 `writeback_client` is a module-level name (matching `idempotency_store`/
 `event_bus`'s existing style — no DI container in this codebase), so tests
 substitute a `FakeWritebackClient` by monkeypatching it directly, the same
-way connector tests substitute fake HTTP clients.
+way connector tests substitute fake HTTP clients. It's the default for
+every Overlay vendor target; `_get_writeback_client` swaps in a real,
+non-stubbed `TempoNativeWritebackClient` (app/maestro/native_writeback.py)
+for a `target.system == "tempo_native"` action instead — Standalone mode
+doesn't need a vendor call to publish a roster or approve leave, since
+Tempo owns those canonical tables directly.
 
 execute_action always returns 202 with the business outcome in the body
 (status: confirmed/rejected/partially_confirmed/unknown), the same design
@@ -52,6 +57,7 @@ from app.errors import (
     AuthForbidden,
     ScopeError,
 )
+from app.maestro.native_writeback import TempoNativeWritebackClient
 from app.maestro.writeback import WritebackClient, WritebackOutcome, default_writeback_client
 from app.models.runs import ActionRequest, Recommendation, SourceVersionWatermark
 from app.schemas.actions import (
@@ -67,6 +73,20 @@ from app.schemas.tenancy import RequestContext
 router = APIRouter(tags=["actions"])
 
 writeback_client: WritebackClient = default_writeback_client
+
+
+def _get_writeback_client(action: ActionRequest, db: Session) -> WritebackClient:
+    """A `target.system == "tempo_native"` action gets a real, working
+    client (app.maestro.native_writeback — Tempo committing directly to
+    its own canonical tables, no vendor call needed) instead of the
+    module-level `writeback_client` stand-in used for every Overlay
+    vendor. Constructed fresh per call since it needs this request's `db`
+    session; there is nothing to monkeypatch for tests here the way
+    `writeback_client` is, because it's genuinely functional, not a stub.
+    """
+    if action.target.get("system") == "tempo_native":
+        return TempoNativeWritebackClient(db, action.tenant_id)
+    return writeback_client
 
 
 def _now() -> datetime:
@@ -261,7 +281,7 @@ def execute_action(
     db.flush()
     event_bus.publish(db, context.tenant_id, "action.submitted", {"action_id": action.action_id}, subject=action.action_id, correlation_id=context.correlation_id)
 
-    outcome = writeback_client.submit(action.action_type, action.target, _canonical_payload(request))
+    outcome = _get_writeback_client(action, db).submit(action.action_type, action.target, _canonical_payload(request))
     _apply_writeback_outcome(db, context, action, outcome)
 
     write_audit(
@@ -294,7 +314,7 @@ def reconcile_action(
     if action.status not in {"unknown", "partially_confirmed"}:
         return ActionResponse(action_id=action.action_id, status=action.status, detail=action.detail)
 
-    outcome = writeback_client.check_status(action.action_type, action.target, {"recommendation_id": action.recommendation_id})
+    outcome = _get_writeback_client(action, db).check_status(action.action_type, action.target, {"recommendation_id": action.recommendation_id})
     _apply_writeback_outcome(db, context, action, outcome)
     write_audit(db, context, request_name="POST /v1/actions/{action_id}/reconcile", outcome=action.status, parameters={"action_id": action_id})
 

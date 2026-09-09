@@ -18,6 +18,7 @@ def init_db() -> None:
     # Phase 0 uses SQLAlchemy's own migration-free create_all against SQLite/dev
     # Postgres/Oracle. Real environments should switch to Alembic migrations
     # before Phase A ingests real tenant data (see docs/roadmap.md).
+    import app.models.attendance  # noqa: F401
     import app.models.canonical  # noqa: F401
     import app.models.connectors  # noqa: F401
     import app.models.runs  # noqa: F401

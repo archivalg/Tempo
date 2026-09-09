@@ -131,6 +131,25 @@ class ActionTypeMismatch(TempoError):
     title = "action_type is not valid for the referenced recommendation"
 
 
+class AttendanceStateConflict(TempoError):
+    """Native capture (app/api/v1/attendance.py) has no dedicated error
+    codes in the Integration Spec's §8.6 catalogue — that catalogue is
+    written entirely from the Overlay/Prime side, which never clocks a
+    worker in or out itself. TEMPO-ATTENDANCE-00x is a pragmatic
+    extension, same class as TEMPO-ACTION-005/006.
+    """
+
+    status = 409
+    error_code = "TEMPO-ATTENDANCE-001"
+    title = "Worker already has an open attendance session, or has none to close"
+
+
+class GeofenceViolation(TempoError):
+    status = 422
+    error_code = "TEMPO-ATTENDANCE-002"
+    title = "Clock-in location is outside the site's configured geofence"
+
+
 def problem_response(request: Request, error: TempoError) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", None)
     body = {
