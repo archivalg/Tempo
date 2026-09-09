@@ -1,0 +1,125 @@
+# Tempo Console
+
+A React + TypeScript single-page app for `services/tempo-api` — the "Real-Time
+Operations Console" named in the Business Specification (§4, §8) as one of
+the Consumption layer's surfaces (the others being Prime AI's agents and
+"any authorised API client," both already served by the existing REST API).
+
+This is the **first UI in the Tempo codebase**. Everything built before it
+(Phases 0-F, per `docs/roadmap.md`) was the Optimisation Service's backend —
+solvers, connectors, and the REST/action/onboarding API. This console is a
+thin client over that API; it adds no new backend logic of its own beyond
+two small additions the console needed and the backend gained honestly:
+
+- `GET /v1/runs` and `GET /v1/actions` (cursor-paginated list endpoints) —
+  the console's list views need something more than `GET /v1/runs/{id}`'s
+  single-record lookup.
+- `GET /v1/runs/{run_id}` now also returns `run_type` and `recommendation_id`
+  on a completed run, so the console can offer "start an action from this
+  run" without the caller having to keep the create-run response around.
+
+## What it covers
+
+Per the Business Specification's UX roles table (§8), this v1 covers
+**Operations Manager**, **Tenant Admin**, and (partially) **Executive** —
+the roles whose stated needs ("Publish rosters, review AI recommendations,
+manage performance" / "Manage hierarchies, rules, integrations, feature
+access" / "Review network performance, labour cost, and risk") map onto
+capability the backend already fully implements:
+
+- **Dashboard** — data readiness by capability, and model monitoring
+  (backtest error, solver-gap rate, confidence, version adoption) with an
+  on-demand drift check.
+- **Runs** — list/filter/paginate, create a run for any of the ten
+  `run_type`s (one generic form — every run_type shares the same
+  `RunRequest` shape per the Integration Spec), and a detail view showing
+  the full explanation contract (baseline/proposed/delta/confidence/
+  primary drivers/missing evidence) plus the raw result.
+- **Actions** — §12's two-step contract end-to-end: validate a
+  recommendation (impact summary + token), execute it (requires
+  `labour.approve`), and reconcile an `unknown` outcome. The console does
+  not hide that there's no real vendor writeback connector yet (Phase E's
+  disclosed gap) — it shows `unknown` and the reconciliation flow exactly
+  as the API reports them, never a fabricated "confirmed."
+- **Onboarding** — the connector catalogue, and self-service registration
+  of tenant scopes and connections (Phase F). A registered connection
+  stays `pending_credentials` in the UI too, honestly, for the same reason
+  it does in the API.
+
+**Not covered — deliberately out of scope for this pass**, because the
+backend capability they'd need doesn't exist yet (see
+`services/tempo-api/README.md`'s "Known simplifications" and the
+Product/Business Spec review that identified this gap):
+
+- **Worker, Supervisor, and Labour Provider roles** — "know shifts, clock
+  in/out," "cover shifts, manage exceptions," "manage supplied workers" all
+  depend on native Tempo capture (PIN/GPS/NFC/biometric clock-in) and a
+  shift-swap/exception feed, neither of which the backend implements yet
+  (Standalone mode's Capture layer is still Overlay-connectors-only,
+  or direct DB seeding for Tempo-native data). Building the console's
+  Worker/Supervisor views ahead of that backend capability would mean
+  mocking data the API can't actually produce.
+- **Run comparisons UI** — `POST /v1/run-comparisons` exists and is
+  exercised by the backend test suite, but the console has no page for it
+  yet; a small, natural follow-up.
+
+## Identity — a disclosed stand-in, not a login
+
+`services/tempo-api` has no identity provider (`app/dependencies.py`'s own
+docstring: the `X-Tempo-Context` header is "a Phase 0 stand-in, not a
+security control, and must not reach production"). The console's
+`/setup` page mirrors that honestly instead of hiding it behind a fake
+"Sign in" screen: it's a form for the same fields — tenant, sites,
+customers, user, roles — stored in `localStorage`, not a credential
+exchange. Switching roles there is how you test what each §5.2 permission
+actually gates (e.g. `labour.approve` vs `labour.plan`, or
+`labour.margin.read`).
+
+## Known simplifications (tracked, not hidden)
+
+- **No automated end-to-end test** — this was manually verified against a
+  live `tempo-api` instance in a real browser (Chromium via Playwright,
+  used only as a one-off manual check, not a checked-in dependency) before
+  being called done. A Playwright test suite committed to the repo, run in
+  CI against a live backend, is a natural next step, not yet built.
+- **Pagination is "next page only," no "jump to page N"** — matches the
+  backend's cursor-based pagination (§8.1) directly; there is no total
+  count to build a page-number UI from.
+- **CORS is wide-open for local dev** (`TEMPO_CONSOLE_CORS_ORIGINS`,
+  default `http://localhost:5173`) — a real deployment sets this to the
+  console's actual origin(s), same class of dev-only default as
+  `action_token_secret`.
+- **No design system** — plain hand-written CSS (`src/index.css`), no
+  component library. Fine for an internal ops console; a customer-facing
+  surface would want one.
+
+## Run it
+
+Two processes, from the repo root:
+
+```bash
+# Terminal 1 — the API (see services/tempo-api/README.md for details)
+cd services/tempo-api
+uvicorn app.main:app --reload
+
+# Terminal 2 — the console
+cd services/tempo-console
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`. `.env.development` points the console at
+`http://localhost:8000/v1` by default (`VITE_API_BASE_URL` to override).
+
+The API has no seed data of its own — see
+`services/tempo-api/tests/factories.py` for a worked example, or use the
+console's own Onboarding page to register a tenant scope and connection
+(registration only; it doesn't ingest data — see the gap noted above).
+
+## Test it
+
+```bash
+npm run test    # vitest — API client and component-level tests
+npm run build   # tsc -b && vite build — typechecks and production-builds
+npm run lint    # oxlint
+```

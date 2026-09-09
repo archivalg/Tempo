@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     # this via TEMPO_ACTION_TOKEN_SECRET — a fixed default is not a security
     # control and must not reach production (tracked alongside OD-01).
     action_token_secret: str = "dev-insecure-action-token-secret-change-in-production"
+    # services/tempo-console's dev server origin(s), comma-separated. A
+    # real deployment should set this to the console's actual origin(s) —
+    # "*" is a local-dev convenience, not a security posture.
+    console_cors_origins: str = "http://localhost:5173"
 
     model_config = {"env_prefix": "TEMPO_"}
 

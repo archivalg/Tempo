@@ -247,3 +247,15 @@ def test_get_action_returns_current_state(client):
     body = response.json()
     assert body["status"] == "validated"
     assert body["action_type"] == "publish_roster"
+
+
+def test_list_actions_returns_newest_first_and_filters_by_status(client):
+    _seed(client)
+    first_id = _validate(client, _create_recommendation(client)).json()["action_id"]
+    second_id = _validate(client, _create_recommendation(client)).json()["action_id"]
+
+    listed = client.get("/v1/actions", headers=context_header()).json()
+    assert [a["action_id"] for a in listed["actions"]] == [second_id, first_id]
+
+    filtered = client.get("/v1/actions?status=validated", headers=context_header()).json()
+    assert all(a["status"] == "validated" for a in filtered["actions"])

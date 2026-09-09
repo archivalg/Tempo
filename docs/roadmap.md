@@ -1,8 +1,10 @@
 # Tempo delivery roadmap
 
 Tracks the phases from `Tempo_Prime_AI_Integration_Specification_v2.0.docx`
-§18 against what's actually built. Update this file's status column as each
-phase lands — it's the single place to check "what's real vs spec" without
+§18 against what's actually built, plus what the Product Strategy and
+Business Specification call for beyond that spec's backend-only roadmap
+(see "Beyond §18" below). Update this file's status column as each phase
+lands — it's the single place to check "what's real vs spec" without
 re-reading the full integration spec.
 
 | Phase | Scope (§18) | Status | Where |
@@ -68,6 +70,47 @@ since those already have real read-side connectors to extend). Phase F's
 not less: a tenant can now register a connection through the API, and it
 will sit at `status: pending_credentials` forever until this same
 credential-vault-and-real-client gap is closed.
+
+## Beyond §18: the Consumption layer (services/tempo-console)
+
+Everything above tracks the Integration Spec's own six-phase roadmap,
+which is entirely backend: contract, solvers, connectors, actions,
+enterprise models, and operational maturity. It was never the whole
+product. Reviewing the Product Strategy and Business Specification
+alongside it surfaced a gap those two documents name directly but §18
+doesn't cover at all: the **Consumption layer** (Business Spec §4) — "Prime
+AI agents, Tempo's own operational console, or any authorised API client."
+Prime's agents and generic API clients were already served by the REST API
+itself; **Tempo's own operational console** was not, until now.
+
+`services/tempo-console` — a React/TypeScript SPA — is that console, done
+to the same standard as the API: no mocked data, verified end-to-end
+against a live backend in a real browser before being called done.
+It covers the **Operations Manager** and **Tenant Admin** roles from the
+Business Spec's §8 UX roles table (whose stated needs — review AI
+recommendations and publish rosters; manage integrations and access — map
+directly onto capability the backend already fully implements) and a
+partial **Executive** view (dashboard/monitoring). Building it required two
+small, honest backend additions (`GET /v1/runs` and `GET /v1/actions` list
+endpoints, and `recommendation_id`/`run_type` on `GET /v1/runs/{id}`) — see
+`services/tempo-console/README.md` for the full scope and what it
+deliberately doesn't cover yet (Worker, Supervisor, Labour Provider — all
+three need native Tempo capture on the backend, which doesn't exist; see
+below).
+
+## The other gap the same review surfaced: native Tempo capture
+
+The Business Specification (§4/§5) names **Standalone mode** — Tempo's own
+PIN/GPS/NFC/biometric clock-in, a Scheduling/Roster Engine, a Performance
+Engine — as a first-class deployment path, not a fallback. This codebase
+has never built it: every canonical row today comes from either a direct
+DB seed (Tempo-native, for tests) or one of the four Overlay connectors
+(Deputy, UKG Pro WFM, UKG Ready, WMS). There is no clock-in API. That means
+"Standalone" is currently just "not Overlay," not a real, independent
+product path — Business Spec §10's requirement that "Tempo must be a
+complete, sellable product on its own" isn't met yet for a customer with
+no existing T&A system to overlay onto. This is the next candidate gap to
+close, tracked here rather than silently left for someone to rediscover.
 
 ## Open decisions this roadmap depends on
 

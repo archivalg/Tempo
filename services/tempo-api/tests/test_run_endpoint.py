@@ -40,6 +40,8 @@ def test_create_run_end_to_end(client):
     fetched = client.get(f"/v1/runs/{run_id}", headers=context_header())
     assert fetched.status_code == 200
     fetched_body = fetched.json()
+    assert fetched_body["run_type"] == "named_roster"
+    assert fetched_body["recommendation_id"] == body["recommendation_id"]
     explanation = fetched_body["explanation"]
     for field in [
         "baseline",
@@ -282,6 +284,58 @@ def test_cancel_terminal_run_is_a_noop(client):
     cancelled = client.post(f"/v1/runs/{run_id}/cancel", headers=context_header())
     assert cancelled.status_code == 200
     assert cancelled.json()["status"] == created.json()["status"]
+
+
+def test_list_runs_returns_newest_first_and_paginates(client):
+    _seed(client)
+    ids = []
+    for _ in range(3):
+        response = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers())
+        ids.append(response.json()["run_id"])
+
+    page1 = client.get("/v1/runs?limit=2", headers=context_header()).json()
+    assert [r["run_id"] for r in page1["runs"]] == list(reversed(ids))[:2]
+    assert page1["next_cursor"] == ids[1]
+
+    page2 = client.get(f"/v1/runs?limit=2&cursor={page1['next_cursor']}", headers=context_header()).json()
+    assert [r["run_id"] for r in page2["runs"]] == [ids[0]]
+    assert page2["next_cursor"] is None
+
+
+def test_list_runs_filters_by_run_type_and_status(client):
+    _seed(client)
+    client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers())
+    client.post("/v1/optimisations/demand_forecast", json=VALID_REQUEST, headers=_headers())
+
+    response = client.get("/v1/runs?run_type=demand_forecast", headers=context_header())
+    body = response.json()
+    assert len(body["runs"]) == 1
+    assert body["runs"][0]["run_type"] == "demand_forecast"
+
+
+def test_list_runs_excludes_margin_3pl_without_labour_margin_read(client):
+    from datetime import timedelta
+
+    from app.models.canonical import ActivityRoleZoneMap, DemandBucket, LabourCostRule, SellRateContract, WorkStandard
+
+    _seed(client)
+    with client.session_local() as session:
+        session.add(WorkStandard(tenant_id="ten_test", activity="picking", complexity_segment=None, time_per_unit_seconds=45.0, effective_from=WINDOW_START - timedelta(days=365)))
+        session.add(ActivityRoleZoneMap(tenant_id="ten_test", site_id="site_mel_01", activity="picking", role="picker", zone="zone_a", weight=1.0))
+        session.add(LabourCostRule(tenant_id="ten_test", labour_type="permanent", role="picker", rate="35.00", overtime_multiplier="1.5", surcharge=None, currency="AUD"))
+        session.add(DemandBucket(tenant_id="ten_test", activity="picking", site_id="site_mel_01", customer_id="cust_A", interval_start=WINDOW_START, volume=100.0, source="wms"))
+        session.add(SellRateContract(tenant_id="ten_test", customer_id="cust_A", activity="picking", rate="5.00", currency="AUD", sla_penalty="2.00", effective_from=WINDOW_START - timedelta(days=30), effective_to=None))
+        session.commit()
+
+    finance_headers = context_header(roles=["operations_manager", "finance"])
+    finance_headers["Idempotency-Key"] = str(uuid.uuid4())
+    client.post("/v1/optimisations/margin_3pl", json=VALID_REQUEST, headers=finance_headers)
+
+    plain_response = client.get("/v1/runs", headers=context_header(roles=["operations_manager"]))
+    assert all(r["run_type"] != "margin_3pl" for r in plain_response.json()["runs"])
+
+    finance_list = client.get("/v1/runs", headers=context_header(roles=["operations_manager", "finance"]))
+    assert any(r["run_type"] == "margin_3pl" for r in finance_list.json()["runs"])
 
 
 def test_run_comparisons_returns_kpis_for_each_run(client):

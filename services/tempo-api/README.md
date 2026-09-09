@@ -397,6 +397,31 @@ credential vault, no background scheduler, analytic Monte Carlo recourse)
 named as what a production pilot would need to add next, not silently
 smoothed over.
 
+## Beyond §18 — serving services/tempo-console
+
+`services/tempo-console` (Business Spec §4/§8's "Real-Time Operations
+Console") is this API's first real UI consumer, and it needed two small,
+honest additions beyond §18's own roadmap:
+
+- **`GET /v1/runs`** and **`GET /v1/actions`** — cursor-paginated list
+  endpoints (§8.1's "cursor-based; stable sort; maximum page size 500"),
+  since `GET /v1/runs/{run_id}` and `GET /v1/actions/{action_id}` alone
+  can't back a list view. `list_runs` silently excludes `margin_3pl` rows
+  for a caller without `labour.margin.read` rather than 403ing the whole
+  list — the same restriction `GET /v1/runs/{run_id}` enforces per-row,
+  applied per-row here too.
+- **`GET /v1/runs/{run_id}`** now also returns `run_type` and
+  `recommendation_id` on a completed run (previously only in the
+  run-creation response), so the console can offer "start an action from
+  this run" without the caller needing to keep the create-run response
+  around.
+
+Also added CORS (`app/main.py`, `TEMPO_CONSOLE_CORS_ORIGINS` /
+`console_cors_origins` in `app/config.py`, default
+`http://localhost:5173`) — a real deployment sets this to the console's
+actual origin(s); the default is a local-dev convenience, same class of
+stand-in as `action_token_secret`.
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:

@@ -34,7 +34,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.action_tokens import ActionTokenInvalid, hash_token, issue_action_token, verify_action_token
@@ -298,6 +299,42 @@ def reconcile_action(
     write_audit(db, context, request_name="POST /v1/actions/{action_id}/reconcile", outcome=action.status, parameters={"action_id": action_id})
 
     return ActionResponse(action_id=action.action_id, status=action.status, detail=action.detail)
+
+
+@router.get("/actions")
+def list_actions(
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List view backing the console (services/tempo-console) — the same
+    cursor-by-(created_at, id) pattern app/api/v1/runs.py's list_runs uses.
+    """
+    query = select(ActionRequest).where(ActionRequest.tenant_id == context.tenant_id)
+    if status_filter:
+        query = query.where(ActionRequest.status == status_filter)
+    if cursor:
+        cursor_action = db.get(ActionRequest, cursor)
+        if cursor_action is not None:
+            query = query.where(
+                (ActionRequest.created_at < cursor_action.created_at)
+                | ((ActionRequest.created_at == cursor_action.created_at) & (ActionRequest.action_id < cursor_action.action_id))
+            )
+    query = query.order_by(ActionRequest.created_at.desc(), ActionRequest.action_id.desc()).limit(limit)
+
+    rows = db.scalars(query).all()
+    return {
+        "actions": [
+            {
+                "action_id": a.action_id, "action_type": a.action_type, "recommendation_id": a.recommendation_id,
+                "status": a.status, "created_at": a.created_at,
+            }
+            for a in rows
+        ],
+        "next_cursor": rows[-1].action_id if len(rows) == limit else None,
+    }
 
 
 @router.get("/actions/{action_id}")

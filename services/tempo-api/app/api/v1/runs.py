@@ -28,7 +28,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import lifecycle
@@ -250,6 +251,54 @@ def _get_owned_run(db: Session, context: RequestContext, run_id: str) -> Optimis
     return run
 
 
+@router.get("/runs")
+def list_runs(
+    run_type: str | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=500),
+    cursor: str | None = Query(default=None),
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """§8.1 "Cursor-based; stable sort; maximum page size 500" — the
+    console (services/tempo-console) is this endpoint's first real
+    consumer; GET /runs/{run_id} alone can't back a list view. Ordered
+    newest-first by (created_at, run_id) so the cursor (the last run_id
+    seen) is stable even when two runs share a created_at timestamp.
+    margin_3pl rows are silently excluded for a caller without
+    labour.margin.read, rather than 403ing the whole list — the same
+    restriction GET /runs/{run_id} enforces per-row, applied per-row here
+    too instead of blocking the list entirely.
+    """
+    query = select(OptimisationRun).where(OptimisationRun.tenant_id == context.tenant_id)
+    if run_type:
+        query = query.where(OptimisationRun.run_type == run_type)
+    if status_filter:
+        query = query.where(OptimisationRun.status == status_filter)
+    if not context.has_permission("labour.margin.read"):
+        query = query.where(OptimisationRun.run_type.notin_(_FINANCE_RESTRICTED_RUN_TYPES))
+    if cursor:
+        cursor_run = db.get(OptimisationRun, cursor)
+        if cursor_run is not None:
+            query = query.where(
+                (OptimisationRun.created_at < cursor_run.created_at)
+                | ((OptimisationRun.created_at == cursor_run.created_at) & (OptimisationRun.run_id < cursor_run.run_id))
+            )
+    query = query.order_by(OptimisationRun.created_at.desc(), OptimisationRun.run_id.desc()).limit(limit)
+
+    rows = db.scalars(query).all()
+    return {
+        "runs": [
+            {
+                "run_id": r.run_id, "run_type": r.run_type, "status": r.status,
+                "created_at": r.created_at, "completed_at": r.completed_at,
+            }
+            for r in rows
+        ],
+        "next_cursor": rows[-1].run_id if len(rows) == limit else None,
+    }
+
+
 @router.get("/runs/{run_id}")
 def get_run(
     run_id: str,
@@ -260,8 +309,10 @@ def get_run(
     if run.run_type in _FINANCE_RESTRICTED_RUN_TYPES and not context.has_permission("labour.margin.read"):
         raise AuthForbidden(f"caller lacks labour.margin.read permission required to view run_type '{run.run_type}'")
     if lifecycle.is_terminal(run.status) and run.status in {"completed", "completed_with_warnings"}:
+        recommendation = db.scalar(select(Recommendation).where(Recommendation.run_id == run.run_id))
         return {
             "run_id": run.run_id,
+            "run_type": run.run_type,
             "status": run.status,
             "model": dict(zip(("name", "version", "solver"), _RUN_TYPE_TO_MODEL.get(run.run_type, ("unknown", "0", "unknown")))),
             "result": run.result,
@@ -269,6 +320,7 @@ def get_run(
             "lineage": run.lineage,
             "completed_at": run.completed_at,
             "supersedes_run_id": run.supersedes_run_id,
+            "recommendation_id": recommendation.recommendation_id if recommendation else None,
         }
     return {
         "run_id": run.run_id,

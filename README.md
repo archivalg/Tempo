@@ -27,8 +27,14 @@ Intelligence pack.
   service, a real vendor writeback connector, an async run worker, a
   credential vault) — these are specific, scoped gaps a production pilot
   would need to close next, not unfinished phases.
+- `services/tempo-console` — the Real-Time Operations Console (Business
+  Specification §4/§8), the first UI in this codebase. Covers Operations
+  Manager (review AI recommendations, publish rosters via the §12 action
+  pipeline) and Tenant Admin (self-service onboarding); Worker, Supervisor
+  and Labour Provider are out of scope until native Tempo capture exists
+  on the backend — see its README for what's covered and why.
 - `wiep-mvp.zip`, `wiep_mobile_app_expo.ts` — an earlier proof-of-concept
   scaffold (pre-dates the v2.0 specs). Kept as UI/interaction reference only;
-  not the foundation for `services/tempo-api`.
+  not the foundation for `services/tempo-api` or `services/tempo-console`.
 
 See `docs/roadmap.md` for phase-by-phase status.
