@@ -101,6 +101,10 @@ def _open_session(db: Session, tenant_id: str, worker_id: str) -> AttendanceSess
     )
 
 
+def has_open_session(db: Session, tenant_id: str, worker_id: str) -> bool:
+    return _open_session(db, tenant_id, worker_id) is not None
+
+
 def _matches_a_rostered_shift(db: Session, tenant_id: str, worker_id: str, at: datetime) -> bool:
     rows = db.scalars(
         select(ShiftAssignment)
@@ -109,6 +113,40 @@ def _matches_a_rostered_shift(db: Session, tenant_id: str, worker_id: str, at: d
         .where(ShiftAssignment.status == "committed")
     ).all()
     return any(to_aware(row.start_at) <= at <= to_aware(row.end_at) for row in rows)
+
+
+@dataclass
+class AttendanceSessionSummary:
+    session: AttendanceSession
+    matched_rostered_shift: bool
+
+
+def list_site_attendance(db: Session, tenant_id: str, site_id: str, since: datetime) -> list[AttendanceSessionSummary]:
+    """Supervisor's "who's here, and is anyone off-roster" view (Business
+    Spec §8: "cover shifts, manage exceptions, respond to live alerts").
+    Computed on read from AttendanceSession + ShiftAssignment, not stored —
+    same convention as the clock-in response's own `matched_rostered_shift`
+    flag, just applied to a whole site instead of one worker.
+    """
+    worker_ids = set(
+        db.scalars(select(Worker.worker_id).where(Worker.tenant_id == tenant_id).where(Worker.home_site == site_id))
+    )
+    if not worker_ids:
+        return []
+    sessions = db.scalars(
+        select(AttendanceSession)
+        .where(AttendanceSession.tenant_id == tenant_id)
+        .where(AttendanceSession.worker_id.in_(worker_ids))
+        .where(AttendanceSession.start_at >= since)
+        .order_by(AttendanceSession.start_at.desc())
+    ).all()
+    return [
+        AttendanceSessionSummary(
+            session=session,
+            matched_rostered_shift=_matches_a_rostered_shift(db, tenant_id, session.worker_id, to_aware(session.start_at)),
+        )
+        for session in sessions
+    ]
 
 
 @dataclass

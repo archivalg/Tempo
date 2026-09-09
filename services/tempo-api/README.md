@@ -453,6 +453,15 @@ that gap:
 - **`GET /v1/workers/{worker_id}/shifts`** — the Worker UX role's "know
   shifts" need, scoped by tenant only (no per-worker identity exists yet,
   same Phase 0 stand-in as everything else here).
+- **`POST /v1/attendance/whoami`** — resolves a worker from PIN/NFC
+  *without* clocking in, for `services/tempo-console`'s Kiosk page to
+  greet the worker and show their shifts before they commit to an
+  actual clock-in/out.
+- **`GET /v1/sites/{site_id}/attendance`** — the Supervisor UX role's
+  "cover shifts, manage exceptions" need: every attendance session at a
+  site in a configurable window, each annotated with whether it matches
+  a rostered shift — computed on read, not stored, same convention as
+  the clock-in response's own flag applied to a whole site.
 
 **The other half of this gap, closed at the same time**: publishing a
 roster or approving leave previously always hit Phase E's

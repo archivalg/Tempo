@@ -92,3 +92,37 @@ class SiteGeofenceRequest(BaseModel):
     latitude: float
     longitude: float
     radius_meters: float
+
+
+class WhoamiRequest(BaseModel):
+    """Resolves a worker from a PIN/NFC tag without clocking in — the
+    console's Kiosk page uses this to greet the worker and show their
+    shifts before they decide to clock in/out.
+    """
+
+    method: ClockMethod
+    pin: str | None = None
+    nfc_tag_id: str | None = None
+
+    @model_validator(mode="after")
+    def _credential_matches_method(self) -> "WhoamiRequest":
+        if self.method == "pin" and not self.pin:
+            raise ValueError("pin is required when method='pin'")
+        if self.method == "nfc" and not self.nfc_tag_id:
+            raise ValueError("nfc_tag_id is required when method='nfc'")
+        return self
+
+
+class WhoamiResponse(BaseModel):
+    worker_id: str
+    employment_type: str
+    home_site: str
+    has_open_session: bool
+
+
+class SiteAttendanceEntry(BaseModel):
+    worker_id: str
+    attendance_session_id: str
+    clocked_in_at: datetime
+    clocked_out_at: datetime | None
+    matched_rostered_shift: bool

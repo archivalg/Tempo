@@ -218,6 +218,15 @@ button:disabled {
   margin: 0.5rem 0;
 }
 
+.card.exceptions {
+  border-color: var(--warn);
+  background: #fffbe6;
+}
+
+tr.exception-row {
+  background: #fffbe6;
+}
+
 .badge {
   display: inline-block;
   padding: 0.15rem 0.55rem;

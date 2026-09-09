@@ -10,6 +10,8 @@ import { ActionsListPage } from './pages/ActionsList'
 import { NewActionPage } from './pages/NewAction'
 import { ActionDetailPage } from './pages/ActionDetail'
 import { OnboardingPage } from './pages/Onboarding'
+import { KioskPage } from './pages/Kiosk'
+import { TeamAttendancePage } from './pages/TeamAttendance'
 
 function App() {
   return (
@@ -26,6 +28,8 @@ function App() {
             <Route path="/actions/new" element={<NewActionPage />} />
             <Route path="/actions/:actionId" element={<ActionDetailPage />} />
             <Route path="/onboarding" element={<OnboardingPage />} />
+            <Route path="/kiosk" element={<KioskPage />} />
+            <Route path="/attendance" element={<TeamAttendancePage />} />
           </Route>
         </Routes>
       </BrowserRouter>

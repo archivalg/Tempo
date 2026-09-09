@@ -146,3 +146,61 @@ def test_get_worker_shifts_returns_committed_assignments(client):
 def test_get_shifts_for_unknown_worker_not_found(client):
     response = client.get("/v1/workers/wrk_does_not_exist/shifts", headers=context_header())
     assert response.status_code == 404
+
+
+def test_whoami_resolves_worker_without_clocking_in(client):
+    _seed_worker(client)
+    client.post("/v1/attendance/credentials", json={"worker_id": "wrk_1", "pin": "1234"}, headers=_admin_header())
+
+    response = client.post("/v1/attendance/whoami", json={"method": "pin", "pin": "1234"}, headers=_kiosk_header())
+    assert response.status_code == 200
+    body = response.json()
+    assert body == {"worker_id": "wrk_1", "employment_type": "permanent", "home_site": "site_mel_01", "has_open_session": False}
+
+    # whoami must not itself create an AttendanceSession.
+    clock_out = client.post("/v1/attendance/clock-out", json={"method": "pin", "pin": "1234"}, headers=_kiosk_header())
+    assert clock_out.status_code == 409
+
+
+def test_whoami_reports_open_session(client):
+    _seed_worker(client)
+    client.post("/v1/attendance/credentials", json={"worker_id": "wrk_1", "pin": "1234"}, headers=_admin_header())
+    client.post("/v1/attendance/clock-in", json={"site_id": "site_mel_01", "method": "pin", "pin": "1234"}, headers=_kiosk_header())
+
+    response = client.post("/v1/attendance/whoami", json={"method": "pin", "pin": "1234"}, headers=_kiosk_header())
+    assert response.json()["has_open_session"] is True
+
+
+def test_site_attendance_flags_unscheduled_clock_in_as_exception(client):
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.canonical import ShiftAssignment
+
+    _seed_worker(client, "wrk_rostered")
+    _seed_worker(client, "wrk_unscheduled")
+    client.post("/v1/attendance/credentials", json={"worker_id": "wrk_rostered", "pin": "1111"}, headers=_admin_header())
+    client.post("/v1/attendance/credentials", json={"worker_id": "wrk_unscheduled", "pin": "2222"}, headers=_admin_header())
+
+    now = datetime.now(timezone.utc)
+    with client.session_local() as db:
+        db.add(
+            ShiftAssignment(
+                tenant_id="ten_test", worker_id="wrk_rostered", role="picker", zone="zone_a",
+                start_at=now - timedelta(hours=1), end_at=now + timedelta(hours=7), status="committed",
+            )
+        )
+        db.commit()
+
+    client.post("/v1/attendance/clock-in", json={"site_id": "site_mel_01", "method": "pin", "pin": "1111"}, headers=_kiosk_header())
+    client.post("/v1/attendance/clock-in", json={"site_id": "site_mel_01", "method": "pin", "pin": "2222"}, headers=_kiosk_header())
+
+    response = client.get("/v1/sites/site_mel_01/attendance", headers=context_header(roles=["supervisor"]))
+    assert response.status_code == 200
+    by_worker = {row["worker_id"]: row for row in response.json()}
+    assert by_worker["wrk_unscheduled"]["matched_rostered_shift"] is False
+
+
+def test_site_attendance_scope_enforced(client):
+    response = client.get("/v1/sites/site_other/attendance", headers=context_header(roles=["supervisor"]))
+    assert response.status_code == 400
+    assert response.json()["error_code"] == "TEMPO-SCOPE-001"

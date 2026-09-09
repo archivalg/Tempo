@@ -199,3 +199,47 @@ export interface DataReadiness {
   blocking_issues: string[]
   warnings: string[]
 }
+
+// Mirrors app/schemas/attendance.py — Business Spec §4/§5's Standalone
+// native capture path (PIN/NFC clock-in, no per-worker identity yet).
+export type ClockMethod = 'pin' | 'nfc'
+
+export interface WhoamiResponse {
+  worker_id: string
+  employment_type: string
+  home_site: string
+  has_open_session: boolean
+}
+
+export interface ClockInResponse {
+  worker_id: string
+  attendance_session_id: string
+  clocked_in_at: string
+  geofence_status: 'passed' | 'skipped'
+  matched_rostered_shift: boolean
+}
+
+export interface ClockOutResponse {
+  worker_id: string
+  attendance_session_id: string
+  clocked_in_at: string
+  clocked_out_at: string
+  duration_minutes: number
+}
+
+export interface UpcomingShift {
+  shift_id: string
+  role: string
+  zone: string
+  start_at: string
+  end_at: string
+  status: string
+}
+
+export interface SiteAttendanceEntry {
+  worker_id: string
+  attendance_session_id: string
+  clocked_in_at: string
+  clocked_out_at: string | null
+  matched_rostered_shift: boolean
+}

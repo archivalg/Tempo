@@ -18,6 +18,11 @@ two small additions the console needed and the backend gained honestly:
   on a completed run, so the console can offer "start an action from this
   run" without the caller having to keep the create-run response around.
 
+A second round added the **Kiosk** and **Team attendance** pages once
+`services/tempo-api` gained native capture (PIN/NFC clock-in,
+`app/api/v1/attendance.py`) — no new backend endpoints needed this time,
+native capture already shipped everything these two pages consume.
+
 ## What it covers
 
 Per the Business Specification's UX roles table (§8), this v1 covers
@@ -45,20 +50,27 @@ capability the backend already fully implements:
   of tenant scopes and connections (Phase F). A registered connection
   stays `pending_credentials` in the UI too, honestly, for the same reason
   it does in the API.
+- **Kiosk** (Worker) — a PIN identifies the worker (no worker login exists
+  — same disclosed stand-in as everything else here), then shows their
+  upcoming/recent shifts and a Clock in/Clock out button reflecting their
+  actual open-session state (`GET/POST /v1/attendance/*`). "Know shifts,
+  clock in/out correctly" from §8's Worker row.
+- **Team attendance** (Supervisor) — every attendance session at a site
+  within a configurable window, with `matched_rostered_shift: false`
+  entries surfaced as exceptions in their own callout, not just another
+  table row. "Cover shifts, manage exceptions" from §8's Supervisor row —
+  a starting point (no live alerting/push notification), not the full
+  "respond to live alerts" half of that need.
 
 **Not covered — deliberately out of scope for this pass**, because the
-backend capability they'd need doesn't exist yet (see
-`services/tempo-api/README.md`'s "Known simplifications" and the
-Product/Business Spec review that identified this gap):
+backend capability it would need doesn't exist yet (see
+`services/tempo-api/README.md`'s "Known simplifications"):
 
-- **Worker, Supervisor, and Labour Provider roles** — "know shifts, clock
-  in/out," "cover shifts, manage exceptions," "manage supplied workers" all
-  depend on native Tempo capture (PIN/GPS/NFC/biometric clock-in) and a
-  shift-swap/exception feed, neither of which the backend implements yet
-  (Standalone mode's Capture layer is still Overlay-connectors-only,
-  or direct DB seeding for Tempo-native data). Building the console's
-  Worker/Supervisor views ahead of that backend capability would mean
-  mocking data the API can't actually produce.
+- **Labour Provider role** — "manage supplied workers, certifications,
+  shift assignments" needs a labour-hire-specific data model (which
+  workers belong to which provider, a provider-facing scope) that neither
+  the canonical model nor the console's tenant/site-scoped identity
+  supports yet.
 - **Run comparisons UI** — `POST /v1/run-comparisons` exists and is
   exercised by the backend test suite, but the console has no page for it
   yet; a small, natural follow-up.
@@ -92,6 +104,14 @@ actually gates (e.g. `labour.approve` vs `labour.plan`, or
 - **No design system** — plain hand-written CSS (`src/index.css`), no
   component library. Fine for an internal ops console; a customer-facing
   surface would want one.
+- **Kiosk has no real device/session identity** — it's just another page
+  in the same console session; a real kiosk deployment would run it as a
+  locked-down, tenant/site-pinned browser session on shared hardware, not
+  a page a signed-in ops user happens to click into.
+- **Team attendance has no live/push updates** — it's "Refresh" on demand,
+  not a live feed; the "respond to live alerts" half of the Supervisor
+  need isn't built (same root gap as the backend's own disclosed "no
+  background scheduler").
 
 ## Run it
 

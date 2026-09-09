@@ -18,7 +18,19 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.attendance import check_geofence, clock_in, clock_out, hash_pin, resolve_worker_by_nfc, resolve_worker_by_pin, to_aware
+from datetime import datetime, timedelta, timezone
+
+from app.core.attendance import (
+    check_geofence,
+    clock_in,
+    clock_out,
+    has_open_session,
+    hash_pin,
+    list_site_attendance,
+    resolve_worker_by_nfc,
+    resolve_worker_by_pin,
+    to_aware,
+)
 from app.dependencies import get_db, get_request_context
 from app.errors import AuthForbidden, RunNotFound, ScopeError
 from app.models.attendance import SiteGeofence, WorkerCredential
@@ -30,8 +42,11 @@ from app.schemas.attendance import (
     ClockOutResponse,
     CredentialEnrollRequest,
     CredentialEnrollResponse,
+    SiteAttendanceEntry,
     SiteGeofenceRequest,
     UpcomingShift,
+    WhoamiRequest,
+    WhoamiResponse,
 )
 from app.schemas.tenancy import RequestContext
 
@@ -159,4 +174,54 @@ def get_worker_shifts(
     return [
         UpcomingShift(shift_id=r.shift_id, role=r.role, zone=r.zone, start_at=r.start_at, end_at=r.end_at, status=r.status)
         for r in rows
+    ]
+
+
+@router.post("/attendance/whoami", response_model=WhoamiResponse)
+def whoami(
+    request: WhoamiRequest,
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> WhoamiResponse:
+    """Resolves a worker from their PIN/NFC without clocking in — the
+    console's Kiosk page uses this to greet the worker and show their
+    shifts before they choose to clock in/out (a genuine clock-in commits
+    an AttendanceSession row; this is read-only).
+    """
+    worker = _resolve_worker(db, context, request.method, request.pin, request.nfc_tag_id)
+    return WhoamiResponse(
+        worker_id=worker.worker_id,
+        employment_type=worker.employment_type,
+        home_site=worker.home_site,
+        has_open_session=has_open_session(db, context.tenant_id, worker.worker_id),
+    )
+
+
+@router.get("/sites/{site_id}/attendance", response_model=list[SiteAttendanceEntry])
+def get_site_attendance(
+    site_id: str,
+    since_hours: int = 24,
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> list[SiteAttendanceEntry]:
+    """Supervisor's "who's here, and is anyone off-roster" view (Business
+    Spec §8: "cover shifts, manage exceptions, respond to live alerts").
+    `matched_rostered_shift: false` is the exception signal — a starting
+    point, not a full exception/alerting system (see
+    app/core/attendance.py's docstring).
+    """
+    if context.site_ids and site_id not in context.site_ids:
+        raise ScopeError("requested site_id exceeds the caller's authorised scope")
+
+    since = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+    summaries = list_site_attendance(db, context.tenant_id, site_id, since)
+    return [
+        SiteAttendanceEntry(
+            worker_id=s.session.worker_id,
+            attendance_session_id=s.session.id,
+            clocked_in_at=s.session.start_at,
+            clocked_out_at=s.session.end_at,
+            matched_rostered_shift=s.matched_rostered_shift,
+        )
+        for s in summaries
     ]
