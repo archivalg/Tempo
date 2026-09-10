@@ -36,11 +36,18 @@ from app.core import lifecycle
 from app.core.audit import write_audit
 from app.core.confidence import compute_confidence
 from app.core.events import event_bus
-from app.core.idempotency import IdempotencyConflict, idempotency_store
+from app.core.idempotency import IdempotencyConflict, hash_payload, idempotency_store
 from app.core.policy import resolve_policy
 from app.dependencies import get_db, get_request_context, require_idempotency_key
 from app.errors import AuthForbidden, DataNotReady, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
-from app.models.runs import OptimisationRun, Recommendation
+from app.models.runs import (
+    OptimisationRun,
+    OptimisationRunCustomer,
+    OptimisationRunSite,
+    OptimisationSnapshot,
+    Recommendation,
+    SourceVersionWatermark,
+)
 from app.schemas.runs import IMPLEMENTED_RUN_TYPES, RunRequest, RunResponse
 from app.schemas.tenancy import RequestContext
 from app.solvers.base import InsufficientData, SolverOutcome
@@ -146,6 +153,32 @@ def create_run(
         correlation_id=context.correlation_id,
     )
     db.add(run)
+    for site_id in request.scope.site_ids:
+        db.add(OptimisationRunSite(run_id=run_id, tenant_id=context.tenant_id, site_id=site_id))
+    for customer_id in request.scope.customer_ids:
+        db.add(OptimisationRunCustomer(run_id=run_id, tenant_id=context.tenant_id, customer_id=customer_id))
+
+    # DAT-06: the manifest itself, not just a bare snapshot_id string —
+    # see OptimisationSnapshot's own docstring for exactly what
+    # content_hash does and doesn't cover. data_versions is whatever
+    # SourceVersionWatermark rows already exist for this tenant/site(s) —
+    # empty for a tenant with no prior confirmed writeback yet.
+    watermarks = db.scalars(
+        select(SourceVersionWatermark)
+        .where(SourceVersionWatermark.tenant_id == context.tenant_id)
+        .where(SourceVersionWatermark.site_id.in_(request.scope.site_ids))
+    ).all()
+    db.add(
+        OptimisationSnapshot(
+            snapshot_id=snapshot_id,
+            tenant_id=context.tenant_id,
+            run_id=run_id,
+            policy_version=policy.policy_version,
+            model_version=request.configuration.model_version,
+            content_hash=hash_payload(payload),
+            data_versions={f"{w.connection_id}/{w.site_id}/{w.resource_type}": w.version for w in watermarks},
+        )
+    )
     db.flush()
     event_bus.publish(db, context.tenant_id, "run.accepted", {"run_id": run_id, "run_type": run_type}, subject=run_id, correlation_id=context.correlation_id)
 
@@ -212,6 +245,7 @@ def create_run(
             recommendation_id=recommendation_id,
             run_id=run_id,
             tenant_id=context.tenant_id,
+            snapshot_id=snapshot_id,
             body={"run_type": run_type, "result": result, "explanation": explanation},
             expires_at=datetime.now(timezone.utc) + timedelta(seconds=policy.constraints["recommendation_ttl_seconds"]),
         )

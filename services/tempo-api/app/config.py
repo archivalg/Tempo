@@ -12,6 +12,24 @@ class Settings(BaseSettings):
     """
 
     database_url: str = "sqlite:///./tempo_dev.db"
+    # DAT-04: pooling/retry/timeout, applied by app/db.py only for a real
+    # (non-SQLite) database — SQLite's default poolclass (NullPool)
+    # doesn't accept pool_size/max_overflow at all, so these are inert
+    # until a real environment (ADR-0002) exists to tune them against.
+    # The defaults below are sane starting points, not validated against
+    # any real concurrency target — DAT-04's own acceptance criterion
+    # ("load and failure tests") is what actually calibrates them.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout_seconds: int = 30
+    db_pool_recycle_seconds: int = 1800
+    db_pool_pre_ping: bool = True
+    # Oracle has no universal driver-agnostic "statement_timeout" the way
+    # Postgres does; this is stored now so a real environment's connection
+    # setup has somewhere to read it from, but nothing applies it yet —
+    # doing so correctly depends on which Oracle driver is chosen
+    # (ADR-0002), unverified here.
+    db_statement_timeout_ms: int = 30_000
     service_name: str = "tempo-optimisation-service"
     api_base_path: str = "/v1"
     confidence_method: str = "tempo-confidence-1.0"
