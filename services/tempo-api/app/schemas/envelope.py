@@ -24,9 +24,13 @@ class QualityInfo(BaseModel):
 class CanonicalEnvelope(BaseModel):
     """§6.2 — what a Maestro connector emits per ingested record.
 
-    Phase 0 accepts these directly at /v1/canonical/ingest to prove the
-    downstream pipeline (readiness, snapshotting, confidence) without a real
-    Maestro connector; Phase B replaces the caller, not this contract.
+    Every connector (app/maestro/deputy, /ukg, /wms) has always applied
+    this in-process via app.core.ingestion.apply_canonical_envelope,
+    never through an HTTP endpoint — despite this docstring previously
+    claiming a "/v1/canonical/ingest" existed; it never did. INT-02
+    (Phase 3) adds the real one: POST /v1/ingestion/events
+    (app/api/v1/ingestion.py), authenticated and validating both tenant
+    binding and `schema_version` against what that endpoint supports.
     """
 
     schema_version: str = "1.0"

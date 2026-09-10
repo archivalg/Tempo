@@ -123,6 +123,15 @@ _UPSERT_BY_ENTITY = {
 }
 
 
+def supported_entity_types() -> frozenset[str]:
+    """The entity_type values `apply_canonical_envelope` knows how to
+    upsert — the public surface app/api/v1/ingestion.py (INT-02) validates
+    a request's entity_type against, rather than reaching into
+    `_UPSERT_BY_ENTITY` directly across the module boundary.
+    """
+    return frozenset(_UPSERT_BY_ENTITY)
+
+
 def apply_canonical_envelope(db: Session, envelope: CanonicalEnvelope, entity_type: str, fields: dict[str, Any]) -> IngestionResult:
     """`entity_type` names one of _UPSERT_BY_ENTITY's keys; `fields` are the
     already-mapped canonical column values a connector's mapping module

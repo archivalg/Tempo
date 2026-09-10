@@ -48,6 +48,7 @@ def test_upgrade_head_creates_every_application_table(tmp_path):
         "user_site_grant",
         "security_audit_event",
         "maestro_connection",
+        "connector_credential_reference",
         "worker_credential",
     ):
         assert expected in tables, f"expected table '{expected}' missing after upgrade head"

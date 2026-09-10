@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Boolean, DateTime, String
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -40,18 +40,21 @@ class ConnectorCheckpoint(Base):
 
 class MaestroConnection(Base):
     """A tenant's declared connector instance — Phase F's "self-service
-    onboarding" (§18). Registering a row here does not create a live vendor
-    credential or trigger ingestion: no credential vault exists in this
-    scaffold (the same class of gap Phase E's writeback connector
-    discloses — see app/maestro/writeback.py), so `status` starts and stays
-    "pending_credentials" until a real deployment wires up an actual
-    client. What this *does* replace is the Phase 0-disclosed gap that
-    every canonical row so far only got there by direct DB insert or a
-    seed script (services/tempo-api/README.md's "Canonical ingestion"
-    simplification) — a tenant admin can now declare "this tenant has a
-    Deputy connection for this site" through the API, the first real step
-    of onboarding, even though wiring the actual HTTP client remains a
-    manual/engineering step.
+    onboarding" (§18), extended by Phase 3's credential lifecycle
+    (INT-03/INT-04, app/api/v1/onboarding.py's .../credentials, .../test,
+    .../activate, .../suspend, .../revoke endpoints):
+    `pending_credentials` -> `credentials_stored` -> `active`, with
+    `suspended`/`revoked` reachable from `active`.
+
+    Registering a row, and moving it through this lifecycle, still does
+    not trigger real ingestion: no OCI Vault exists in this environment
+    (`app.maestro.credentials.InMemoryCredentialStore` is a disclosed,
+    non-durable dev stand-in), no vendor sandbox credentials exist to
+    validate against (INT-05/INT-06 are blocked for the same reason), and
+    no scheduler exists yet to act on an `active` connection (Phase 4).
+    `active` here means "administratively ready," not "actually
+    syncing" — the same honesty `NotImplementedWritebackClient` applies to
+    writeback outcomes.
     """
 
     __tablename__ = "maestro_connection"
@@ -62,6 +65,28 @@ class MaestroConnection(Base):
     site_id: Mapped[str] = mapped_column(String)
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending_credentials")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ConnectorCredentialReference(Base):
+    """INT-03/Appendix B's "Connector credential reference": "Connection,
+    Vault secret reference, status and rotation metadata; no secret
+    value." `vault_secret_reference` is the opaque reference
+    `app.maestro.credentials.CredentialStore.store()` returns — genuinely
+    never the secret itself, matching `MaestroConnection`'s docstring.
+    One row per connection (composite would be redundant with the FK
+    already being unique per connection — a connection has at most one
+    live credential at a time; rotation replaces the reference in place
+    and bumps `rotated_at`, it doesn't add a second row).
+    """
+
+    __tablename__ = "connector_credential_reference"
+
+    connection_id: Mapped[str] = mapped_column(String, ForeignKey("maestro_connection.connection_id"), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    vault_secret_reference: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="stored")
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
