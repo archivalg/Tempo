@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.permissions import permissions_for_roles
+
 
 class RequestContext(BaseModel):
     tenant_id: str
@@ -37,34 +39,8 @@ class RequestContext(BaseModel):
 
     def has_permission(self, permission: str) -> bool:
         # Phase 0 stub: role -> permission mapping is a fixed table until the
-        # real entitlement service exists (§5.2 is the source of truth).
-        return permission in ROLE_PERMISSIONS.get_permissions(self.roles)
-
-
-class _RolePermissions:
-    _TABLE: dict[str, set[str]] = {
-        "supervisor": {"labour.read"},
-        "analyst": {"labour.read"},
-        "executive": {"labour.read", "labour.margin.read"},
-        "operations_manager": {"labour.read", "labour.plan", "labour.approve"},
-        "planner": {"labour.read", "labour.plan"},
-        "tenant_admin": {"labour.read", "labour.plan", "labour.configure"},
-        "finance": {"labour.margin.read"},
-        "3pl_commercial": {"labour.margin.read"},
-        "hr_authorised": {"labour.worker_pii"},
-        "integration_restricted": {"labour.writeback"},
-        # Not one of §5.2's seven named permissions — that table has no
-        # row for the Business Spec's §8 Labour Provider role at all (see
-        # app/models/canonical.py's LabourProvider docstring). A pragmatic
-        # extension, same class as TEMPO-ACTION-005/006 in app/errors.py.
-        "labour_provider": {"labour.provider.manage"},
-    }
-
-    def get_permissions(self, roles: list[str]) -> set[str]:
-        result: set[str] = set()
-        for role in roles:
-            result |= self._TABLE.get(role, set())
-        return result
-
-
-ROLE_PERMISSIONS = _RolePermissions()
+        # real entitlement service exists. That table now lives in
+        # app/core/permissions.py — §6.4's "one AccessScope resolver...
+        # Local endpoint copies of entitlement logic are prohibited" applies
+        # to this table too, so it is defined exactly once, there, not here.
+        return permission in permissions_for_roles(self.roles)

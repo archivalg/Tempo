@@ -1,0 +1,53 @@
+# CODEOWNERS — Phase 0 mobilisation (P0-03).
+#
+# Every handle below is a placeholder team, not a real GitHub team or user —
+# this account has one collaborator (archivalg) today, so there is no real
+# ownership split to encode yet. GitHub silently ignores CODEOWNERS entries
+# that don't resolve to a real user/team with repo access, so until these
+# placeholders are replaced with real handles (and those teams are actually
+# granted write access to this repo), this file documents the intended
+# routing but does not yet enforce required-reviewer routing on its own —
+# that enforcement also needs P0-02's branch protection rules (rejected
+# pull requests without CODEOWNERS approval), which is a repo-settings
+# change no tool available in this session can make; see docs/adr/ for the
+# decisions that gate real ownership assignment.
+#
+# Order matters: later patterns override earlier ones for a given path,
+# same as .gitignore.
+
+# Default: technical lead reviews anything not matched below.
+*                                       @tempo-tech-lead
+
+# Backend / optimisation API
+/services/tempo-api/                   @tempo-backend-owners
+
+# Security-sensitive backend surface — identity, tenant scope, action
+# tokens, permissions. Kept distinct from the general backend pattern so a
+# security reviewer is always requested, not just a backend reviewer.
+/services/tempo-api/app/dependencies.py        @tempo-security-owners @tempo-backend-owners
+/services/tempo-api/app/schemas/tenancy.py     @tempo-security-owners @tempo-backend-owners
+/services/tempo-api/app/core/access_scope.py   @tempo-security-owners @tempo-backend-owners
+/services/tempo-api/app/core/action_tokens.py  @tempo-security-owners @tempo-backend-owners
+/services/tempo-api/app/models/identity.py     @tempo-security-owners @tempo-backend-owners
+/services/tempo-api/app/errors.py              @tempo-security-owners @tempo-backend-owners
+
+# Database migrations (Alembic, once Phase 2 adds it) — a DBA/platform
+# reviewer, not just whoever wrote the backend change.
+/services/tempo-api/alembic/           @tempo-platform-owners @tempo-backend-owners
+/services/tempo-api/migrations/        @tempo-platform-owners @tempo-backend-owners
+
+# Integration / connector runtime (Phase 3) — credential handling, vendor
+# adapters.
+/services/tempo-api/app/maestro/       @tempo-integration-owners @tempo-backend-owners
+
+# Console (frontend)
+/services/tempo-console/               @tempo-frontend-owners
+
+# Infrastructure, CI/CD, and anything that touches deployment (Phase 8)
+/.github/                              @tempo-platform-owners
+/services/tempo-api/Dockerfile         @tempo-platform-owners
+/services/*/Dockerfile                 @tempo-platform-owners
+
+# Architecture decisions and this specification's own tracking documents
+/docs/adr/                             @tempo-tech-lead @tempo-security-owners
+/docs/                                 @tempo-tech-lead

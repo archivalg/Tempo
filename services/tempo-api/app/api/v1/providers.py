@@ -139,7 +139,9 @@ def register_supplied_worker(
 ) -> SuppliedWorkerResponse:
     provider = _get_owned_provider(db, context, provider_id)
     _require_provider_access(context, provider)
-    if context.site_ids and request.home_site not in context.site_ids:
+    # No `context.site_ids and ...` guard -- see runs.py's _enforce_scope
+    # for why (docs/tenant-isolation-inventory.md).
+    if request.home_site not in context.site_ids:
         raise ScopeError(f"home_site '{request.home_site}' exceeds the caller's authorised scope")
 
     worker = Worker(

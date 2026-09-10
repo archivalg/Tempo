@@ -87,9 +87,16 @@ _FINANCE_RESTRICTED_RUN_TYPES = {"margin_3pl"}
 
 
 def _enforce_scope(context: RequestContext, request: RunRequest) -> None:
-    if context.site_ids and any(site not in context.site_ids for site in request.scope.site_ids):
+    # No `context.site_ids and ...` guard: an empty context.site_ids must
+    # deny every site, never skip the check entirely. §6.4 of the
+    # production-readiness spec names this exact pattern — "an empty set
+    # must never mean no filter" — after this sprint's tenant-isolation
+    # inventory found it as a live gap (a caller whose header carried only
+    # customer_ids, with an empty site_ids, previously bypassed every site
+    # check across this codebase; see docs/tenant-isolation-inventory.md).
+    if any(site not in context.site_ids for site in request.scope.site_ids):
         raise ScopeError("requested site_ids exceed the caller's authorised scope")
-    if context.customer_ids and any(c not in context.customer_ids for c in request.scope.customer_ids):
+    if any(c not in context.customer_ids for c in request.scope.customer_ids):
         raise ScopeError("requested customer_ids exceed the caller's authorised scope")
     if not request.scope.site_ids:
         raise ScopeError("request scope must specify at least one site_id — solvers run per-site")

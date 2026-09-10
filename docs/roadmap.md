@@ -7,6 +7,20 @@ Business Specification call for beyond that spec's backend-only roadmap
 lands — it's the single place to check "what's real vs spec" without
 re-reading the full integration spec.
 
+## Solver freeze (P0-08)
+
+`Tempo_Production_Readiness_Implementation_Specification_v1.1.docx`'s
+Phase 0 requirement P0-08: **new solver families are frozen** until the
+pilot workflow passes its release gates (that spec's Phase 9). Phases 0-F
+below are all already-built, already-tested solver/backend work predating
+this freeze and are unaffected; this freeze blocks *new* solver families
+only (e.g. anything beyond the ten run_types already implemented), not
+bug fixes, not the production-readiness work itself (identity, data
+platform, integration, async processing, writeback, console, deployment),
+and not Phase 6's calibration of *existing* models against real data.
+Lifting this freeze is a release-gate decision (§18.1), not an engineering
+one.
+
 | Phase | Scope (§18) | Status | Where |
 |---|---|---|---|
 | 0 — Contract foundation | Tenant/identity mapping, canonical v1, readiness, run lifecycle, explanation contract, events, audit | **Done** | `services/tempo-api` |

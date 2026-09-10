@@ -91,7 +91,9 @@ def clock_in_endpoint(
     context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> ClockInResponse:
-    if context.site_ids and request.site_id not in context.site_ids:
+    # No `context.site_ids and ...` guard -- see runs.py's _enforce_scope
+    # for why (docs/tenant-isolation-inventory.md).
+    if request.site_id not in context.site_ids:
         raise ScopeError("requested site_id exceeds the caller's authorised scope")
 
     worker = _resolve_worker(db, context, request.method, request.pin, request.nfc_tag_id)
@@ -210,7 +212,9 @@ def get_site_attendance(
     point, not a full exception/alerting system (see
     app/core/attendance.py's docstring).
     """
-    if context.site_ids and site_id not in context.site_ids:
+    # No `context.site_ids and ...` guard -- see runs.py's _enforce_scope
+    # for why (docs/tenant-isolation-inventory.md).
+    if site_id not in context.site_ids:
         raise ScopeError("requested site_id exceeds the caller's authorised scope")
 
     since = datetime.now(timezone.utc) - timedelta(hours=since_hours)

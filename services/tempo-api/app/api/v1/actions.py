@@ -157,7 +157,9 @@ def validate_action(
 ) -> ActionValidateResponse:
     if not context.has_permission("labour.plan"):
         raise AuthForbidden("caller lacks labour.plan permission required to validate an action")
-    if context.site_ids and request.target.site_id not in context.site_ids:
+    # No `context.site_ids and ...` guard -- see runs.py's _enforce_scope
+    # for why (docs/tenant-isolation-inventory.md).
+    if request.target.site_id not in context.site_ids:
         raise ScopeError("target site_id exceeds the caller's authorised scope")
 
     recommendation = db.get(Recommendation, request.recommendation_id)
