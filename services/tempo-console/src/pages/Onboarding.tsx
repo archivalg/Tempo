@@ -3,6 +3,8 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { useApi } from '../hooks/useApi'
+import { enrollCredential } from '../api/attendance'
+import type { CredentialEnrollResponse } from '../api/types'
 import {
   createConnection,
   createTenantScope,
@@ -26,6 +28,12 @@ export function OnboardingPage() {
   const [connDisplayName, setConnDisplayName] = useState('')
   const [connError, setConnError] = useState<unknown>(null)
 
+  const [credWorkerId, setCredWorkerId] = useState('')
+  const [credPin, setCredPin] = useState('')
+  const [credNfcTagId, setCredNfcTagId] = useState('')
+  const [credResult, setCredResult] = useState<CredentialEnrollResponse | null>(null)
+  const [credError, setCredError] = useState<unknown>(null)
+
   async function handleCreateScope(event: FormEvent) {
     event.preventDefault()
     setScopeError(null)
@@ -36,6 +44,20 @@ export function OnboardingPage() {
       scopes.reload()
     } catch (err) {
       setScopeError(err)
+    }
+  }
+
+  async function handleEnrollCredential(event: FormEvent) {
+    event.preventDefault()
+    setCredError(null)
+    setCredResult(null)
+    try {
+      const result = await enrollCredential(context!, credWorkerId, { pin: credPin || undefined, nfcTagId: credNfcTagId || undefined })
+      setCredResult(result)
+      setCredPin('')
+      setCredNfcTagId('')
+    } catch (err) {
+      setCredError(err)
     }
   }
 
@@ -117,6 +139,39 @@ export function OnboardingPage() {
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="card">
+        <h2>Clock-in credentials</h2>
+        <p className="hint">
+          Enrols a Kiosk PIN and/or NFC tag for a worker (<code>POST /v1/attendance/credentials</code>) — the
+          same lookup the Kiosk page uses to identify who's clocking in. There is no endpoint to list existing
+          enrolments yet, so this form only confirms what it just wrote, not a worker's full credential history.
+        </p>
+        <form onSubmit={handleEnrollCredential}>
+          <label>
+            Worker ID
+            <input value={credWorkerId} onChange={(e) => setCredWorkerId(e.target.value)} required />
+          </label>
+          <label>
+            PIN
+            <input value={credPin} onChange={(e) => setCredPin(e.target.value)} inputMode="numeric" />
+          </label>
+          <label>
+            NFC tag ID
+            <input value={credNfcTagId} onChange={(e) => setCredNfcTagId(e.target.value)} />
+          </label>
+          <ErrorBanner error={credError} />
+          <button type="submit" disabled={!credWorkerId || (!credPin && !credNfcTagId)}>
+            Enrol credential
+          </button>
+        </form>
+        {credResult && (
+          <p className="hint">
+            Worker {credResult.worker_id}: {credResult.has_pin ? 'has a PIN' : 'no PIN'},{' '}
+            {credResult.has_nfc ? 'has an NFC tag' : 'no NFC tag'}.
+          </p>
         )}
       </section>
 

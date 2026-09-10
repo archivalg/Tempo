@@ -3,12 +3,12 @@ import { KIOSK_PIN, KIOSK_WORKER_ID, setContext, SITE_ID, TENANT_ID } from './he
 
 const API_BASE_URL = 'http://localhost:8011/v1'
 
-// The console has no UI for enrolling a clock-in credential (see
-// app/api/v1/attendance.py's enroll_credential — labour.configure only,
-// no console page calls it yet), so this test calls the API directly to
-// set up a second worker's PIN, then drives the Kiosk UI for the actual
-// clock-in — the same "API for setup, UI for the feature under test"
-// split used for seeding itself.
+// The Onboarding page's "Clock-in credentials" form (see
+// onboarding.spec.ts's own enrolment test) exercises enroll_credential
+// through the UI already, so this test calls the API directly instead —
+// a deliberate "API for setup, UI for the feature under test" split, the
+// same one seeding itself uses, to keep this spec focused on the
+// exception-detection behaviour rather than re-proving the form works.
 async function enrollPin(request: import('@playwright/test').APIRequestContext, workerId: string, pin: string) {
   const response = await request.post(`${API_BASE_URL}/attendance/credentials`, {
     headers: {

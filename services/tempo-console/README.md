@@ -51,10 +51,13 @@ capability the backend already fully implements:
   not hide that there's no real vendor writeback connector yet (Phase E's
   disclosed gap) — it shows `unknown` and the reconciliation flow exactly
   as the API reports them, never a fabricated "confirmed."
-- **Onboarding** — the connector catalogue, and self-service registration
-  of tenant scopes and connections (Phase F). A registered connection
-  stays `pending_credentials` in the UI too, honestly, for the same reason
-  it does in the API.
+- **Onboarding** — the connector catalogue, self-service registration of
+  tenant scopes and connections (Phase F; a registered connection stays
+  `pending_credentials` in the UI too, honestly, for the same reason it
+  does in the API), and enrolling a worker's Kiosk PIN/NFC tag
+  (`POST /v1/attendance/credentials`, `labour.configure`) — there is still
+  no endpoint to list existing enrolments, so the form only confirms what
+  it just wrote, not a worker's full credential history.
 - **Kiosk** (Worker) — a PIN identifies the worker (no worker login exists
   — same disclosed stand-in as everything else here), then shows their
   upcoming/recent shifts and a Clock in/Clock out button reflecting their
@@ -91,10 +94,6 @@ actually gates (e.g. `labour.approve` vs `labour.plan`, or
 
 ## Known simplifications (tracked, not hidden)
 
-- **No console UI to enroll a clock-in credential** — `POST
-  /v1/attendance/credentials` (`labour.configure`) exists and is exercised
-  by the E2E suite via a direct API call, but there is no Onboarding-page
-  form for it yet; a PIN/NFC tag is provisioned out of band today.
 - **Pagination is "next page only," no "jump to page N"** — matches the
   backend's cursor-based pagination (§8.1) directly; there is no total
   count to build a page-number UI from.
@@ -180,5 +179,7 @@ list, selecting runs from the list and comparing their KPIs, the real
 the validate → execute → reconcile action pipeline against both a
 stubbed vendor target (honestly stays `unknown`) and the real
 `tempo_native` target (`confirmed`), tenant-scope and connection
-registration, and Kiosk clock-in/out for both a rostered worker and an
-unrostered one (the Team Attendance "exception" case).
+registration, enrolling a worker's Kiosk PIN through the Onboarding form
+and proving it actually authenticates, and Kiosk clock-in/out for both a
+rostered worker and an unrostered one (the Team Attendance "exception"
+case).

@@ -3,6 +3,7 @@ import type {
   ClockInResponse,
   ClockMethod,
   ClockOutResponse,
+  CredentialEnrollResponse,
   SiteAttendanceEntry,
   TempoContext,
   UpcomingShift,
@@ -37,6 +38,17 @@ export function clockIn(
 
 export function clockOut(context: TempoContext, credential: CredentialArgs): Promise<ClockOutResponse> {
   return apiFetch<ClockOutResponse>('/attendance/clock-out', context, { method: 'POST', body: credentialBody(credential) })
+}
+
+export function enrollCredential(
+  context: TempoContext,
+  workerId: string,
+  credential: { pin?: string; nfcTagId?: string },
+): Promise<CredentialEnrollResponse> {
+  return apiFetch<CredentialEnrollResponse>('/attendance/credentials', context, {
+    method: 'POST',
+    body: { worker_id: workerId, pin: credential.pin || null, nfc_tag_id: credential.nfcTagId || null },
+  })
 }
 
 export function getWorkerShifts(context: TempoContext, workerId: string): Promise<UpcomingShift[]> {

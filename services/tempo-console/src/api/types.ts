@@ -211,6 +211,12 @@ export interface DataReadiness {
 // native capture path (PIN/NFC clock-in, no per-worker identity yet).
 export type ClockMethod = 'pin' | 'nfc'
 
+export interface CredentialEnrollResponse {
+  worker_id: string
+  has_pin: boolean
+  has_nfc: boolean
+}
+
 export interface WhoamiResponse {
   worker_id: string
   employment_type: string
