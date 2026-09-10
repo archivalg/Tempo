@@ -39,7 +39,12 @@ capability the backend already fully implements:
   `run_type`s (one generic form — every run_type shares the same
   `RunRequest` shape per the Integration Spec), and a detail view showing
   the full explanation contract (baseline/proposed/delta/confidence/
-  primary drivers/missing evidence) plus the raw result.
+  primary drivers/missing evidence) plus the raw result. Select two or
+  more runs from the list to compare their KPIs side by side
+  (`POST /v1/run-comparisons`) — the same `labour.margin.read` gate that
+  hides a `margin_3pl` run everywhere else applies here too (this endpoint
+  didn't enforce it until this pass added the check and a regression test;
+  see `services/tempo-api/README.md`'s Phase D section).
 - **Actions** — §12's two-step contract end-to-end: validate a
   recommendation (impact summary + token), execute it (requires
   `labour.approve`), and reconcile an `unknown` outcome. The console does
@@ -71,9 +76,6 @@ backend capability it would need doesn't exist yet (see
   workers belong to which provider, a provider-facing scope) that neither
   the canonical model nor the console's tenant/site-scoped identity
   supports yet.
-- **Run comparisons UI** — `POST /v1/run-comparisons` exists and is
-  exercised by the backend test suite, but the console has no page for it
-  yet; a small, natural follow-up.
 
 ## Identity — a disclosed stand-in, not a login
 
@@ -173,9 +175,10 @@ way: onboarding and attendance specs flaked intermittently until workers
 were pinned to 1).
 
 Coverage: creating a run and reading its explanation, filtering the runs
-list, the real `/setup` form (not just the localStorage shortcut every
-other spec uses), the validate → execute → reconcile action pipeline
-against both a stubbed vendor target (honestly stays `unknown`) and the
-real `tempo_native` target (`confirmed`), tenant-scope and connection
+list, selecting runs from the list and comparing their KPIs, the real
+`/setup` form (not just the localStorage shortcut every other spec uses),
+the validate → execute → reconcile action pipeline against both a
+stubbed vendor target (honestly stays `unknown`) and the real
+`tempo_native` target (`confirmed`), tenant-scope and connection
 registration, and Kiosk clock-in/out for both a rostered worker and an
 unrostered one (the Team Attendance "exception" case).

@@ -103,6 +103,13 @@ export interface RunDetail {
   recommendation_id?: string | null
 }
 
+// Mirrors app/api/v1/runs.py's compare_runs response — one KPI object per
+// requested run_id, in the same order requested.
+export interface RunComparisonResponse {
+  run_ids: string[]
+  kpis: { run_id: string; kpis: Record<string, unknown> }[]
+}
+
 export interface ActionListItem {
   action_id: string
   action_type: string

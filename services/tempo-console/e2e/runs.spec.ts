@@ -30,6 +30,7 @@ test('runs list filters by run type', async ({ page }) => {
   const rows = page.locator('table tbody tr')
   const count = await rows.count()
   for (let i = 0; i < count; i++) {
-    await expect(rows.nth(i).locator('td').nth(1)).toHaveText('demand_forecast')
+    // td(0) is the comparison-selection checkbox, td(1) is the run ID link.
+    await expect(rows.nth(i).locator('td').nth(2)).toHaveText('demand_forecast')
   }
 })

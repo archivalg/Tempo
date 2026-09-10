@@ -6,6 +6,7 @@ import { DashboardPage } from './pages/Dashboard'
 import { RunsListPage } from './pages/RunsList'
 import { NewRunPage } from './pages/NewRun'
 import { RunDetailPage } from './pages/RunDetail'
+import { RunComparisonsPage } from './pages/RunComparisons'
 import { ActionsListPage } from './pages/ActionsList'
 import { NewActionPage } from './pages/NewAction'
 import { ActionDetailPage } from './pages/ActionDetail'
@@ -23,6 +24,7 @@ function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/runs" element={<RunsListPage />} />
             <Route path="/runs/new" element={<NewRunPage />} />
+            <Route path="/runs/compare" element={<RunComparisonsPage />} />
             <Route path="/runs/:runId" element={<RunDetailPage />} />
             <Route path="/actions" element={<ActionsListPage />} />
             <Route path="/actions/new" element={<NewActionPage />} />

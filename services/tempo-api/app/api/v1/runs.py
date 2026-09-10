@@ -359,6 +359,12 @@ def compare_runs(
         raise ScopeError("run-comparisons requires at least two run_ids")
     runs = [_get_owned_run(db, context, run_id) for run_id in run_ids]
     for run in runs:
+        # Same gate get_run/list_runs apply to margin_3pl (§5.2) — without
+        # this, a caller lacking labour.margin.read could still pull a
+        # margin run's KPIs through this endpoint by run_id.
+        if run.run_type in _FINANCE_RESTRICTED_RUN_TYPES and not context.has_permission("labour.margin.read"):
+            raise AuthForbidden(f"caller lacks labour.margin.read permission required to view run_type '{run.run_type}'")
+    for run in runs:
         if run.status not in {"completed", "completed_with_warnings"}:
             raise RunTerminal(f"run '{run.run_id}' is not in a comparable terminal state")
     return {

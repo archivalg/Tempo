@@ -1,5 +1,13 @@
 import { apiFetch, newIdempotencyKey } from './client'
-import type { ObjectiveProfile, RunCreateResponse, RunDetail, RunListResponse, RunType, TempoContext } from './types'
+import type {
+  ObjectiveProfile,
+  RunComparisonResponse,
+  RunCreateResponse,
+  RunDetail,
+  RunListResponse,
+  RunType,
+  TempoContext,
+} from './types'
 
 export interface NewRunInput {
   runType: RunType
@@ -52,4 +60,11 @@ export function getRun(context: TempoContext, runId: string): Promise<RunDetail>
 
 export function cancelRun(context: TempoContext, runId: string): Promise<{ run_id: string; status: string }> {
   return apiFetch(`/runs/${runId}/cancel`, context, { method: 'POST' })
+}
+
+export function compareRuns(context: TempoContext, runIds: string[]): Promise<RunComparisonResponse> {
+  return apiFetch<RunComparisonResponse>('/run-comparisons', context, {
+    method: 'POST',
+    body: { run_ids: runIds },
+  })
 }

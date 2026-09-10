@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTempoContext } from '../context/TempoContextProvider'
@@ -9,10 +9,16 @@ import { RUN_TYPES } from '../api/types'
 
 export function RunsListPage() {
   const { context } = useTempoContext()
+  const navigate = useNavigate()
   const [runType, setRunType] = useState('')
   const [status, setStatus] = useState('')
   const [cursor, setCursor] = useState<string | undefined>(undefined)
   const [history, setHistory] = useState<string[]>([])
+  const [selected, setSelected] = useState<string[]>([])
+
+  function toggleSelected(runId: string) {
+    setSelected((current) => (current.includes(runId) ? current.filter((id) => id !== runId) : [...current, runId]))
+  }
 
   const { data, error, loading, reload } = useApi(
     () => listRuns(context!, { runType: runType || undefined, status: status || undefined, cursor }),
@@ -67,6 +73,9 @@ export function RunsListPage() {
           </select>
         </label>
         <button onClick={reload}>Refresh</button>
+        <button disabled={selected.length < 2} onClick={() => navigate('/runs/compare', { state: { runIds: selected } })}>
+          Compare selected ({selected.length})
+        </button>
       </div>
 
       <ErrorBanner error={error} />
@@ -76,6 +85,7 @@ export function RunsListPage() {
         <table>
           <thead>
             <tr>
+              <th></th>
               <th>Run ID</th>
               <th>Type</th>
               <th>Status</th>
@@ -86,6 +96,14 @@ export function RunsListPage() {
           <tbody>
             {data.runs.map((run) => (
               <tr key={run.run_id}>
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${run.run_id} for comparison`}
+                    checked={selected.includes(run.run_id)}
+                    onChange={() => toggleSelected(run.run_id)}
+                  />
+                </td>
                 <td>
                   <Link to={`/runs/${run.run_id}`}>{run.run_id}</Link>
                 </td>

@@ -346,3 +346,40 @@ def test_run_comparisons_returns_kpis_for_each_run(client):
     response = client.post("/v1/run-comparisons", json={"run_ids": run_ids}, headers=context_header())
     assert response.status_code == 200
     assert len(response.json()["kpis"]) == 2
+
+
+def test_run_comparisons_rejects_margin_3pl_without_labour_margin_read(client):
+    # Same §5.2 gate get_run/list_runs apply to margin_3pl — this endpoint
+    # must not become a side channel for a caller lacking labour.margin.read
+    # to read a margin run's KPIs by run_id.
+    from datetime import timedelta
+
+    from app.models.canonical import ActivityRoleZoneMap, DemandBucket, LabourCostRule, SellRateContract, WorkStandard
+
+    _seed(client)
+    with client.session_local() as session:
+        session.add(WorkStandard(tenant_id="ten_test", activity="picking", complexity_segment=None, time_per_unit_seconds=45.0, effective_from=WINDOW_START - timedelta(days=365)))
+        session.add(ActivityRoleZoneMap(tenant_id="ten_test", site_id="site_mel_01", activity="picking", role="picker", zone="zone_a", weight=1.0))
+        session.add(LabourCostRule(tenant_id="ten_test", labour_type="permanent", role="picker", rate="35.00", overtime_multiplier="1.5", surcharge=None, currency="AUD"))
+        session.add(DemandBucket(tenant_id="ten_test", activity="picking", site_id="site_mel_01", customer_id="cust_A", interval_start=WINDOW_START, volume=100.0, source="wms"))
+        session.add(SellRateContract(tenant_id="ten_test", customer_id="cust_A", activity="picking", rate="5.00", currency="AUD", sla_penalty="2.00", effective_from=WINDOW_START - timedelta(days=30), effective_to=None))
+        session.commit()
+
+    finance_headers = context_header(roles=["operations_manager", "finance"])
+    finance_headers["Idempotency-Key"] = str(uuid.uuid4())
+    margin_run_id = client.post("/v1/optimisations/margin_3pl", json=VALID_REQUEST, headers=finance_headers).json()["run_id"]
+    other_run_id = client.post("/v1/optimisations/named_roster", json=VALID_REQUEST, headers=_headers()).json()["run_id"]
+
+    plain_response = client.post(
+        "/v1/run-comparisons",
+        json={"run_ids": [margin_run_id, other_run_id]},
+        headers=context_header(roles=["operations_manager"]),
+    )
+    assert plain_response.status_code == 403
+
+    finance_response = client.post(
+        "/v1/run-comparisons",
+        json={"run_ids": [margin_run_id, other_run_id]},
+        headers=context_header(roles=["operations_manager", "finance"]),
+    )
+    assert finance_response.status_code == 200
