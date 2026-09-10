@@ -681,3 +681,9 @@ pytest
 `tests/test_solvers.py` checks the actual mathematical properties (hire
 ratio never breached, no worker double-booked) rather than just that the
 API plumbing works.
+
+`scripts/seed_e2e.py` is a separate dev/test-only utility, not part of
+the application or the pytest suite — it seeds a fixed, deterministic
+dataset for `services/tempo-console`'s Playwright E2E suite (see that
+service's README) and is invoked by that suite's own config, not run
+directly in normal development.

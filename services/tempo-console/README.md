@@ -89,11 +89,10 @@ actually gates (e.g. `labour.approve` vs `labour.plan`, or
 
 ## Known simplifications (tracked, not hidden)
 
-- **No automated end-to-end test** — this was manually verified against a
-  live `tempo-api` instance in a real browser (Chromium via Playwright,
-  used only as a one-off manual check, not a checked-in dependency) before
-  being called done. A Playwright test suite committed to the repo, run in
-  CI against a live backend, is a natural next step, not yet built.
+- **No console UI to enroll a clock-in credential** — `POST
+  /v1/attendance/credentials` (`labour.configure`) exists and is exercised
+  by the E2E suite via a direct API call, but there is no Onboarding-page
+  form for it yet; a PIN/NFC tag is provisioned out of band today.
 - **Pagination is "next page only," no "jump to page N"** — matches the
   backend's cursor-based pagination (§8.1) directly; there is no total
   count to build a page-number UI from.
@@ -142,4 +141,41 @@ console's own Onboarding page to register a tenant scope and connection
 npm run test    # vitest — API client and component-level tests
 npm run build   # tsc -b && vite build — typechecks and production-builds
 npm run lint    # oxlint
+npm run test:e2e  # playwright — real browser, real backend, see below
 ```
+
+### End-to-end suite (`e2e/`, Playwright)
+
+A real Chromium browser drives a real `tempo-api` (uvicorn) and a real
+console dev server (vite) — nothing here is mocked, and it is a checked-in
+dependency (`@playwright/test`), not a one-off manual script. `npm run
+test:e2e` (or `npx playwright test`) is enough on its own: `playwright.config.ts`'s
+`webServer` entries start both processes for you, on dedicated ports
+(8011 / 5183) separate from manual dev (8000 / 5173) so this never
+collides with a `npm run dev` session you already have open.
+
+Before starting the API, the config runs
+`services/tempo-api/scripts/seed_e2e.py` — a dev/test-only script (not
+part of the application) that drops and recreates the schema, then seeds
+a fixed tenant/site/worker dataset (reusing
+`tests/factories.py::seed_named_roster_scenario`, plus a Kiosk PIN and a
+committed shift for one worker). Every run starts from identical state,
+which is why `reuseExistingServer` is hardcoded `false` rather than the
+common `!!process.env.CI` pattern — the suite asserts against specific
+seeded values (an exact PIN, an exact worker), so silently reusing a
+stale server from a previous run would make failures depend on what you
+ran last, not on what changed. Slower per run, deterministic every run.
+
+Specs run against a single Playwright worker (`workers: 1` in the
+config) — they share one backend and one `tempo_e2e.db`, so letting spec
+files run concurrently races their mutations (this was caught the hard
+way: onboarding and attendance specs flaked intermittently until workers
+were pinned to 1).
+
+Coverage: creating a run and reading its explanation, filtering the runs
+list, the real `/setup` form (not just the localStorage shortcut every
+other spec uses), the validate → execute → reconcile action pipeline
+against both a stubbed vendor target (honestly stays `unknown`) and the
+real `tempo_native` target (`confirmed`), tenant-scope and connection
+registration, and Kiosk clock-in/out for both a rostered worker and an
+unrostered one (the Team Attendance "exception" case).

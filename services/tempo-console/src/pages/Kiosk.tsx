@@ -14,15 +14,23 @@ export function KioskPage() {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
+  // Re-fetches worker + shift state without touching `message` — used
+  // after a clock-in/out so the success message set by that action
+  // survives the refresh instead of being clobbered by identify()'s own
+  // setMessage(null).
+  async function refreshWorker() {
+    const result = await whoami(context!, { method: 'pin', pin })
+    setWorker(result)
+    setShifts(await getWorkerShifts(context!, result.worker_id))
+  }
+
   async function identify(event?: FormEvent) {
     event?.preventDefault()
     setBusy(true)
     setError(null)
     setMessage(null)
     try {
-      const result = await whoami(context!, { method: 'pin', pin })
-      setWorker(result)
-      setShifts(await getWorkerShifts(context!, result.worker_id))
+      await refreshWorker()
     } catch (err) {
       setWorker(null)
       setShifts(null)
@@ -37,11 +45,11 @@ export function KioskPage() {
     setError(null)
     try {
       const result = await clockIn(context!, siteId, { method: 'pin', pin })
+      await refreshWorker()
       setMessage(
         `Clocked in at ${new Date(result.clocked_in_at).toLocaleTimeString()}` +
           (result.matched_rostered_shift ? '' : ' — no matching rostered shift found for this time'),
       )
-      await identify()
     } catch (err) {
       setError(err)
     } finally {
@@ -54,8 +62,8 @@ export function KioskPage() {
     setError(null)
     try {
       const result = await clockOut(context!, { method: 'pin', pin })
+      await refreshWorker()
       setMessage(`Clocked out. Shift duration: ${result.duration_minutes.toFixed(0)} minutes.`)
-      await identify()
     } catch (err) {
       setError(err)
     } finally {

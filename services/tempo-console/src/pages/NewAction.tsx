@@ -6,7 +6,11 @@ import { executeAction, validateAction } from '../api/actions'
 import type { ActionValidateResponse } from '../api/types'
 
 const ACTION_TYPES = ['publish_roster', 'update_assignment', 'approve_leave', 'create_training_plan']
-const SOURCE_SYSTEMS = ['deputy', 'ukg_pro_wfm', 'ukg_ready', 'wms']
+// tempo_native is the one target system with a real, working writeback
+// (app/maestro/native_writeback.py — Tempo committing to its own canonical
+// tables for Standalone deployments); the rest are Overlay vendors that
+// still honestly report 'unknown' since no real connector exists yet.
+const SOURCE_SYSTEMS = ['deputy', 'ukg_pro_wfm', 'ukg_ready', 'wms', 'tempo_native']
 
 export function NewActionPage() {
   const { context } = useTempoContext()
