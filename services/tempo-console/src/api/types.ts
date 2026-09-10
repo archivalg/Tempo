@@ -32,6 +32,10 @@ export const ACTION_TYPE_BY_RUN_TYPE: Record<string, string> = {
 export interface TempoContext {
   tenant_id: string
   company_id?: string
+  // Which LabourProvider a labour_provider-role caller manages — see
+  // services/tempo-api/app/schemas/tenancy.py's RequestContext.provider_id
+  // docstring for why this is distinct from company_id.
+  provider_id?: string
   site_ids: string[]
   customer_ids: string[]
   user_id: string
@@ -247,6 +251,37 @@ export interface UpcomingShift {
   start_at: string
   end_at: string
   status: string
+}
+
+// Mirrors app/schemas/providers.py — Business Spec §8's Labour Provider
+// role ("manage supplied workers, certifications, shift assignments").
+export interface LabourProviderRecord {
+  provider_id: string
+  tenant_id: string
+  name: string
+  status: string
+  created_at: string
+}
+
+export interface CertificationRecord {
+  id: string
+  worker_id: string
+  skill_code: string
+  valid_from: string
+  valid_to: string | null
+  level: string | null
+  evidence_ref: string | null
+}
+
+export interface SuppliedWorker {
+  worker_id: string
+  tenant_id: string
+  provider_id: string
+  employment_type: string
+  home_site: string
+  status: string
+  certifications: CertificationRecord[]
+  upcoming_shifts: UpcomingShift[]
 }
 
 export interface SiteAttendanceEntry {

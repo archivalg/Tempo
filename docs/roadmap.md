@@ -86,17 +86,20 @@ itself; **Tempo's own operational console** was not, until now.
 `services/tempo-console` — a React/TypeScript SPA — is that console, done
 to the same standard as the API: no mocked data, verified end-to-end
 against a live backend in a real browser before being called done.
-It covers the **Operations Manager** and **Tenant Admin** roles from the
-Business Spec's §8 UX roles table (whose stated needs — review AI
-recommendations and publish rosters; manage integrations and access — map
-directly onto capability the backend already fully implements) and a
-partial **Executive** view (dashboard/monitoring). Building it required two
-small, honest backend additions (`GET /v1/runs` and `GET /v1/actions` list
-endpoints, and `recommendation_id`/`run_type` on `GET /v1/runs/{id}`) — see
-`services/tempo-console/README.md` for the full scope and what it
-deliberately doesn't cover yet (Worker, Supervisor, Labour Provider — all
-three need native Tempo capture on the backend, which doesn't exist; see
-below).
+As first built, it covered the **Operations Manager** and **Tenant
+Admin** roles from the Business Spec's §8 UX roles table (whose stated
+needs — review AI recommendations and publish rosters; manage
+integrations and access — map directly onto capability the backend
+already fully implements) and a partial **Executive** view
+(dashboard/monitoring); building it required two small, honest backend
+additions (`GET /v1/runs` and `GET /v1/actions` list endpoints, and
+`recommendation_id`/`run_type` on `GET /v1/runs/{id}`). Later passes
+(not reflected in the rest of this section, which predates them — see
+`services/tempo-console/README.md` for the current, maintained scope)
+added the **Worker**, **Supervisor**, and **Labour Provider** roles too,
+each needing its own backend addition in turn: native Tempo capture
+(below) for Worker/Supervisor, and a labour-hire provider/permission
+model (`app/api/v1/providers.py`) for Labour Provider.
 
 ## The other gap the same review surfaced: native Tempo capture — Done
 

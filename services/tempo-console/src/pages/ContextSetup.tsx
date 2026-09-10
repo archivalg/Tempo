@@ -13,6 +13,7 @@ const KNOWN_ROLES = [
   '3pl_commercial',
   'hr_authorised',
   'integration_restricted',
+  'labour_provider',
 ]
 
 function csv(value: string): string[] {
@@ -29,6 +30,7 @@ export function ContextSetupPage() {
   const [tenantId, setTenantId] = useState(context?.tenant_id ?? 'ten_demo')
   const [siteIds, setSiteIds] = useState(context?.site_ids.join(', ') ?? 'site_mel_01')
   const [customerIds, setCustomerIds] = useState(context?.customer_ids.join(', ') ?? '')
+  const [providerId, setProviderId] = useState(context?.provider_id ?? '')
   const [userId, setUserId] = useState(context?.user_id ?? 'usr_demo')
   const [roles, setRoles] = useState<string[]>(context?.roles ?? ['operations_manager'])
 
@@ -42,6 +44,7 @@ export function ContextSetupPage() {
       tenant_id: tenantId,
       site_ids: csv(siteIds),
       customer_ids: csv(customerIds),
+      provider_id: providerId || undefined,
       user_id: userId,
       roles,
       purpose: 'labour.console',
@@ -70,6 +73,10 @@ export function ContextSetupPage() {
         <label>
           Customer IDs (comma-separated, optional)
           <input value={customerIds} onChange={(e) => setCustomerIds(e.target.value)} />
+        </label>
+        <label>
+          Provider ID (only meaningful with the labour_provider role below)
+          <input value={providerId} onChange={(e) => setProviderId(e.target.value)} />
         </label>
         <label>
           User ID

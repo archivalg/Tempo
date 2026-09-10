@@ -26,11 +26,13 @@ native capture already shipped everything these two pages consume.
 ## What it covers
 
 Per the Business Specification's UX roles table (§8), this v1 covers
-**Operations Manager**, **Tenant Admin**, and (partially) **Executive** —
-the roles whose stated needs ("Publish rosters, review AI recommendations,
-manage performance" / "Manage hierarchies, rules, integrations, feature
-access" / "Review network performance, labour cost, and risk") map onto
-capability the backend already fully implements:
+**Operations Manager**, **Tenant Admin**, **Labour Provider**, and
+(partially) **Executive** — the roles whose stated needs ("Publish
+rosters, review AI recommendations, manage performance" / "Manage
+hierarchies, rules, integrations, feature access" / "Manage supplied
+workers, certifications, shift assignments" / "Review network
+performance, labour cost, and risk") map onto capability the backend
+already fully implements:
 
 - **Dashboard** — data readiness by capability, and model monitoring
   (backtest error, solver-gap rate, confidence, version adoption) with an
@@ -69,16 +71,19 @@ capability the backend already fully implements:
   table row. "Cover shifts, manage exceptions" from §8's Supervisor row —
   a starting point (no live alerting/push notification), not the full
   "respond to live alerts" half of that need.
-
-**Not covered — deliberately out of scope for this pass**, because the
-backend capability it would need doesn't exist yet (see
-`services/tempo-api/README.md`'s "Known simplifications"):
-
-- **Labour Provider role** — "manage supplied workers, certifications,
-  shift assignments" needs a labour-hire-specific data model (which
-  workers belong to which provider, a provider-facing scope) that neither
-  the canonical model nor the console's tenant/site-scoped identity
-  supports yet.
+- **Labour providers** (Labour Provider) — a previously disclosed gap,
+  now closed: `POST /v1/providers` registers a labour-hire agency
+  (`labour.configure`, Tenant Admin); a `labour_provider`-role caller then
+  registers its own supplied workers, adds their certifications, and
+  views their upcoming shift assignments, all scoped to its own
+  `provider_id` — it can never reach another provider's workers (a Tenant
+  Admin can reach any provider in the tenant). Neither the role nor its
+  `labour.provider.manage` permission exist in the Integration Spec's
+  §5.2 table; this pass added both, the same class of pragmatic extension
+  as `TEMPO-ACTION-005`/`006`. A provider can only *view* which shifts its
+  workers are assigned — it cannot create or edit a `ShiftAssignment`
+  directly; Tempo's own roster optimiser stays the single source of truth
+  for scheduling.
 
 ## Identity — a disclosed stand-in, not a login
 
@@ -112,6 +117,13 @@ actually gates (e.g. `labour.approve` vs `labour.plan`, or
   not a live feed; the "respond to live alerts" half of the Supervisor
   need isn't built (same root gap as the backend's own disclosed "no
   background scheduler").
+- **A provider has no real login of its own** — a `labour_provider`-role
+  caller still authenticates through the same `/setup` context form as
+  every other role, now with a Provider ID field; there is no separate
+  provider-facing portal or credential. There is also no way to
+  deactivate a provider or offboard a supplied worker (`LabourProvider.status`
+  and `Worker.status` exist as columns but nothing sets them to anything
+  but their defaults yet).
 
 ## Run it
 
@@ -180,6 +192,8 @@ the validate → execute → reconcile action pipeline against both a
 stubbed vendor target (honestly stays `unknown`) and the real
 `tempo_native` target (`confirmed`), tenant-scope and connection
 registration, enrolling a worker's Kiosk PIN through the Onboarding form
-and proving it actually authenticates, and Kiosk clock-in/out for both a
+and proving it actually authenticates, Kiosk clock-in/out for both a
 rostered worker and an unrostered one (the Team Attendance "exception"
-case).
+case), and registering a labour provider, supplying and certifying a
+worker under it, and proving a provider can't reach another provider's
+workers.

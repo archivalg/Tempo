@@ -150,6 +150,18 @@ class GeofenceViolation(TempoError):
     title = "Clock-in location is outside the site's configured geofence"
 
 
+class ProviderNotFound(TempoError):
+    """The Integration Spec's §8.6 error catalogue predates the Labour
+    Provider role entirely (see app/models/canonical.py's LabourProvider
+    docstring) — a pragmatic extension, same class as TEMPO-ACTION-005/006
+    and TEMPO-ATTENDANCE-001/002.
+    """
+
+    status = 404
+    error_code = "TEMPO-PROVIDER-001"
+    title = "Labour provider not found, or worker not supplied by it, or not visible in caller scope"
+
+
 def problem_response(request: Request, error: TempoError) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", None)
     body = {

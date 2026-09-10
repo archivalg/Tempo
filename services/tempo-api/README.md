@@ -494,6 +494,70 @@ client, selected in `app/api/v1/actions.py`'s `_get_writeback_client` when
   anywhere in the source docs — so both still report `unknown` even for a
   `tempo_native` target, disclosed rather than guessed at.
 
+## Beyond §18 — the Labour Provider role
+
+Business Spec §8's UX roles table names a **Labour Provider** role
+("manage supplied workers, certifications, shift assignments") and §5
+names a "Labour Hire Portal" module — but neither spec, nor the
+Integration Spec's §5.2 authorisation table, defines *how*: no data model
+for "which workers belong to which provider," no permission, no scoped
+identity for a provider-side caller. Before this, `Worker.employment_type
+== "labour_hire"` was purely a costing flag (`app/solvers/workforce_mix.py`'s
+`INTERNAL_TYPES`) with no link to *which* provider supplied the worker —
+a disclosed gap in both this README and `services/tempo-console/README.md`.
+`app/api/v1/providers.py` and its supporting model/schema/permission
+changes close it:
+
+- **`LabourProvider`** (`app/models/canonical.py`) — a tenant-scoped
+  registry of labour-hire agencies. Not a §6.1 canonical entity (the
+  Integration Spec has no provider concept at all); Tempo-governed
+  configuration, same tier as `TenantScope`/`OptimisationPolicy`.
+- **`Worker.provider_id`** — a nullable FK to `LabourProvider`, set only
+  for `employment_type == "labour_hire"` workers registered through this
+  API. Every worker seeded or ingested before this change has it `NULL`.
+- **`RequestContext.provider_id`** (`app/schemas/tenancy.py`) — a new
+  scope dimension, distinct from the existing `company_id` (which is the
+  Business Spec §7 Company→Customer hierarchy for a 3PL serving its own
+  *customers*, stored since Phase F's onboarding work but still never
+  enforced anywhere). `provider_id` is enforced: a `labour_provider`-role
+  caller can only ever act on the provider matching their own
+  `provider_id`.
+- **`labour_provider` role / `labour.provider.manage` permission** — not
+  one of §5.2's seven named permissions (that table predates this role
+  entirely); a pragmatic extension, the same class as `TEMPO-ACTION-005`/
+  `006` and `TEMPO-ATTENDANCE-001`/`002`. Do not confuse this with the
+  existing `3pl_commercial` role — that one is unrelated, gating
+  `labour.margin.read` (cost-to-serve/margin visibility) for a
+  *commercial* 3PL function, not a labour-hire agency managing its own
+  workers.
+- **`POST /v1/providers`** (`labour.configure`, Tenant Admin) registers a
+  provider; **`GET /v1/providers`** (`labour.read`) lists them.
+- **`POST /v1/providers/{provider_id}/workers`** (`labour.provider.manage`
+  with a matching `provider_id`, or `labour.configure`) registers a
+  supplied worker (`employment_type="labour_hire"`, scoped to the
+  caller's site scope); **`GET .../workers`** lists a provider's workers
+  with their certifications and upcoming shifts embedded — the one real
+  rollup view §8 actually asks for, rather than three separate endpoints.
+- **`POST .../workers/{worker_id}/certifications`** adds a
+  `SkillCertification` row for a worker the caller's provider actually
+  supplies — a worker under a *different* provider 404s
+  (`TEMPO-PROVIDER-001`), the same "path resource doesn't exist for you"
+  answer `ActionNotFound` gives elsewhere, not a 403 (the 403 is reserved
+  for the provider-path mismatch itself).
+
+**What this deliberately does not do**: let a Labour Provider create or
+edit a `ShiftAssignment` directly. "Manage... shift assignments" in §8 is
+read here as *visibility* into assignments, not scheduling authority —
+Tempo's own roster optimiser (the `named_roster` run + `publish_roster`
+action) remains the only place a shift assignment is decided, the same
+relationship every other non-planning role has to the roster. There is
+also no provider-facing login (a `labour_provider` caller still
+authenticates through the same `X-Tempo-Context` stand-in as everyone
+else), no way to deactivate a provider or offboard a worker
+(`LabourProvider.status`/`Worker.status` exist but nothing sets them yet),
+and no endpoint to list a provider's own certifications catalogue
+separately from its workers.
+
 ## Known simplifications (tracked, not hidden)
 
 Phase 0:

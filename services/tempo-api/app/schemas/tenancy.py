@@ -15,6 +15,14 @@ class RequestContext(BaseModel):
     company_id: str | None = None
     site_ids: list[str] = Field(default_factory=list)
     customer_ids: list[str] = Field(default_factory=list)
+    # Which LabourProvider (app/models/canonical.py) a labour_provider-role
+    # caller manages. Distinct from company_id — that field is the Business
+    # Spec §7 Company->Customer hierarchy for a 3PL serving its own
+    # customers (stored but never enforced anywhere in this codebase);
+    # this is a different hierarchy, a labour-hire agency supplying
+    # workers *into* one tenant, with no equivalent in the Integration
+    # Spec at all (§5.1's own RequestContext example has no such field).
+    provider_id: str | None = None
     user_id: str
     roles: list[str] = Field(default_factory=list)
     purpose: str
@@ -45,6 +53,11 @@ class _RolePermissions:
         "3pl_commercial": {"labour.margin.read"},
         "hr_authorised": {"labour.worker_pii"},
         "integration_restricted": {"labour.writeback"},
+        # Not one of §5.2's seven named permissions — that table has no
+        # row for the Business Spec's §8 Labour Provider role at all (see
+        # app/models/canonical.py's LabourProvider docstring). A pragmatic
+        # extension, same class as TEMPO-ACTION-005/006 in app/errors.py.
+        "labour_provider": {"labour.provider.manage"},
     }
 
     def get_permissions(self, roles: list[str]) -> set[str]:

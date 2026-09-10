@@ -15,6 +15,7 @@ export interface ContextOptions {
   roles?: string[]
   siteIds?: string[]
   customerIds?: string[]
+  providerId?: string
 }
 
 /** Sets the console's X-Tempo-Context directly via localStorage — the
@@ -30,6 +31,7 @@ export async function setContext(page: Page, options: ContextOptions = {}): Prom
     tenant_id: TENANT_ID,
     site_ids: options.siteIds ?? [SITE_ID],
     customer_ids: options.customerIds ?? [],
+    provider_id: options.providerId,
     user_id: options.userId ?? 'usr_e2e',
     roles: options.roles ?? ['operations_manager'],
     purpose: 'labour.console',

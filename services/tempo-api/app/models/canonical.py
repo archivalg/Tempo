@@ -40,6 +40,25 @@ class TenantScope(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class LabourProvider(Base):
+    """A labour-hire agency supplying contingent workers to a tenant —
+    Business Spec §5's "Labour Hire Portal" module and §8's Labour
+    Provider UX role ("manage supplied workers, certifications, shift
+    assignments"). Not a §6.1 canonical entity (the Integration Spec has
+    no provider concept at all — see app/schemas/tenancy.py's
+    RequestContext.provider_id docstring); a Tempo-governed registry, same
+    tier as TenantScope/OptimisationPolicy.
+    """
+
+    __tablename__ = "labour_provider"
+
+    provider_id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    name: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Worker(Base):
     __tablename__ = "worker"
 
@@ -50,6 +69,11 @@ class Worker(Base):
     status: Mapped[str] = mapped_column(String, default="active")
     source_system: Mapped[str] = mapped_column(String, default="tempo_native")
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Set only for employment_type == "labour_hire" — which provider
+    # supplied this worker (app/api/v1/providers.py). Nullable because
+    # every other employment_type, and every labour_hire worker ingested
+    # before this existed, has no provider on file.
+    provider_id: Mapped[str | None] = mapped_column(String, ForeignKey("labour_provider.provider_id"), nullable=True, index=True)
 
 
 class SkillCertification(Base):
