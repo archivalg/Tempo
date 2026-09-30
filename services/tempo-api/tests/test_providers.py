@@ -127,6 +127,7 @@ def test_labour_provider_cannot_certify_a_worker_it_does_not_supply(client):
 
 
 def test_provider_not_found_is_404(client):
-    response = client.get("/v1/providers/prov_nonexistent/workers", headers=_provider_header("prov_nonexistent"))
+    # A grant to a nonexistent provider cannot exist (FK), so the "unknown id" case is a tenant admin's.
+    response = client.get("/v1/providers/prov_nonexistent/workers", headers=context_header(roles=["tenant_admin"]))
     assert response.status_code == 404
     assert response.json()["error_code"] == "TEMPO-PROVIDER-001"

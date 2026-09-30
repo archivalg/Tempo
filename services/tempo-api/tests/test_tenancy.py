@@ -1,11 +1,10 @@
 from .conftest import context_header
 
 
-def test_missing_context_header_rejected(client):
+def test_unauthenticated_request_rejected(client):
     response = client.get("/v1/data-readiness", params={"capability": "optimize.roster"})
-    assert response.status_code == 400
-    body = response.json()
-    assert body["error_code"] == "TEMPO-SCOPE-001"
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "TEMPO-AUTH-001"
 
 
 def test_wide_open_tenant_scope_rejected(client):
@@ -15,13 +14,13 @@ def test_wide_open_tenant_scope_rejected(client):
     assert response.json()["error_code"] == "TEMPO-SCOPE-001"
 
 
-def test_malformed_context_header_rejected(client):
+def test_legacy_context_header_is_not_authentication(client):
     response = client.get(
         "/v1/data-readiness",
         params={"capability": "optimize.roster"},
         headers={"X-Tempo-Context": "not json"},
     )
-    assert response.status_code == 400
+    assert response.status_code == 401
 
 
 def test_valid_context_is_accepted(client):

@@ -1,67 +1,41 @@
-"""DAT-02: "Replace automatic create-all schema management with versioned
-Alembic migrations" — acceptance criterion "the previous supported release
-can be upgraded without data loss" and "a clean environment can be created
-solely through migrations." This test drives Alembic's own Python API
-(not a shell-out) against a throwaway SQLite file, proving upgrade head
-and downgrade base both work cleanly — the same property a real Oracle
-environment needs, checked here without needing one (ADR-0002).
-"""
+"""DAT-02 on PostgreSQL (ADR-0011): a clean database is built solely through migrations,
+and the migrations round-trip (upgrade head -> downgrade base -> upgrade head)."""
 from __future__ import annotations
 
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import inspect, text
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _alembic_config(db_url: str) -> Config:
+def _cfg(owner_engine) -> Config:
     config = Config(str(REPO_ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", db_url)
+    config.set_main_option("sqlalchemy.url", owner_engine.url.render_as_string(hide_password=False))
     return config
 
 
-def test_upgrade_head_creates_every_application_table(tmp_path):
-    db_path = tmp_path / "migration_test.db"
-    db_url = f"sqlite:///{db_path}"
-
-    command.upgrade(_alembic_config(db_url), "head")
-
-    inspector = inspect(create_engine(db_url))
-    tables = set(inspector.get_table_names())
+def test_upgrade_head_creates_every_application_table(owner_engine):
+    tables = set(inspect(owner_engine).get_table_names())
     assert "alembic_version" in tables
-    # Spot-check tables from every model module Alembic's env.py imports —
-    # a real regression here would mean env.py stopped seeing one of them.
     for expected in (
-        "optimisation_run",
-        "optimisation_run_site",
-        "optimisation_run_customer",
-        "optimisation_snapshot",
-        "action_request",
-        "worker",
-        "labour_provider",
-        "tempo_user",
-        "tenant_membership",
-        "user_site_grant",
-        "security_audit_event",
-        "maestro_connection",
-        "connector_credential_reference",
-        "worker_credential",
+        "optimisation_run", "optimisation_run_site", "optimisation_run_customer", "optimisation_snapshot",
+        "action_request", "worker", "labour_provider", "tempo_user", "tenant_membership", "user_site_grant",
+        "security_audit_event", "maestro_connection", "connector_credential_reference", "worker_credential",
+        "platform_admin",
     ):
         assert expected in tables, f"expected table '{expected}' missing after upgrade head"
 
 
-def test_downgrade_base_leaves_only_alembic_bookkeeping(tmp_path):
-    db_path = tmp_path / "migration_downgrade_test.db"
-    db_url = f"sqlite:///{db_path}"
-    config = _alembic_config(db_url)
-
-    command.upgrade(config, "head")
-    command.downgrade(config, "base")
-
-    inspector = inspect(create_engine(db_url))
-    tables = set(inspector.get_table_names())
-    assert tables == {"alembic_version"}
+def test_downgrade_base_then_upgrade_round_trips(owner_engine):
+    cfg = _cfg(owner_engine)
+    try:
+        command.downgrade(cfg, "base")
+        assert set(inspect(owner_engine).get_table_names()) == {"alembic_version"}
+    finally:
+        command.upgrade(cfg, "head")
+    with owner_engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM pg_class WHERE relrowsecurity")).scalar() >= 40

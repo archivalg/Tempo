@@ -40,7 +40,7 @@ if config.config_file_name is not None:
 # that test actually failing.
 _ALEMBIC_INI_PLACEHOLDER_URL = "driver://user:pass@localhost/dbname"
 if config.get_main_option("sqlalchemy.url") in (None, _ALEMBIC_INI_PLACEHOLDER_URL):
-    config.set_main_option("sqlalchemy.url", settings.database_url)
+    config.set_main_option("sqlalchemy.url", settings.database_migration_url)
 
 target_metadata = Base.metadata
 

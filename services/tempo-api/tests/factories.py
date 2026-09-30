@@ -64,6 +64,7 @@ def seed_named_roster_scenario(session, tenant_id: str, site_id: str, window_sta
             status="active",
         )
         session.add(worker)
+        session.flush()  # PostgreSQL enforces the worker FK; SQLite never did
         session.add(
             SkillCertification(
                 tenant_id=tenant_id,

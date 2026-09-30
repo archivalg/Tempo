@@ -11,7 +11,24 @@ class Settings(BaseSettings):
     there; no application code changes needed since access goes through SQLAlchemy.
     """
 
-    database_url: str = "sqlite:///./tempo_dev.db"
+    # PostgreSQL only (ADR-0011). This is the *runtime* URL and must use the
+    # non-owner `tempo_app` role so RLS applies; migrations use
+    # `database_migration_url` (the `tempo_owner` role). No default password:
+    # the URL must come from the environment (.env.example documents it).
+    env: str = "local"  # local | test | uat | production
+    database_url: str = "postgresql+psycopg://tempo_app@localhost:5447/tempo"
+    database_migration_url: str = "postgresql+psycopg://tempo_owner@localhost:5447/tempo"
+    # Signs Tempo-issued short-lived access tokens (HS256). Required outside local.
+    session_signing_key: str = ""
+    access_token_ttl_seconds: int = 900
+    refresh_token_ttl_seconds: int = 60 * 60 * 12
+    session_cookie_secure: bool = True
+    # OIDC adapter (ADR-0001, production IdP choice still open).
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    # Restricted local identity provider: only honoured when env == "local"/"test".
+    dev_idp_enabled: bool = False
     # DAT-04: pooling/retry/timeout, applied by app/db.py only for a real
     # (non-SQLite) database — SQLite's default poolclass (NullPool)
     # doesn't accept pool_size/max_overflow at all, so these are inert
@@ -44,6 +61,31 @@ class Settings(BaseSettings):
     console_cors_origins: str = "http://localhost:5173"
 
     model_config = {"env_prefix": "TEMPO_"}
+
+
+INSECURE_ACTION_TOKEN_DEFAULT = "dev-insecure-action-token-secret-change-in-production"
+
+
+def validate_settings(config: Settings) -> None:
+    """Fail closed on start: production-like environments reject insecure defaults."""
+    if config.env == "production" or config.env == "uat":
+        problems = []
+        if config.action_token_secret == INSECURE_ACTION_TOKEN_DEFAULT or len(config.action_token_secret) < 32:
+            problems.append("TEMPO_ACTION_TOKEN_SECRET must be set to a strong secret")
+        if len(config.session_signing_key) < 32:
+            problems.append("TEMPO_SESSION_SIGNING_KEY must be set (>=32 chars)")
+        if config.dev_idp_enabled:
+            problems.append("TEMPO_DEV_IDP_ENABLED must be false")
+        if not config.session_cookie_secure:
+            problems.append("TEMPO_SESSION_COOKIE_SECURE must be true")
+        if not (config.oidc_issuer and config.oidc_audience and config.oidc_jwks_url):
+            problems.append("OIDC issuer/audience/jwks_url must be configured")
+        if "*" in config.console_cors_origins:
+            problems.append("TEMPO_CONSOLE_CORS_ORIGINS must not be '*'")
+        if problems:
+            raise RuntimeError("insecure configuration: " + "; ".join(problems))
+    if config.dev_idp_enabled and config.env not in ("local", "test"):
+        raise RuntimeError("TEMPO_DEV_IDP_ENABLED is only permitted when TEMPO_ENV is local or test")
 
 
 settings = Settings()

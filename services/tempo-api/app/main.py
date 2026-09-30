@@ -13,13 +13,14 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import router as v1_router
-from app.config import settings
+from app.config import settings, validate_settings
 from app.db import init_db
 from app.errors import TempoError, tempo_error_handler
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    validate_settings(settings)
     init_db()
     yield
 
@@ -29,9 +30,9 @@ app.add_exception_handler(TempoError, tempo_error_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in settings.console_cors_origins.split(",") if origin.strip()],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "Idempotency-Key", "X-CSRF-Token", "X-Tempo-Tenant", "X-Correlation-Id"],
 )
 
 

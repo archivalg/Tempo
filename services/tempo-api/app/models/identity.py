@@ -67,6 +67,11 @@ class TempoUser(Base):
     account_status: Mapped[str] = mapped_column(String, default="active")
     token_version: Mapped[int] = mapped_column(default=0)
     mfa_policy_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Verified-by-IdP email, lower-cased. `external_subject` may be a
+    # "pending:email:<addr>" placeholder until the invited person's first
+    # verified login links the real IdP subject (bootstrap / invitations).
+    email: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -173,6 +178,13 @@ class KioskDevice(Base):
     credential_reference: Mapped[str | None] = mapped_column(String, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     config_version: Mapped[str] = mapped_column(String, default="1")
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # One-time enrolment: only a digest of the code is stored; consumed on use.
+    enrolment_code_digest: Mapped[str | None] = mapped_column(String, nullable=True)
+    enrolment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ServiceClient(Base):
@@ -220,6 +232,9 @@ class UserSession(Base):
     replaced_by: Mapped[str | None] = mapped_column(String, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     device_metadata: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Set when the IdP asserted MFA (amr) for this login; step-up freshness.
+    mfa_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auth_method: Mapped[str] = mapped_column(String, default="oidc")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -266,3 +281,17 @@ class SecurityAuditEvent(Base):
     session_or_grant_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     correlation_id: Mapped[str] = mapped_column(String, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PlatformAdmin(Base):
+    """A platform-level principal (separate from any tenant membership). Holds
+    no ambient tenant-data access: reaching a tenant needs a live
+    PrivilegedSupportGrant. Created only by the one-time bootstrap command or
+    by an existing platform admin (second-admin recovery)."""
+
+    __tablename__ = "platform_admin"
+
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("tempo_user.user_id"), primary_key=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)  # None => bootstrap
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
