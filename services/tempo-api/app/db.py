@@ -101,5 +101,6 @@ def init_db() -> None:
     import app.models.attendance  # noqa: F401
     import app.models.canonical  # noqa: F401
     import app.models.connectors  # noqa: F401
+    import app.models.directory  # noqa: F401
     import app.models.identity  # noqa: F401
     import app.models.runs  # noqa: F401

@@ -13,6 +13,7 @@ from alembic import context
 import app.models.attendance  # noqa: E402,F401
 import app.models.canonical  # noqa: E402,F401
 import app.models.connectors  # noqa: E402,F401
+import app.models.directory  # noqa: E402,F401
 import app.models.identity  # noqa: E402,F401
 import app.models.runs  # noqa: E402,F401
 from app.config import settings  # noqa: E402

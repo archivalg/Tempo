@@ -151,3 +151,14 @@ def test_production_start_rejects_insecure_defaults():
         validate_settings(Settings(env="uat", dev_idp_enabled=True))
     with pytest.raises(RuntimeError, match="only permitted"):
         validate_settings(Settings(env="staging", dev_idp_enabled=True))
+
+
+def test_dev_identity_list_exists_only_when_the_dev_idp_is_enabled(client, monkeypatch):
+    with client.session_local() as s:
+        s.add(TempoUser(user_id="usr_demo", external_subject="dev|x", email="x@demo.tempo.invalid", display_name="Demo X (synthetic)"))
+        s.add(TempoUser(user_id="usr_real", external_subject="idp|real", email="real@example.com"))
+        s.commit()
+    ok = client.get("/v1/auth/dev-identities")
+    assert ok.status_code == 200 and [i["email"] for i in ok.json()] == ["x@demo.tempo.invalid"]  # never a real user
+    monkeypatch.setattr(settings, "dev_idp_enabled", False)
+    assert client.get("/v1/auth/dev-identities").status_code == 401

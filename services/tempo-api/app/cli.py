@@ -60,12 +60,38 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--operator", required=True, help="who is running this (recorded in the audit trail)")
     b.add_argument("--confirm-verified-identity", action="store_true",
                    help="assert the subject/email was verified with the identity provider")
+    d = sub.add_parser("bootstrap-ensemble-demo", help="seed the synthetic Ensemble Solutions tenant (non-production only)")
+    d.add_argument("--reset", action="store_true", help="wipe the demo tenant first and re-seed anchored to now")
+    d.add_argument("--secrets-dir", help="where the demo kiosk enrolment code / PINs are written (mode 600); default ~/.config/tempo-demo")
+    sub.add_parser("reset-ensemble-demo", help="delete the synthetic demo tenant (non-production only)")
+    sub.add_parser("demo-status", help="show the demo seed manifest")
     args = ap.parse_args(argv)
     if args.cmd == "bootstrap-platform-admin":
         if not args.confirm_verified_identity:
             print("refused: pass --confirm-verified-identity after verifying the identity with the IdP", file=sys.stderr)
             return 2
         return bootstrap_platform_admin(subject=args.subject, email=args.email, operator=args.operator)
+    if args.cmd in ("bootstrap-ensemble-demo", "reset-ensemble-demo", "demo-status"):
+        import json
+
+        from app.demo import ensemble
+
+        if args.cmd == "bootstrap-ensemble-demo":
+            print(json.dumps(ensemble.bootstrap(reset_first=args.reset, secrets_dir=args.secrets_dir), indent=2, default=str))
+        elif args.cmd == "reset-ensemble-demo":
+            db = db_module.SessionLocal()
+            try:
+                ensemble.reset(db)
+            finally:
+                db.close()
+            print("demo tenant removed")
+        else:
+            db = db_module.SessionLocal()
+            try:
+                print(json.dumps(ensemble.status(db), indent=2, default=str))
+            finally:
+                db.close()
+        return 0
     return 2
 
 

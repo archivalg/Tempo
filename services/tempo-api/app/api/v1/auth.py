@@ -26,16 +26,17 @@ _STATE_COOKIE = "tempo_oidc"
 
 
 def _set_session_cookies(resp: Response, s: auth.IssuedSession) -> None:
-    common = {"secure": settings.session_cookie_secure, "samesite": "lax"}
+    common = {"secure": settings.session_cookie_secure, "samesite": "lax", "domain": settings.cookie_domain or None}
     resp.set_cookie(ACCESS_COOKIE, s.access_token, httponly=True, max_age=settings.access_token_ttl_seconds, path="/", **common)
     resp.set_cookie(REFRESH_COOKIE, s.refresh_token, httponly=True, max_age=settings.refresh_token_ttl_seconds, path="/v1/auth", **common)
     resp.set_cookie(CSRF_COOKIE, s.csrf_token, httponly=False, max_age=settings.refresh_token_ttl_seconds, path="/", **common)
 
 
 def _clear(resp: Response) -> None:
-    resp.delete_cookie(ACCESS_COOKIE, path="/")
-    resp.delete_cookie(REFRESH_COOKIE, path="/v1/auth")
-    resp.delete_cookie(CSRF_COOKIE, path="/")
+    d = settings.cookie_domain or None
+    resp.delete_cookie(ACCESS_COOKIE, path="/", domain=d)
+    resp.delete_cookie(REFRESH_COOKIE, path="/v1/auth", domain=d)
+    resp.delete_cookie(CSRF_COOKIE, path="/", domain=d)
 
 
 class AuthConfig(BaseModel):
@@ -50,6 +51,21 @@ def auth_config() -> AuthConfig:
         return AuthConfig(provider="dev-local", production_authentication=False,
                           notice="Local development identity. Not production authentication.")
     return AuthConfig(provider="oidc" if get_oidc() else "unconfigured", production_authentication=bool(get_oidc()))
+
+
+@router.get("/auth/dev-identities")
+def dev_identities(db: Session = Depends(get_db)) -> list[dict]:
+    """Local development only: lists the synthetic demo identities so the login screen can offer them.
+    Returns 404-equivalent (empty) unless the dev IdP is enabled, and the dev IdP itself refuses to run
+    outside TEMPO_ENV=local|test."""
+    if not settings.dev_idp_enabled or settings.env not in ("local", "test"):
+        raise AuthInvalid("dev identity provider is disabled")
+    from sqlalchemy import select
+    from app.db import begin_auth_lookup
+    from app.models.identity import TempoUser
+    begin_auth_lookup(db)
+    rows = db.scalars(select(TempoUser).where(TempoUser.email.like("%@demo.tempo.invalid")).order_by(TempoUser.email)).all()
+    return [{"subject": u.external_subject, "email": u.email, "display_name": u.display_name} for u in rows]
 
 
 class DevLogin(BaseModel):

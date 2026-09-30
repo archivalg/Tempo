@@ -12,6 +12,7 @@ missing_evidence, not silently assumed away).
 from __future__ import annotations
 
 from collections import defaultdict
+import uuid
 from datetime import datetime, timezone
 
 from ortools.sat.python import cp_model
@@ -22,7 +23,7 @@ from app.core.policy import resolve_policy
 from app.models.canonical import Availability, LabourCostRule, ShiftAssignment as ShiftAssignmentRow, SkillCertification, Worker
 from app.schemas.runs import ConfidenceComponents, RunRequest
 from app.solvers.base import InsufficientData, SolverOutcome
-from app.solvers.shifts import SHIFT_CALENDAR
+from app.solvers.shifts import calendar_from_constraints, shift_bounds_utc, split_headcount
 from app.solvers.workforce_mix import solve_workforce_mix
 
 SOLVE_TIME_LIMIT_SECONDS = 10.0
@@ -36,13 +37,11 @@ def _target_headcount(mix_assignments: list[dict]) -> dict[tuple[str, str, str],
     return totals
 
 
-def _split_across_shifts(totals: dict[tuple[str, str, str], int]) -> dict[tuple[str, str, str, str], int]:
-    codes = [s.code for s in SHIFT_CALENDAR]
+def _split_across_shifts(totals: dict[tuple[str, str, str], int], calendar) -> dict[tuple[str, str, str, str], int]:
     per_shift: dict[tuple[str, str, str, str], int] = {}
     for (day, role, zone), total in totals.items():
-        base, remainder = divmod(total, len(codes))
-        for index, code in enumerate(codes):
-            per_shift[(day, code, role, zone)] = base + (1 if index < remainder else 0)
+        for code, n in split_headcount(total, calendar).items():
+            per_shift[(day, code, role, zone)] = n
     return per_shift
 
 
@@ -86,8 +85,10 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
     targets = _target_headcount(mix_outcome.result["assignments"])
     if not targets:
         raise InsufficientData("workforce mix produced no headcount targets to build a roster against")
-    per_shift_targets = _split_across_shifts(targets)
-    shift_hours = {s.code: int(s.hours) for s in SHIFT_CALENDAR}
+    calendar = calendar_from_constraints(policy.constraints)
+    per_shift_targets = _split_across_shifts(targets, calendar)
+    shift_hours = {s.code: int(s.hours) for s in calendar}
+    tz_name = request.planning_window.timezone
 
     workers = db.scalars(
         select(Worker)
@@ -207,9 +208,12 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
         hours = shift_hours[shift_code]
         cost = rate * hours
         total_cost += cost
-        shift_def = next(s for s in SHIFT_CALENDAR if s.code == shift_code)
+        shift_def = next(s for s in calendar if s.code == shift_code)
+        start_utc, end_utc = shift_bounds_utc(day, shift_def, tz_name)
+        shift_id = str(uuid.uuid4())
         assignments.append(
             {
+                "shift_id": shift_id,
                 "worker_id": worker_id,
                 "day": day,
                 "shift_code": shift_code,
@@ -218,15 +222,15 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
                 "hours": hours,
             }
         )
-        day_start = datetime.fromisoformat(day)
         proposed_rows.append(
             ShiftAssignmentRow(
+                shift_id=shift_id,
                 tenant_id=tenant_id,
                 worker_id=worker_id,
                 role=role,
                 zone=zone,
-                start_at=day_start.replace(hour=shift_def.start_hour, tzinfo=timezone.utc),
-                end_at=day_start.replace(hour=shift_def.end_hour, tzinfo=timezone.utc),
+                start_at=start_utc,
+                end_at=end_utc,
                 status="proposed",
             )
         )

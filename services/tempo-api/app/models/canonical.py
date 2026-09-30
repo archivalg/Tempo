@@ -144,6 +144,8 @@ class DemandBucket(Base):
     interval_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     volume: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String)
+    # Granularity of this row (60 = hourly, 1440 = daily). Forecast series never mix granularities.
+    bucket_minutes: Mapped[int] = mapped_column(default=60)
 
 
 class ZoneBacklog(Base):

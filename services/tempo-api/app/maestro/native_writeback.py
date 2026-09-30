@@ -28,9 +28,6 @@ from sqlalchemy.orm import Session
 from app.maestro.writeback import WritebackOutcome
 from app.models.canonical import Availability, ShiftAssignment
 from app.models.runs import Recommendation
-from app.solvers.shifts import SHIFT_CALENDAR
-
-_SHIFT_BY_CODE = {shift.code: shift for shift in SHIFT_CALENDAR}
 _UNIMPLEMENTED_DETAIL = "native writeback for action_type '{action_type}' has no defined write target — not implemented"
 
 
@@ -77,21 +74,13 @@ class TempoNativeWritebackClient:
         committed = 0
         not_found = 0
         for row in assignments:
-            shift = _SHIFT_BY_CODE.get(row["shift_code"])
-            if shift is None:
-                not_found += 1
-                continue
-            day = datetime.fromisoformat(row["day"]).replace(tzinfo=timezone.utc)
+            # Promote by the stable shift_id the solver assigned; never re-derive times.
             proposed = self._db.scalar(
                 select(ShiftAssignment)
                 .where(ShiftAssignment.tenant_id == self._tenant_id)
-                .where(ShiftAssignment.worker_id == row["worker_id"])
-                .where(ShiftAssignment.role == row["role"])
-                .where(ShiftAssignment.zone == row["zone"])
-                .where(ShiftAssignment.start_at == day + timedelta(hours=shift.start_hour))
-                .where(ShiftAssignment.end_at == day + timedelta(hours=shift.end_hour))
+                .where(ShiftAssignment.shift_id == row.get("shift_id"))
                 .where(ShiftAssignment.status == "proposed")
-            )
+            ) if row.get("shift_id") else None
             if proposed is None:
                 not_found += 1
                 continue

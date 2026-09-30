@@ -61,6 +61,7 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         .where(DemandBucket.site_id.in_(site_ids))
         .where(DemandBucket.interval_start >= lookback_start)
         .where(DemandBucket.interval_start < window.start)
+        .where(DemandBucket.bucket_minutes == window.bucket_minutes)
         .order_by(DemandBucket.activity, DemandBucket.interval_start)
     ).all()
 

@@ -54,6 +54,12 @@ PERMISSION_CODES: frozenset[str] = frozenset(
         "labour.margin.read",
         "labour.worker_pii",
         "labour.provider.manage",
+        # Gate 3: pay-rate and cost visibility is its own entitlement; exceptions have a manage
+        # permission (assign/acknowledge/resolve) distinct from merely viewing them.
+        "labour.rates.read",
+        "labour.exception.manage",
+        # Display names on rosters/attendance. Distinct from labour.worker_pii (deeper personal data).
+        "labour.worker_names",
     }
 )
 
@@ -61,15 +67,15 @@ PERMISSION_CODES: frozenset[str] = frozenset(
 # (§6.2) except labour_provider, which is a "Labour-provider user" —
 # see ROLE_PRINCIPAL_TYPE below.
 ROLE_PERMISSION_MATRIX: dict[str, frozenset[str]] = {
-    "supervisor": frozenset({"labour.read"}),
+    "supervisor": frozenset({"labour.read", "labour.exception.manage", "labour.worker_names"}),
     "analyst": frozenset({"labour.read"}),
-    "executive": frozenset({"labour.read", "labour.margin.read"}),
-    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve"}),
-    "planner": frozenset({"labour.read", "labour.plan"}),
-    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure"}),
-    "finance": frozenset({"labour.margin.read"}),
+    "executive": frozenset({"labour.read", "labour.margin.read", "labour.rates.read"}),
+    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names"}),
+    "planner": frozenset({"labour.read", "labour.plan", "labour.rates.read", "labour.worker_names"}),
+    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names"}),
+    "finance": frozenset({"labour.margin.read", "labour.rates.read"}),
     "3pl_commercial": frozenset({"labour.margin.read"}),
-    "hr_authorised": frozenset({"labour.worker_pii"}),
+    "hr_authorised": frozenset({"labour.worker_pii", "labour.worker_names"}),
     "integration_restricted": frozenset({"labour.writeback"}),
     "labour_provider": frozenset({"labour.provider.manage"}),
 }

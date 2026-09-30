@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     access_token_ttl_seconds: int = 900
     refresh_token_ttl_seconds: int = 60 * 60 * 12
     session_cookie_secure: bool = True
+    # Set to the parent domain (e.g. ".tempo.example") so app.* can read the CSRF cookie set by api.*.
+    # Empty = host-only cookies (local development).
+    cookie_domain: str = ""
     # OIDC adapter (ADR-0001, production IdP choice still open).
     oidc_issuer: str = ""
     oidc_audience: str = ""
