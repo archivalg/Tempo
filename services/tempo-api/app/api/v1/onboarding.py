@@ -105,7 +105,7 @@ def list_tenant_scopes(
 ) -> list[TenantScopeResponse]:
     if not context.has_permission("labour.read"):
         raise AuthForbidden("caller lacks labour.read permission required to view tenant scopes")
-    rows = db.scalars(select(TenantScope).where(TenantScope.tenant_id == context.tenant_id)).all()
+    rows = db.scalars(select(TenantScope).where(TenantScope.tenant_id == context.tenant_id, TenantScope.site_id.in_(list(context.site_ids)))).all()
     return [
         TenantScopeResponse(tenant_id=r.tenant_id, site_id=r.site_id, company_id=r.company_id, customer_id=r.customer_id, created_at=_aware(r.created_at))
         for r in rows
@@ -149,7 +149,7 @@ def list_connections(
 ) -> ConnectionListResponse:
     if not context.has_permission("labour.read"):
         raise AuthForbidden("caller lacks labour.read permission required to view connections")
-    rows = db.scalars(select(MaestroConnection).where(MaestroConnection.tenant_id == context.tenant_id)).all()
+    rows = db.scalars(select(MaestroConnection).where(MaestroConnection.tenant_id == context.tenant_id, MaestroConnection.site_id.in_(list(context.site_ids)))).all()
     return ConnectionListResponse(
         connections=[
             ConnectionResponse(
@@ -163,7 +163,7 @@ def list_connections(
 
 def _get_owned_connection(db: Session, context: RequestContext, connection_id: str) -> MaestroConnection:
     connection = db.get(MaestroConnection, connection_id)
-    if connection is None or connection.tenant_id != context.tenant_id:
+    if connection is None or connection.tenant_id != context.tenant_id or connection.site_id not in context.site_ids:
         raise RunNotFound(f"connection '{connection_id}' not found or not visible in caller scope")
     return connection
 

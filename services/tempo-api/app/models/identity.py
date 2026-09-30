@@ -185,6 +185,10 @@ class KioskDevice(Base):
     enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Device-level abuse throttle: many failed worker credentials in a window lock the device briefly.
+    failed_count: Mapped[int] = mapped_column(default=0)
+    failed_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ServiceClient(Base):
@@ -295,3 +299,18 @@ class PlatformAdmin(Base):
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)  # None => bootstrap
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Tenant(Base):
+    """A customer organisation. Created by a platform admin; holds no worker data itself."""
+
+    __tablename__ = "tenant"
+
+    tenant_id: Mapped[str] = mapped_column(String, primary_key=True)
+    name: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String, default="active")  # active | suspended
+    plan: Mapped[str] = mapped_column(String, default="pilot")
+    feature_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    writeback_enabled: Mapped[bool] = mapped_column(default=False)  # tenant kill switch (default OFF)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

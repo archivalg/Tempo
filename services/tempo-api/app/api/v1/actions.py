@@ -229,7 +229,7 @@ def validate_action(
 
 def _get_owned_action(db: Session, context: RequestContext, action_id: str) -> ActionRequest:
     action = db.get(ActionRequest, action_id)
-    if action is None or action.tenant_id != context.tenant_id:
+    if action is None or action.tenant_id != context.tenant_id or action.site_id not in context.site_ids:
         raise ActionNotFound(f"action '{action_id}' not found or not visible in caller scope")
     return action
 
@@ -336,7 +336,9 @@ def list_actions(
     """List view backing the console (services/tempo-console) — the same
     cursor-by-(created_at, id) pattern app/api/v1/runs.py's list_runs uses.
     """
-    query = select(ActionRequest).where(ActionRequest.tenant_id == context.tenant_id)
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read")
+    query = select(ActionRequest).where(ActionRequest.tenant_id == context.tenant_id, ActionRequest.site_id.in_(list(context.site_ids)))
     if status_filter:
         query = query.where(ActionRequest.status == status_filter)
     if cursor:
@@ -367,6 +369,8 @@ def get_action(
     context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read")
     action = _get_owned_action(db, context, action_id)
     return {
         "action_id": action.action_id,

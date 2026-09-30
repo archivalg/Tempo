@@ -31,6 +31,7 @@ from app.db import begin_auth_lookup
 from app.errors import AuthForbidden, AuthInvalid
 from app.models.identity import (
     PlatformAdmin,
+    Tenant,
     SecurityAuditEvent,
     TempoUser,
     TenantMembership,
@@ -211,6 +212,29 @@ def load_session_and_user(db: Session, claims: dict) -> tuple[UserSession, Tempo
     return session, user
 
 
+STEP_UP_WINDOW = timedelta(minutes=30)
+
+
+def resolve_platform_principal(db: Session, token: str) -> ResolvedPrincipal:
+    """Platform routes: requires an active PlatformAdmin row and MFA. Grants no tenant data access."""
+    claims = verify_access_token(token)
+    session, user = load_session_and_user(db, claims)
+    pa = db.get(PlatformAdmin, user.user_id)
+    if pa is None or pa.revoked_at is not None:
+        raise AuthForbidden("access denied")
+    if session.mfa_verified_at is None:
+        raise AuthForbidden("multi-factor authentication required")
+    return ResolvedPrincipal("platform_admin", user.user_id, session.session_id, None, mfa_verified_at=session.mfa_verified_at,
+                             is_platform_admin=True, csrf_digest=session.csrf_digest)
+
+
+def require_step_up(principal: ResolvedPrincipal) -> None:
+    """Sensitive platform actions need a recent MFA assertion (ADR-0008)."""
+    at = _aware(principal.mfa_verified_at)
+    if at is None or _now() - at > STEP_UP_WINDOW:
+        raise AuthForbidden("step-up authentication required")
+
+
 def resolve_principal(db: Session, token: str, tenant_selector: str | None) -> ResolvedPrincipal:
     claims = verify_access_token(token)
     session, user = load_session_and_user(db, claims)
@@ -235,6 +259,9 @@ def resolve_principal(db: Session, token: str, tenant_selector: str | None) -> R
     if tenant_selector not in {m.tenant_id for m in memberships}:
         raise AuthForbidden("access denied")
     tid = tenant_selector
+    tenant = db.get(Tenant, tid)
+    if tenant is None or tenant.status != "active":
+        raise AuthForbidden("access denied")
     roles = list(db.scalars(select(UserRoleAssignment.role).where(
         UserRoleAssignment.user_id == user.user_id, UserRoleAssignment.tenant_id == tid)))
     sites = list(db.scalars(select(UserSiteGrant.site_id).where(

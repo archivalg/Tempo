@@ -35,8 +35,7 @@ SOURCE_SYSTEM = "tempo_native"
 EARTH_RADIUS_METERS = 6_371_000.0
 
 
-def hash_pin(pin: str) -> str:
-    return hashlib.sha256(pin.encode()).hexdigest()
+from app.core.kiosk import hash_pin  # noqa: F401  (Argon2id; see app/core/kiosk.py)
 
 
 def _now() -> datetime:
@@ -53,30 +52,6 @@ def haversine_meters(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     dlambda = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
     return EARTH_RADIUS_METERS * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-
-
-def resolve_worker_by_pin(db: Session, tenant_id: str, pin: str) -> Worker:
-    credential = db.scalar(
-        select(WorkerCredential).where(WorkerCredential.tenant_id == tenant_id).where(WorkerCredential.pin_hash == hash_pin(pin))
-    )
-    if credential is None:
-        raise AuthInvalid("PIN not recognised for this tenant")
-    worker = db.get(Worker, credential.worker_id)
-    if worker is None or worker.status != "active":
-        raise AuthInvalid("worker is not active")
-    return worker
-
-
-def resolve_worker_by_nfc(db: Session, tenant_id: str, nfc_tag_id: str) -> Worker:
-    credential = db.scalar(
-        select(WorkerCredential).where(WorkerCredential.tenant_id == tenant_id).where(WorkerCredential.nfc_tag_id == nfc_tag_id)
-    )
-    if credential is None:
-        raise AuthInvalid("NFC tag not recognised for this tenant")
-    worker = db.get(Worker, credential.worker_id)
-    if worker is None or worker.status != "active":
-        raise AuthInvalid("worker is not active")
-    return worker
 
 
 def check_geofence(db: Session, tenant_id: str, site_id: str, latitude: float, longitude: float) -> str:

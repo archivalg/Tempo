@@ -1,6 +1,6 @@
 # ADR-0002: Oracle topology and recovery targets
 
-**Status**: Proposed — awaiting approval
+**Status**: SUPERSEDED by [ADR-0011](0011-postgresql-rls.md) (30 Sep 2026) — retained for history
 **Decision owner**: Technical lead and platform owner (Appendix D: "before Phase 2 build")
 
 ## Context

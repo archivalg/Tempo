@@ -163,6 +163,7 @@ def list_supplied_workers(
     _require_provider_access(context, provider)
     workers = db.scalars(
         select(Worker).where(Worker.tenant_id == context.tenant_id).where(Worker.provider_id == provider.provider_id)
+        .where(Worker.home_site.in_(list(context.site_ids)))
     ).all()
     return [_supplied_worker_response(db, w) for w in workers]
 
@@ -183,7 +184,8 @@ def add_certification(
     _require_provider_access(context, provider)
 
     worker = db.get(Worker, worker_id)
-    if worker is None or worker.tenant_id != context.tenant_id or worker.provider_id != provider.provider_id:
+    if (worker is None or worker.tenant_id != context.tenant_id or worker.provider_id != provider.provider_id
+            or worker.home_site not in context.site_ids):
         raise ProviderNotFound(f"worker '{worker_id}' is not supplied by provider '{provider_id}'")
 
     cert = SkillCertification(

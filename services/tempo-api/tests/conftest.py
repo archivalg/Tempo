@@ -27,7 +27,7 @@ from app import db as db_module  # noqa: E402
 from app.core import auth  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.identity import (  # noqa: E402
-    TempoUser, TenantMembership, UserCustomerGrant, UserProviderGrant, UserRoleAssignment, UserSiteGrant,
+    TempoUser, Tenant, TenantMembership, UserCustomerGrant, UserProviderGrant, UserRoleAssignment, UserSiteGrant,
 )
 
 
@@ -139,7 +139,9 @@ def make_principal(session_local, *, tenant_id="ten_test", user_id=None, roles=(
     """Create user + membership + roles + grants (as owner) and a live session; returns Bearer token."""
     user_id = user_id or f"usr_{uuid.uuid4().hex[:10]}"
     with session_local() as s:
-        s.execute(text("SELECT 1"))
+        if s.get(Tenant, tenant_id) is None:
+            s.add(Tenant(tenant_id=tenant_id, name=tenant_id))
+            s.flush()
         if s.get(TempoUser, user_id) is None:
             s.add(TempoUser(user_id=user_id, external_subject=f"sub_{user_id}", email=f"{user_id}@example.test"))
             s.flush()
@@ -171,3 +173,22 @@ def context_header(**overrides) -> dict[str, str]:
     ctx.update({k: v for k, v in overrides.items() if k in ctx})
     import json
     return {"X-Test-Principal": json.dumps(ctx)}
+
+
+def enrol_kiosk(client, *, tenant_id="ten_test", site_ids=("site_mel_01",), name="Dock kiosk") -> dict[str, str]:
+    """Create + enrol a device through the real redeem path; returns its Bearer header."""
+    from app.core import kiosk
+    from app.models.identity import KioskDevice
+
+    with client.session_local() as s:
+        if s.get(Tenant, tenant_id) is None:
+            s.add(Tenant(tenant_id=tenant_id, name=tenant_id))
+            s.flush()
+        d = KioskDevice(tenant_id=tenant_id, site_ids=list(site_ids), name=name)
+        s.add(d)
+        s.flush()
+        code = kiosk.new_enrolment_code(d)
+        s.commit()
+    r = client.post("/v1/kiosk/enrol", json={"enrolment_code": code})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['device_credential']}"}

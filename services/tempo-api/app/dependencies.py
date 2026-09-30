@@ -103,3 +103,23 @@ def require_idempotency_key(idempotency_key: str | None = Header(default=None)) 
     if not idempotency_key:
         raise ScopeError("Idempotency-Key header is required for this operation")
     return idempotency_key
+
+
+def get_kiosk_context(request: Request, db: Session = Depends(get_db)):
+    """Device-authenticated context for kiosk endpoints: tenant and sites come from the
+    enrolled device record, never from the request body or headers."""
+    from app.core.kiosk import authenticate_device
+
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        raise AuthInvalid("device credential required")
+    return authenticate_device(db, header[7:].strip(), getattr(request.state, "correlation_id", "cor_unknown"))
+
+
+def get_platform_principal(request: Request, db: Session = Depends(get_db)) -> auth.ResolvedPrincipal:
+    """Platform routes are a separate principal context: bearer token only (never ambient cookies)."""
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        raise AuthInvalid("authentication required")
+    begin_auth_lookup(db)
+    return auth.resolve_platform_principal(db, header[7:].strip())

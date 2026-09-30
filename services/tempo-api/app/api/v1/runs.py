@@ -286,8 +286,16 @@ def create_run(
 
 
 def _get_owned_run(db: Session, context: RequestContext, run_id: str) -> OptimisationRun:
+    """Tenant AND subordinate scope: every site (and customer) the run covers must be inside the
+    caller's finite grants, otherwise the run is indistinguishable from a nonexistent one."""
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read permission")
     run = db.get(OptimisationRun, run_id)
     if run is None or run.tenant_id != context.tenant_id:
+        raise RunNotFound(f"run '{run_id}' not found or not visible in caller scope")
+    sites = set(db.scalars(select(OptimisationRunSite.site_id).where(OptimisationRunSite.run_id == run_id)))
+    customers = set(db.scalars(select(OptimisationRunCustomer.customer_id).where(OptimisationRunCustomer.run_id == run_id)))
+    if not sites <= set(context.site_ids) or not customers <= set(context.customer_ids):
         raise RunNotFound(f"run '{run_id}' not found or not visible in caller scope")
     return run
 
@@ -311,7 +319,16 @@ def list_runs(
     restriction GET /runs/{run_id} enforces per-row, applied per-row here
     too instead of blocking the list entirely.
     """
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read permission")
     query = select(OptimisationRun).where(OptimisationRun.tenant_id == context.tenant_id)
+    # Subordinate scope: hide any run touching a site/customer outside the caller's finite grants.
+    query = query.where(~select(OptimisationRunSite.run_id).where(
+        OptimisationRunSite.run_id == OptimisationRun.run_id,
+        OptimisationRunSite.site_id.notin_(list(context.site_ids))).exists())
+    query = query.where(~select(OptimisationRunCustomer.run_id).where(
+        OptimisationRunCustomer.run_id == OptimisationRun.run_id,
+        OptimisationRunCustomer.customer_id.notin_(list(context.customer_ids))).exists())
     if run_type:
         query = query.where(OptimisationRun.run_type == run_type)
     if status_filter:

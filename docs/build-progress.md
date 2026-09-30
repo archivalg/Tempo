@@ -1,45 +1,48 @@
 # Tempo build progress ledger
 
-Branch: `build/tempo-standalone-gate1` (from main @ 03e4b58). Blueprint v1.1 (29 Sep 2026) was supplied inline;
-`docs/Tempo_Product_Build_Blueprint.md` does not exist in the repo yet, so this ledger cites blueprint section numbers.
+Branch `build/tempo-standalone-gate1`. Spec: [`Tempo_Product_Build_Blueprint.md`](Tempo_Product_Build_Blueprint.md) v1.2 (30 Sep 2026).
+**No gate is complete.** Status values: `verified` (demonstrated by executed tests/running system as noted), `partial`, `open`, `blocked` (needs named owner).
 
-## Baseline (verified 2026-09-29)
-- API tests: 187 passed on Python 3.12 (excl. `test_capacity.py`), ~7 min. System Python is 3.9; use `uv venv --python 3.12`.
-- Running: `tempo_backend` :8007 and `tempo_frontend` :3007 containers (SQLite, X-Tempo-Context scaffold).
-- Uncommitted user work on main: docker-compose, console Dockerfile/nginx, `randomUUID` fallback for plain HTTP.
+## Decisions
+- **PostgreSQL 16 + RLS** approved 30 Sep 2026 — [ADR-0011](adr/0011-postgresql-rls.md) supersedes Oracle ADR-0002/0010. Own DB, own credentials.
+- Stack alignment checked read-only against the sibling Ensemble products on this host: Python 3.12, FastAPI, SQLAlchemy 2, Alembic, PyJWT, React 19/TypeScript. No Prime connector/runtime dependency exists or is planned.
+- RPO 15 min / RTO 4 h are **provisional planning assumptions** until approved and restore-tested.
+- Production IdP: **open** (ADR-0001). Adapter is provider-agnostic; local dev IdP is env-restricted and labelled non-production.
 
-## What works
-Ten solvers; canonical models; Deputy/UKG/WMS connector code; action validate/approve/execute/reconcile; native roster
-publish; PIN/NFC attendance; Alembic baseline; identity tables + AccessScope resolver (unit-tested, unwired); thin React console.
+## Environment (this host)
+- `tempo_postgres` (postgres:16, 127.0.0.1:5447, roles `tempo_owner` migrations / `tempo_app` runtime, dbs `tempo`, `tempo_test`) defined in `docker-compose.yml` (still uncommitted: user-owned working-tree file) with `docker/postgres/01-roles.sh`.
+- Generated secrets live in gitignored `/home/opc/tempo/.env` (mode 600, owner `opc`). Rotation: regenerate values, `docker compose up -d`, re-run role script (`ALTER ROLE ... PASSWORD`), invalidate sessions by changing `TEMPO_SESSION_SIGNING_KEY`. Not yet automated. Dedicated `.env.development.local`/`.env.uat` outside the repo: **open**.
+- Existing `tempo_backend`:8007 / `tempo_frontend`:3007 containers are **unchanged and still run the pre-Gate-1 SQLite build**; they'll be rebuilt when the console is migrated to sessions.
+- Python 3.12 venv: `/tmp/claude-1000/v312` (`uv venv`), system Python untouched.
 
-## Gap assessment (vs. blueprint gates)
-| Gate | Gap | Status |
-|---|---|---|
-| 1 Identity | `get_request_context` trusts `X-Tempo-Context`; console stores claims in localStorage; `/setup` page; no OIDC, sessions, MFA, CSRF; AccessScope not wired | OPEN |
-| 1 DB isolation | SQLite only; no VPD/RLS; ADR-0002 unsigned; no Prime stack comparison (needs repo/env access) | OPEN, blocked on owner |
-| 2 Bootstrap | No `bootstrap_ensemble_demo`, no Makefile, no .env.example | OPEN |
-| 3 UX | No design tokens, shell, Overview / Roster Planner / Attendance screens, Tempo logo assets (only `Tempo Traffic Light.png` present) | OPEN |
-| 4 Cycle | No async worker/queue; fixed shift calendar; $40 fallback | OPEN |
-| 6 Writeback | Vendor outcome always `unknown` | OPEN |
-| 0 Ownership | Repo protection/licence not verifiable from here | OPEN, needs owner |
+## Verification run (2026-09-30, real PostgreSQL, non-owner runtime role)
+`pytest --ignore=tests/test_capacity.py` → **244 passed** (baseline before Gate 1: 187 on SQLite).
 
-## Sequence
-1. Wire a trusted principal resolver (server-side sessions/OIDC adapter behind an interface) into `get_request_context`; remove header trust; IDOR/forged-header tests.
-2. Platform-admin bootstrap command; audit; kiosk enrolment.
-3. `bootstrap_ensemble_demo` + Makefile + `.env.example`.
-4. Design tokens + shell + three screens, browser-verified.
-5. Async runs, roster edit/validate/approve/publish, attendance, variance report; browser e2e.
-
-## First files to change
-`services/tempo-api/app/dependencies.py`, `app/core/access_scope.py`, `app/config.py`, new `app/core/auth.py`,
-`app/api/v1/auth.py`, `tests/test_forged_header.py`; console `src/api/client.ts`, `src/context/*`, `pages/ContextSetup.tsx`, `App.tsx`.
-
-## Decisions needing owners (not blocking local work)
-Trev's verified IdP subject/email; IdP choice; production DB vs Prime stack; DNS names; vendor sandboxes; pilot rules; RPO/RTO.
-Local assumption meanwhile: pluggable OIDC verifier, local dev issuer only when `TEMPO_ENV=local`.
-
-## Requirement ledger
-| ID | Requirement | Status | Evidence |
+## Gate 1 — safe standalone foundation
+| ID | Requirement (Blueprint) | Status | Evidence / gap |
 |---|---|---|---|
-| G0 | Baseline pinned, tests run | done | 187 passed, 3.12 |
-| G1-1 | Remove caller-asserted identity | not started | — |
+| G1-01 | Remove caller-asserted identity (§5.1) | **partial** | `X-Tempo-Context` no longer read anywhere; `tests/test_identity_boundary.py` (forged header ignored/401, tenant selector checked vs memberships, tampered/unsigned/expired tokens, revocation, token_version, grant removal, refresh replay, CSRF, prod-config refusal). **Gap:** console still sends the old header and `/setup`; needs migration (next). |
+| G1-02 | OIDC adapter + sessions (§5.1) | **partial** | Code: `core/oidc.py` (PKCE, JWKS rotation, iss/aud/exp/nonce), `core/auth.py`, `api/v1/auth.py`. Rotating refresh + family revocation + HttpOnly/CSRF tested with the **dev IdP only**. **Not verified against any real IdP** (blocked: IdP choice). Access-token revocation is DB-checked per request. |
+| G1-03 | MFA for admins (§5.1) | **partial** | Admin role without MFA loses admin permissions; platform routes require MFA + 30-min step-up. MFA assertion comes from IdP `amr`; untested with a real IdP. |
+| G1-04 | AccessScope single resolver (§5.2) | **partial** | Principal→`AccessScope` used by `/me/access`; handlers use the resolved `RequestContext` (roles/grants from Tempo tables). Legacy per-handler `context.has_permission` calls remain — not yet a single decorator; permission catalogue (`platform.*`, `site.*`, `device.*` …) **not yet implemented** (still 8 legacy codes). |
+| G1-05 | Scope enforcement on list/detail/write/count/export/monitoring (§5.2) | **partial** | Fixed real leaks found by the matrix: runs (detail/list/cancel/compare) ignored site scope & labour.read; actions, connections, tenant-scopes, provider workers, ingestion (empty-grant bypass). `tests/test_access_matrix.py` (15 tests): all-routes-anonymous=401 from OpenAPI, tenant B × 17 object routes, other-site user, customer-only user, role-lacks-permission ×7, kiosk token & console token cross-use. **Gaps:** matrix covers implemented routes only; exports, reports, background-worker revalidation not built yet; counts/aggregates n/a until reports exist. |
+| G1-06 | PostgreSQL RLS fail-closed, separate roles (§5.3) | **verified (tenant level)** | `tests/test_rls.py` (10): runtime role non-owner/no bypass/can't alter RLS; every `tenant_id` table has RLS+policy (build fails otherwise); no-context ⇒ 0 rows & no writes; under-filtered SQL & cross-join see one tenant; cross-tenant write & tenant-move rejected; pooled-connection reuse; tenant switching; audit append-only; identity tables invisible outside auth phase. **Gaps:** site/customer/provider RLS not done; legacy global PKs (`worker_id`); no TLS/vault; worker/background jobs use `tenant_session` but no queue yet. |
+| G1-07 | Platform admin bootstrap (§5.2) | **verified (dev IdP)** | `python -m app.cli bootstrap-platform-admin --subject|--email --operator --confirm-verified-identity`; refuses when an admin exists; email invitation links only on that verified address; no password; audited (`tests/test_platform.py`, 9). **Blocked:** the real verified identity for Trev must be supplied by him (nothing guessed or hard-coded). Second-admin recovery API implemented (`POST /v1/platform/admins`). |
+| G1-08 | Platform separation, support grants, kill switch (§3.4, §7) | **partial** | Separate `/v1/platform/*` principal, no tenant-data route, tenant create/suspend, support grants (≤8 h, reason, distinct approver when >1 admin, audited), global audit, tenant writeback switch default OFF. Suspension blocks users and kiosks (tested). **Gap:** support-grant *use* path (impersonation-free diagnostics) and global kill switch check at execute are not wired. |
+| G1-09 | Kiosk enrolment & security (§3.3) | **verified (API)** | Enrolled device principal (tenant+sites from record), one-time 15-min code, HMAC-stored device secret, Argon2id PINs, worker# + PIN, per-worker & per-device lockout + audit, uniform failure, tenant/site tamper fails, disable/suspend stops device (`tests/test_kiosk.py`, 11). **Gaps:** offline punches undefined/untested; NFC tag cloning risk unmitigated; no browser kiosk UI on new flow yet. |
+| G1-10 | Audit (§5.3) | **partial** | Security audit events for login/deny/kiosk/platform/device; runtime role cannot UPDATE/DELETE. No audit-retrieval API for tenants yet. |
+| G1-11 | App/API origins, cookies, CORS (§5.1) | **partial** | Credentialed CORS with explicit origins/headers, SameSite=Lax HttpOnly cookies, CSRF. Separate `app.*`/`api.*` hostnames **blocked** (DNS). |
+| G1-12 | Config safety (§8) | **partial** | `validate_settings` rejects insecure defaults in uat/production (tested). `.env.example` (root + API). Vault/secret store **open**. |
+| G1-13 | Migrations on PostgreSQL | **verified** | Alembic 0001–0003 apply on clean PG; upgrade→downgrade base→upgrade round-trip test. |
+
+## Known unsafe / incomplete right now
+- The **console (port 3007) has not been migrated**: it still uses the removed header + `/setup`. Old backend container still runs the SQLite scaffold — do not expose either outside the box.
+- `Worker.worker_id` etc. are globally unique PKs (cross-tenant collision hazard). Composite-key migration required.
+- No real IdP, no vault, no TLS-to-DB, no backup/restore evidence (Gate 5 items).
+- Test-suite runtime ~10 min (Argon2 cost + FK fixtures); acceptable, to be tuned.
+
+## Next (in order)
+1. Console: real login page (dev IdP banner), cookie session + CSRF client, `/me/access`-driven nav; delete `/setup` and header code.
+2. `make` targets + `bootstrap_ensemble_demo` (idempotent, synthetic-labelled) + browser check on real seeded data.
+3. Design tokens/components + Overview, Roster Planner, Attendance screens; screenshots.
+4. Permission catalogue + site/customer RLS; service-client principal; async run worker.

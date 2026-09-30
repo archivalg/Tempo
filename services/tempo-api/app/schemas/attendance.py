@@ -33,16 +33,17 @@ class CredentialEnrollResponse(BaseModel):
 
 
 class ClockInRequest(BaseModel):
-    site_id: str
+    site_id: str | None = None  # kiosk: defaults to the device's only site; must be one of its sites
     method: ClockMethod
+    worker_id: str | None = None  # worker number; required with a PIN
     pin: str | None = None
     nfc_tag_id: str | None = None
     gps: GpsCoordinates | None = None
 
     @model_validator(mode="after")
     def _credential_matches_method(self) -> "ClockInRequest":
-        if self.method == "pin" and not self.pin:
-            raise ValueError("pin is required when method='pin'")
+        if self.method == "pin" and not (self.pin and self.worker_id):
+            raise ValueError("worker_id and pin are required when method='pin'")
         if self.method == "nfc" and not self.nfc_tag_id:
             raise ValueError("nfc_tag_id is required when method='nfc'")
         return self
@@ -50,13 +51,14 @@ class ClockInRequest(BaseModel):
 
 class ClockOutRequest(BaseModel):
     method: ClockMethod
+    worker_id: str | None = None
     pin: str | None = None
     nfc_tag_id: str | None = None
 
     @model_validator(mode="after")
     def _credential_matches_method(self) -> "ClockOutRequest":
-        if self.method == "pin" and not self.pin:
-            raise ValueError("pin is required when method='pin'")
+        if self.method == "pin" and not (self.pin and self.worker_id):
+            raise ValueError("worker_id and pin are required when method='pin'")
         if self.method == "nfc" and not self.nfc_tag_id:
             raise ValueError("nfc_tag_id is required when method='nfc'")
         return self
@@ -101,13 +103,14 @@ class WhoamiRequest(BaseModel):
     """
 
     method: ClockMethod
+    worker_id: str | None = None
     pin: str | None = None
     nfc_tag_id: str | None = None
 
     @model_validator(mode="after")
     def _credential_matches_method(self) -> "WhoamiRequest":
-        if self.method == "pin" and not self.pin:
-            raise ValueError("pin is required when method='pin'")
+        if self.method == "pin" and not (self.pin and self.worker_id):
+            raise ValueError("worker_id and pin are required when method='pin'")
         if self.method == "nfc" and not self.nfc_tag_id:
             raise ValueError("nfc_tag_id is required when method='nfc'")
         return self
@@ -115,9 +118,11 @@ class WhoamiRequest(BaseModel):
 
 class WhoamiResponse(BaseModel):
     worker_id: str
+    masked_identity: str  # what the kiosk may display on screen
     employment_type: str
     home_site: str
     has_open_session: bool
+    upcoming_shifts: list["UpcomingShift"] = []
 
 
 class SiteAttendanceEntry(BaseModel):

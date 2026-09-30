@@ -65,7 +65,7 @@ def ingest_canonical_event(
     # authority" posture §6.4 takes elsewhere).
     if request.envelope.tenant_id != context.tenant_id:
         raise ScopeError("envelope tenant_id does not match caller's authenticated tenant")
-    if context.site_ids and request.envelope.site_id not in context.site_ids:
+    if request.envelope.site_id not in context.site_ids:  # empty grants deny, never widen
         raise ScopeError("envelope site_id exceeds the caller's authorised scope")
 
     # Contract version (Appendix A) -- reject anything this codebase

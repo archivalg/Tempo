@@ -29,21 +29,21 @@ def _now() -> datetime:
 
 
 class WorkerCredential(Base):
-    """A worker's clock-in credential(s). `pin_hash` is a salted hash, never
+    """A worker's clock-in credential(s). `pin_hash` is an Argon2id hash (unique salt per PIN), never
     the plaintext PIN (app.core.attendance.hash_pin) — the same
     store-a-hash-never-the-secret convention app.core.action_tokens'
-    action_token_hash already uses. Unique per tenant so resolving "who
-    just entered this PIN" (clock-in doesn't start from a known
-    worker_id — that's the point of a PIN) has exactly one answer.
+    action_token_hash already uses. A PIN is verified against the
+    worker the kiosk names (worker number + PIN), never looked up by hash.
     """
 
     __tablename__ = "worker_credential"
-    __table_args__ = (UniqueConstraint("tenant_id", "pin_hash", name="uq_worker_credential_tenant_pin"),)
-
     worker_id: Mapped[str] = mapped_column(String, ForeignKey("worker.worker_id"), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String, index=True)
     pin_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     nfc_tag_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Abuse controls: consecutive failures lock the credential for a cooling-off period.
+    failed_attempts: Mapped[int] = mapped_column(default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 

@@ -27,11 +27,10 @@ from app.core.attendance import (
     has_open_session,
     hash_pin,
     list_site_attendance,
-    resolve_worker_by_nfc,
-    resolve_worker_by_pin,
     to_aware,
 )
-from app.dependencies import get_db, get_request_context
+from app.core.kiosk import KioskContext, verify_worker
+from app.dependencies import get_db, get_kiosk_context, get_request_context
 from app.errors import AuthForbidden, RunNotFound, ScopeError
 from app.models.attendance import SiteGeofence, WorkerCredential
 from app.models.canonical import ShiftAssignment, Worker
@@ -53,10 +52,20 @@ from app.schemas.tenancy import RequestContext
 router = APIRouter(tags=["attendance"])
 
 
-def _resolve_worker(db: Session, context: RequestContext, method: str, pin: str | None, nfc_tag_id: str | None) -> Worker:
-    if method == "pin":
-        return resolve_worker_by_pin(db, context.tenant_id, pin)  # type: ignore[arg-type]
-    return resolve_worker_by_nfc(db, context.tenant_id, nfc_tag_id)  # type: ignore[arg-type]
+def _kiosk_site(kiosk: KioskContext, requested: str | None) -> str:
+    """The site is the device's, never the caller's claim: default to its only site; otherwise
+    the request must name one of the device's enrolled sites."""
+    if requested is None:
+        if len(kiosk.site_ids) == 1:
+            return kiosk.site_ids[0]
+        raise ScopeError("site_id required for a multi-site device")
+    if requested not in kiosk.site_ids:
+        raise ScopeError("requested site_id exceeds the device's enrolled sites")
+    return requested
+
+
+def _mask(worker_id: str) -> str:
+    return "•" * max(len(worker_id) - 3, 2) + worker_id[-3:]
 
 
 @router.post("/attendance/credentials", response_model=CredentialEnrollResponse, status_code=201)
@@ -88,21 +97,17 @@ def enroll_credential(
 @router.post("/attendance/clock-in", response_model=ClockInResponse)
 def clock_in_endpoint(
     request: ClockInRequest,
-    context: RequestContext = Depends(get_request_context),
+    kiosk: KioskContext = Depends(get_kiosk_context),
     db: Session = Depends(get_db),
 ) -> ClockInResponse:
-    # No `context.site_ids and ...` guard -- see runs.py's _enforce_scope
-    # for why (docs/tenant-isolation-inventory.md).
-    if request.site_id not in context.site_ids:
-        raise ScopeError("requested site_id exceeds the caller's authorised scope")
-
-    worker = _resolve_worker(db, context, request.method, request.pin, request.nfc_tag_id)
+    site_id = _kiosk_site(kiosk, request.site_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
 
     geofence_status = "skipped"
     if request.gps:
-        geofence_status = check_geofence(db, context.tenant_id, request.site_id, request.gps.latitude, request.gps.longitude)
+        geofence_status = check_geofence(db, kiosk.tenant_id, site_id, request.gps.latitude, request.gps.longitude)
 
-    result = clock_in(db, context.tenant_id, request.site_id, worker, geofence_status)
+    result = clock_in(db, kiosk.tenant_id, site_id, worker, geofence_status)
     return ClockInResponse(
         worker_id=worker.worker_id,
         attendance_session_id=result.session.id,
@@ -115,11 +120,11 @@ def clock_in_endpoint(
 @router.post("/attendance/clock-out", response_model=ClockOutResponse)
 def clock_out_endpoint(
     request: ClockOutRequest,
-    context: RequestContext = Depends(get_request_context),
+    kiosk: KioskContext = Depends(get_kiosk_context),
     db: Session = Depends(get_db),
 ) -> ClockOutResponse:
-    worker = _resolve_worker(db, context, request.method, request.pin, request.nfc_tag_id)
-    session = clock_out(db, context.tenant_id, worker)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    session = clock_out(db, kiosk.tenant_id, worker)
     duration_minutes = (to_aware(session.end_at) - to_aware(session.start_at)).total_seconds() / 60
     return ClockOutResponse(
         worker_id=worker.worker_id,
@@ -157,14 +162,14 @@ def get_worker_shifts(
     context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> list[UpcomingShift]:
-    """§8's Worker UX role: "Know shifts... get paid accurately." No
-    per-worker identity exists yet (same Phase 0 stand-in as everything
-    else — see app/dependencies.py), so this is scoped by tenant only: any
-    caller in the tenant's scope can view any worker's shifts. A real
-    deployment needs a worker to only ever see their own.
+    """Supervisor/planner view of a worker's shifts: requires labour.read and the worker's home
+    site inside the caller's finite site grants (foreign ids give a non-enumerating 404). A worker
+    seeing their own shifts uses the kiosk `whoami` after credential verification.
     """
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read")
     worker = db.get(Worker, worker_id)
-    if worker is None or worker.tenant_id != context.tenant_id:
+    if worker is None or worker.tenant_id != context.tenant_id or worker.home_site not in context.site_ids:
         raise RunNotFound(f"worker '{worker_id}' not found or not visible in caller scope")
 
     rows = db.scalars(
@@ -182,7 +187,7 @@ def get_worker_shifts(
 @router.post("/attendance/whoami", response_model=WhoamiResponse)
 def whoami(
     request: WhoamiRequest,
-    context: RequestContext = Depends(get_request_context),
+    kiosk: KioskContext = Depends(get_kiosk_context),
     db: Session = Depends(get_db),
 ) -> WhoamiResponse:
     """Resolves a worker from their PIN/NFC without clocking in — the
@@ -190,12 +195,20 @@ def whoami(
     shifts before they choose to clock in/out (a genuine clock-in commits
     an AttendanceSession row; this is read-only).
     """
-    worker = _resolve_worker(db, context, request.method, request.pin, request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    now = datetime.now(timezone.utc)
+    rows = db.scalars(
+        select(ShiftAssignment)
+        .where(ShiftAssignment.tenant_id == kiosk.tenant_id, ShiftAssignment.worker_id == worker.worker_id, ShiftAssignment.end_at >= now)
+        .order_by(ShiftAssignment.start_at.asc()).limit(10)
+    ).all()
     return WhoamiResponse(
         worker_id=worker.worker_id,
+        masked_identity=_mask(worker.worker_id),
         employment_type=worker.employment_type,
         home_site=worker.home_site,
-        has_open_session=has_open_session(db, context.tenant_id, worker.worker_id),
+        has_open_session=has_open_session(db, kiosk.tenant_id, worker.worker_id),
+        upcoming_shifts=[UpcomingShift(shift_id=r.shift_id, role=r.role, zone=r.zone, start_at=r.start_at, end_at=r.end_at, status=r.status) for r in rows],
     )
 
 
@@ -214,6 +227,8 @@ def get_site_attendance(
     """
     # No `context.site_ids and ...` guard -- see runs.py's _enforce_scope
     # for why (docs/tenant-isolation-inventory.md).
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read")
     if site_id not in context.site_ids:
         raise ScopeError("requested site_id exceeds the caller's authorised scope")
 

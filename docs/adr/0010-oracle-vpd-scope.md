@@ -1,6 +1,6 @@
 # ADR-0010: Oracle VPD scope beyond tenant
 
-**Status**: Proposed — awaiting approval
+**Status**: SUPERSEDED by [ADR-0011](0011-postgresql-rls.md) (30 Sep 2026) — retained for history
 **Decision owner**: Technical lead, DBA, security (Appendix D: "before Phase 2 migration design")
 
 ## Context

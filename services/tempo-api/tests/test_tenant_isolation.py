@@ -88,10 +88,12 @@ def test_tenant_b_cannot_authenticate_a_worker_pin_enrolled_under_tenant_a(clien
     enroll = client.post("/v1/attendance/credentials", json={"worker_id": "wrk_0", "pin": "4242"}, headers=admin_headers)
     assert enroll.status_code == 201
 
+    from .conftest import enrol_kiosk
+
     response = client.post(
         "/v1/attendance/whoami",
-        json={"method": "pin", "pin": "4242"},
-        headers=context_header(tenant_id=TENANT_B, site_ids=[SITE_B], roles=["operations_manager"]),
+        json={"method": "pin", "worker_id": "wrk_0", "pin": "4242"},
+        headers=enrol_kiosk(client, tenant_id=TENANT_B, site_ids=[SITE_B]),
     )
     assert response.status_code == 401
     assert response.json()["error_code"] == "TEMPO-AUTH-001"
@@ -149,13 +151,16 @@ def test_action_validate_denies_when_caller_has_no_site_grant(client):
     assert response.json()["error_code"] == "TEMPO-SCOPE-001"
 
 
-def test_clock_in_denies_when_caller_has_no_site_grant(client):
+def test_clock_in_rejects_a_user_token_and_a_foreign_site(client):
+    from .conftest import enrol_kiosk
+
     _seed(client)
-    response = client.post(
-        "/v1/attendance/clock-in",
-        json={"site_id": "site_mel_01", "method": "pin", "pin": "0000"},
-        headers=_customer_only_headers(),
-    )
+    body = {"site_id": "site_mel_01", "method": "pin", "worker_id": "wrk_0", "pin": "0000"}
+    # a console user (any role/grant) is not a device: clocking is kiosk-only
+    assert client.post("/v1/attendance/clock-in", json=body, headers=context_header(roles=["tenant_admin"])).status_code == 401
+    # a device enrolled for another site cannot be pointed at this one
+    device = enrol_kiosk(client, site_ids=[SITE_B])
+    response = client.post("/v1/attendance/clock-in", json=body, headers=device)
     assert response.status_code == 400
     assert response.json()["error_code"] == "TEMPO-SCOPE-001"
 
