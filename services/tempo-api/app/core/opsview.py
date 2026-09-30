@@ -72,12 +72,20 @@ def _standards(db: Session, tenant_id: str, at: datetime) -> dict[str, float]:
 
 
 def _latest_forecast(db: Session, tenant_id: str, site_id: str) -> tuple[OptimisationRun | None, list[dict]]:
-    run = db.scalar(
+    """Newest forecast run for the site, plus forecast rows merged across recent runs: for any bucket, the most
+    recent run that covers it wins (so a forecast for next week never hides this week's)."""
+    runs = db.scalars(
         select(OptimisationRun).join(OptimisationRunSite, OptimisationRunSite.run_id == OptimisationRun.run_id)
         .where(OptimisationRun.tenant_id == tenant_id, OptimisationRun.run_type == "demand_forecast",
                OptimisationRun.status.in_(("completed", "completed_with_warnings")), OptimisationRunSite.site_id == site_id)
-        .order_by(OptimisationRun.created_at.desc()).limit(1))
-    return run, ((run.result or {}).get("forecast", []) if run else [])
+        .order_by(OptimisationRun.created_at.desc()).limit(8)).all()
+    if not runs:
+        return None, []
+    merged: dict[tuple[str, str], dict] = {}
+    for run in reversed(runs):  # oldest first, so newer runs overwrite
+        for r in (run.result or {}).get("forecast", []):
+            merged[(r["activity"], str(r["bucket_start"]))] = r
+    return runs[0], list(merged.values())
 
 
 def _rates(db: Session, tenant_id: str) -> dict[tuple[str, str], float]:
@@ -396,7 +404,7 @@ MAX_WEEK_HOURS = 50
 
 
 def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, days: int, now: datetime, *, can_see_rates: bool, can_see_names: bool,
-                view: str | None = None) -> dict:
+                view: str | None = None, version_id: str | None = None) -> dict:
     """Board data + hard-rule validation for the site's roster over `days` local days."""
     from app.models.canonical import Availability, SkillCertification
 
@@ -413,7 +421,12 @@ def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, 
     has_draft = any(sh.status == "proposed" for sh, _ in all_rows)
     view = view if view in ("published", "draft") else ("draft" if has_draft else "published")
     want = "proposed" if view == "draft" else "committed"
-    rows_view = [(sh, w) for sh, w in all_rows if sh.status == want]
+    if version_id:
+        # A specific roster version: its own rows regardless of status (proposed while in draft/approval, committed once published).
+        rows_view = [(sh, w) for sh, w in all_rows if sh.source_ref == version_id]
+        view = "draft" if want == "proposed" else view
+    else:
+        rows_view = [(sh, w) for sh, w in all_rows if sh.status == want]
     rows = all_rows  # totals below need both; validation/board use rows_view
     workers = {w.worker_id: w for w in db.scalars(select(Worker).where(Worker.tenant_id == tenant_id, Worker.home_site == site.site_id, Worker.status == "active"))}
     people = {p.worker_id: p for p in db.scalars(select(WorkerPerson).where(WorkerPerson.tenant_id == tenant_id, WorkerPerson.worker_id.in_(list(workers) or [""])))} if can_see_names else {}
@@ -502,7 +515,7 @@ def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, 
                                                 ActionRequest.action_type == "publish_roster").order_by(ActionRequest.created_at.desc()).limit(1))
     return {
         "site": {"site_id": site.site_id, "name": site.name, "timezone": site.timezone, "operating_mode": site.operating_mode},
-        "range": {"start": start_iso, "days": days}, "as_of": now, "view": view, "has_draft": has_draft,
+        "range": {"start": start_iso, "days": days}, "as_of": now, "view": view, "has_draft": has_draft, "version_id": version_id,
         "workers": [{"worker_id": wid, "label": (people[wid].display_name if wid in people else f"Worker …{wid[-4:]}"), "employment_type": w.employment_type,
                      "skills": sorted(skills.get(wid, set())), "provider_id": w.provider_id} for wid, w in sorted(workers.items(), key=lambda kv: kv[1].employment_type + kv[0])],
         "shifts": [{"shift_id": sh.shift_id, "worker_id": sh.worker_id, "role": sh.role, "zone": sh.zone, "start_at": _aware(sh.start_at), "end_at": _aware(sh.end_at),

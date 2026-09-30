@@ -1,6 +1,6 @@
 """bootstrap_ensemble_demo — the Ensemble Solutions internal proving environment.
 
-EVERYTHING this creates is SYNTHETIC and labelled so (`is_synthetic`, `SYN-` employee numbers,
+EVERYTHING this creates is SYNTHETIC and labelled so (`is_synthetic`, numeric synthetic badge numbers,
 "(synthetic)" names). Refuses to run when TEMPO_ENV=production. Idempotent and versioned: a second
 run with the same manifest version is a no-op; `--reset` wipes the demo tenant (never audit rows,
 which are append-only) and re-seeds anchored to the current time.
@@ -90,7 +90,7 @@ def status(db: Session) -> dict | None:
 
 
 # --------------------------------------------------------------------------- reset
-_APPEND_ONLY = {"security_audit_event", "audit_record", "event_record"}
+_APPEND_ONLY = {"security_audit_event", "audit_record", "event_record", "roster_event"}
 
 
 def reset(db: Session) -> None:
@@ -153,7 +153,7 @@ def _mk_workers(db: Session, rnd: random.Random, provider_id: str) -> list[Worke
     for i, w in enumerate(workers):
         role = roles_cycle[((i + 1) * 7) % len(roles_cycle)]
         name = f"{FIRST[(i * 5) % len(FIRST)]} {LAST[(i * 11) % len(LAST)]} (synthetic)"
-        db.add(WorkerPerson(worker_id=w.worker_id, tenant_id=TENANT, display_name=name, employee_no=f"SYN-{i + 1:04d}", is_synthetic=True))
+        db.add(WorkerPerson(worker_id=w.worker_id, tenant_id=TENANT, display_name=name, employee_no=str(1001 + i), is_synthetic=True))  # numeric badge number (keypad-friendly)
         skills = {role}
         if i % 5 == 0 and role != "picker":
             skills.add("picker")  # multi-skilled cover
@@ -227,8 +227,10 @@ def bootstrap(*, reset_first: bool = False, secrets_dir: str | None = None) -> d
         existing = status(db)
         if existing and not reset_first:
             return {"result": "already_seeded", "manifest": existing}
-        if existing:
+        begin_auth_lookup(db)
+        if db.get(Tenant, TENANT) is not None:  # a completed seed being reset, or a half-finished one being recovered
             reset(db)
+            db.close()
             db = db_module.SessionLocal()
         now = _now()
         tz = ZoneInfo(MEL_TZ)
@@ -276,16 +278,16 @@ def bootstrap(*, reset_first: bool = False, secrets_dir: str | None = None) -> d
         db.flush()
         code = kiosk.new_enrolment_code(dev)
         pins = {}
-        for w in workers[:3]:
+        for n, w in enumerate(workers[:3]):
             pin = f"{secrets.randbelow(10**6):06d}"
             db.add(WorkerCredential(worker_id=w.worker_id, tenant_id=TENANT, pin_hash=kiosk.hash_pin(pin)))
-            pins[w.worker_id] = pin
+            pins[str(1001 + n)] = pin
         sd = Path(secrets_dir or os.environ.get("TEMPO_DEMO_SECRETS_DIR") or Path.home() / ".config" / "tempo-demo")
         sd.mkdir(parents=True, exist_ok=True)
         os.chmod(sd, 0o700)
         f = sd / "kiosk.txt"
         f.write_text("# Ensemble demo kiosk — SYNTHETIC. Enrolment code expires in 15 minutes; PINs are for the 3 workers listed.\n"
-                     f"enrolment_code={code}\n" + "".join(f"worker={k} pin={v}\n" for k, v in pins.items()))
+                     f"enrolment_code={code}\n" + "".join(f"worker_no={k} pin={v}\n" for k, v in pins.items()))
         os.chmod(f, 0o600)
 
         # Sydney (Overlay, simulated + stale)
@@ -306,6 +308,7 @@ def bootstrap(*, reset_first: bool = False, secrets_dir: str | None = None) -> d
         try:
             bind_tenant(db2, TENANT)
             att = _seed_attendance(db2, rnd, now)
+            _seed_pending_correction(db2, now)
             db2.add(DataSourceStatus(tenant_id=TENANT, site_id=SITE_MEL, source_key="attendance", label="Tempo kiosk attendance", kind="native", mode="live",
                                      last_success_at=now, stale_after_seconds=6 * 3600, note="Tempo-native capture. Demo punches are synthetic; freshness = seed time (re-run bootstrap to refresh)."))
             db2.add(DataSourceStatus(tenant_id=TENANT, site_id=SITE_MEL, source_key="demand", label="Demand history", kind="connector", mode="simulated",
@@ -339,7 +342,7 @@ def _seed_sydney(db: Session, rnd: random.Random, now: datetime) -> None:
     today = now.astimezone(tz).date()
     for i, w in enumerate(ws):
         db.add(WorkerPerson(worker_id=w.worker_id, tenant_id=TENANT, display_name=f"{FIRST[(i * 3 + 2) % len(FIRST)]} {LAST[(i * 7 + 3) % len(LAST)]} (synthetic)",
-                            employee_no=f"SYN-SYD-{i + 1:04d}", is_synthetic=True))
+                            employee_no=str(2001 + i), is_synthetic=True))
         db.add(SkillCertification(tenant_id=TENANT, worker_id=w.worker_id, skill_code="picker", valid_from=now - timedelta(days=300)))
         for d in range(0, 5):
             day = today + timedelta(days=d - today.weekday() if d - today.weekday() >= -6 else d)
@@ -381,19 +384,21 @@ def _drive_pipeline(client, tokens: dict[str, str], now: datetime, tz: ZoneInfo)
         r = client.post(f"/v1/optimisations/{rt}", json={**wk, "request_id": f"req_{rt}_{uuid.uuid4().hex[:8]}"}, headers=h("planner"))
         if r.status_code != 202:
             raise RuntimeError(f"{rt} failed: {r.status_code} {r.text[:300]}")
-    r = client.post("/v1/optimisations/named_roster", json={**wk, "request_id": f"req_roster_{uuid.uuid4().hex[:8]}"}, headers=h("planner"))
-    if r.status_code != 202:
-        raise RuntimeError(f"named_roster failed: {r.status_code} {r.text[:300]}")
-    rec = r.json()["recommendation_id"]
-    target = {"system": "tempo_native", "connection_id": "native", "site_id": SITE_MEL}
-    v = client.post("/v1/actions/validate", json={"action_type": "publish_roster", "recommendation_id": rec, "target": target, "expected_source_version": None}, headers=h("ops_manager"))
-    if v.status_code != 200:
-        raise RuntimeError(f"validate failed: {v.status_code} {v.text[:300]}")
-    vj = v.json()
-    e = client.post("/v1/actions", json={"action_type": "publish_roster", "recommendation_id": rec, "target": target, "expected_source_version": None,
-                                         "action_id": vj["action_id"], "action_token": vj["action_token"]}, headers=h("ops_manager"))
-    if e.status_code != 202 or e.json().get("status") != "confirmed":
-        raise RuntimeError(f"publish failed: {e.status_code} {e.text[:300]}")
+    # the roster goes through the real version workflow: generate -> submit (planner) -> approve (a different user) -> publish -> reconcile
+    week_iso = week_start.date().isoformat()
+    g = client.post(f"/v1/sites/{SITE_MEL}/rosters/generate", json={"week_start": week_iso, "policy_version": POLICY}, headers=h("planner"))
+    if g.status_code != 201:
+        raise RuntimeError(f"roster generate failed: {g.status_code} {g.text[:300]}")
+    vid = g.json()["version"]["id"]
+    if g.json()["hard_conflicts"]:
+        raise RuntimeError(f"generated roster has {g.json()['hard_conflicts']} hard conflicts: {g.json()['conflicts'][:3]}")
+    for step, persona, payload in (("submit", "planner", None), ("approve", "ops_manager", {"note": "Baseline roster for the proving environment (synthetic)."})):
+        r = client.post(f"/v1/rosters/{vid}/{step}", json=payload, headers=h(persona)) if payload else client.post(f"/v1/rosters/{vid}/{step}", headers=h(persona))
+        if r.status_code != 200:
+            raise RuntimeError(f"roster {step} failed: {r.status_code} {r.text[:300]}")
+    r = client.post(f"/v1/rosters/{vid}/publish", headers=h("ops_manager"))
+    if r.status_code != 200 or r.json().get("state") != "reconciled":
+        raise RuntimeError(f"publish failed: {r.status_code} {r.text[:300]}")
 
     # a backlog surge in Pick B while Pick A has slack -> real intraday recommendation
     from app.db import SessionLocal
@@ -437,6 +442,8 @@ def _seed_attendance(db: Session, rnd: random.Random, now: datetime) -> dict:
             delay = timedelta(minutes=rnd.randint(13, 40))
             made["late"] += 1
         pin = st + delay
+        if pin > now - timedelta(minutes=1):
+            continue  # a punch can't be in the future: this worker simply hasn't arrived yet
         pout = None
         if en < now:
             pout = en + timedelta(minutes=rnd.randint(0, 8))
@@ -459,3 +466,16 @@ def _seed_attendance(db: Session, rnd: random.Random, now: datetime) -> dict:
         made["unrostered"] += 1
     db.flush()
     return made
+
+
+def _seed_pending_correction(db: Session, now: datetime) -> None:
+    """One supervised correction awaiting a second person's approval (the original punch stays untouched)."""
+    from app.models.rosters import AttendanceAdjustment
+
+    sup = db.scalar(select(TempoUser).where(TempoUser.email == f"supervisor@{DEMO_DOMAIN}"))
+    x = db.scalar(select(AttendanceSession).where(AttendanceSession.tenant_id == TENANT, AttendanceSession.end_at.is_not(None),
+                                                  AttendanceSession.source_ref == "synthetic-seed", AttendanceSession.approval == "pending").order_by(AttendanceSession.start_at.desc()).limit(1))
+    if x is not None and sup is not None:
+        end = x.end_at if x.end_at.tzinfo else x.end_at.replace(tzinfo=timezone.utc)
+        db.add(AttendanceAdjustment(tenant_id=TENANT, session_id=x.id, site_id=SITE_MEL, requested_start=x.start_at, requested_end=end + timedelta(minutes=25),
+                                    reason="Worker stayed to complete a dock unload; supervisor witnessed (synthetic).", requested_by=sup.user_id))

@@ -24,8 +24,14 @@ DEFAULT_TIME_PER_UNIT_SECONDS = 60.0
 DEFAULT_ROLE, DEFAULT_ZONE = "general", "general"
 
 
-def _day_bucket(iso_timestamp: str) -> str:
-    return iso_timestamp[:10]
+def _day_bucket(iso_timestamp: str, tz_name: str = "UTC") -> str:
+    """Local calendar date (in the planning window's timezone) of a bucket start. Days are site-local,
+    never UTC dates: a Melbourne day starts at 14:00Z the previous day."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
+    return dt.astimezone(ZoneInfo(tz_name)).date().isoformat()
 
 
 def _work_standard_lookup(db: Session, tenant_id: str) -> dict[str, float]:
@@ -59,7 +65,7 @@ def translate_labour_requirement(db: Session, tenant_id: str, site_ids: list[str
 
     volume_by_activity_day: dict[tuple[str, str], float] = defaultdict(float)
     for row in forecast_rows:
-        volume_by_activity_day[(row["activity"], _day_bucket(row["bucket_start"]))] += row["point"]
+        volume_by_activity_day[(row["activity"], _day_bucket(row["bucket_start"], request.planning_window.timezone))] += row["point"]
 
     time_per_unit = _work_standard_lookup(db, tenant_id)
     role_zone_map = _role_zone_map(db, tenant_id, site_id)

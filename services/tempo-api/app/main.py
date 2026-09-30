@@ -68,7 +68,8 @@ def readyz() -> dict[str, str]:
         raise NotReady("database not reachable") from exc
     if not applied:
         raise NotReady("schema not migrated")
-    return {"status": "ready", "database": "postgresql", "role": str(who), "migration_head": str(head)}
+    # deliberately terse: an unauthenticated endpoint must not disclose role names or schema versions
+    return {"status": "ready", "database": "postgresql"}
 
 
 @app.get("/healthz", tags=["ops"])

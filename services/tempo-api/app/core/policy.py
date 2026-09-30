@@ -34,6 +34,8 @@ DEFAULT_CONSTRAINTS: dict[str, Any] = {
     "default_hire_surcharge": 8.0,
     "sla_penalty_per_hour": 250.0,
     "max_consecutive_days": 6,
+    # Hard rest rule: minimum hours between the end of one shift and the start of the next for the same worker.
+    "min_rest_hours": 10,
     "fairness_weight": 50.0,
     "preference_weight": 20.0,
     "shortfall_penalty_per_hour": 250.0,

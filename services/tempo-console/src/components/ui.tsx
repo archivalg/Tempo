@@ -39,7 +39,7 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
 export function Banner({ tone, title, children }: { tone: 'warn' | 'bad' | 'info'; title: string; children?: ReactNode }) {
   return (
     <div className={`tp-banner ${tone}`} role={tone === 'info' ? 'status' : 'alert'}>
-      <span aria-hidden="true">{tone === 'info' ? 'ⓘ' : tone === 'warn' ? '▲' : '✕'}</span>
+      <span aria-hidden="true">{tone === 'info' ? 'i' : tone === 'warn' ? '▲' : '✕'}</span>
       <div>
         <strong>{title}</strong>
         {children}
@@ -154,6 +154,25 @@ export function PageHead({ title, sub, children }: { title: string; sub?: ReactN
       </div>
       <div className="tp-spacer" />
       {children}
+    </div>
+  )
+}
+
+export const ROSTER_STEPS = ['draft', 'pending_approval', 'approved', 'published'] as const
+const STEP_LABEL: Record<string, string> = { draft: 'Draft', pending_approval: 'Submitted', approved: 'Approved', published: 'Published' }
+
+/** draft → submitted → approved → published progress, with terminal states called out. */
+export function RosterSteps({ state }: { state: string }) {
+  const norm = state === 'reconciled' ? 'published' : state
+  const idx = ROSTER_STEPS.indexOf(norm as (typeof ROSTER_STEPS)[number])
+  if (idx < 0) return <Status tone={state === 'rejected' ? 'bad' : 'neutral'}>{state.replace('_', ' ')}</Status>
+  return (
+    <div className="tp-steps" role="list" aria-label="Roster progress">
+      {ROSTER_STEPS.map((s, i) => (
+        <span key={s} role="listitem" className={`tp-step${i < idx || (i === idx && (norm === 'published')) ? ' done' : i === idx ? ' now' : ''}`} aria-current={i === idx ? 'step' : undefined}>
+          {i < idx || (i === idx && norm === 'published') ? '✓ ' : ''}{STEP_LABEL[s]}{state === 'reconciled' && s === 'published' ? ' · reconciled' : ''}
+        </span>
+      ))}
     </div>
   )
 }

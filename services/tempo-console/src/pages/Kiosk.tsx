@@ -50,7 +50,7 @@ export function KioskPage() {
     if (!worker || !pin) return
     setBusy(true); setMsg(null)
     try {
-      const r = await call<Who>('/attendance/whoami', cred, { method: 'pin', worker_id: worker, pin })
+      const r = await call<Who>('/attendance/whoami', cred, { method: 'pin', worker_no: worker, pin })
       if (r.status === 401 && !r.data.upcoming_shifts) { setMsg('Not recognised. Check your worker number and PIN.'); setPin(''); setField('pin'); return }
       if (r.status === 403) { setMsg('Locked for now. Please see a supervisor.'); reset(); return }
       if (!r.ok) { setMsg('Something went wrong. See a supervisor.'); return }
@@ -60,7 +60,7 @@ export function KioskPage() {
   async function punch(kind: 'clock-in' | 'clock-out') {
     setBusy(true); setMsg(null)
     try {
-      const r = await call<{ clocked_in_at?: string; clocked_out_at?: string }>(`/attendance/${kind}`, cred, { method: 'pin', worker_id: worker, pin })
+      const r = await call<{ clocked_in_at?: string; clocked_out_at?: string }>(`/attendance/${kind}`, cred, { method: 'pin', worker_no: worker, pin })
       if (!r.ok) { setMsg(r.data.detail ?? 'Could not record that. See a supervisor.'); return }
       const t = new Date(r.data.clocked_in_at ?? r.data.clocked_out_at ?? Date.now())
       setMsg(`${kind === 'clock-in' ? 'Clocked in' : 'Clocked out'} at ${t.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}`)

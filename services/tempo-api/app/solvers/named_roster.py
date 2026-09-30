@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from ortools.sat.python import cp_model
 from sqlalchemy import select
@@ -152,6 +152,24 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
 
     for (worker_id, day), vars_for_day in by_worker_day.items():
         model.Add(sum(vars_for_day) <= 1)
+
+    # Hard rest rule: no worker may be rostered onto two shifts on consecutive days with less than
+    # min_rest_hours between the end of the first and the start of the second.
+    min_rest = float(policy.constraints.get("min_rest_hours", 10))
+    bounds = {(d, s_.code): shift_bounds_utc(d, s_, tz_name) for d in days for s_ in calendar}
+    day_index = {d: i for i, d in enumerate(days)}
+    per_worker_day_shift: dict[tuple[str, str], list[tuple[str, object]]] = defaultdict(list)
+    for (wid, day, code, _role, _zone), var in x.items():
+        per_worker_day_shift[(wid, day)].append((code, var))
+    for (wid, day), lst in per_worker_day_shift.items():
+        nxt = next((d for d in days if day_index[d] == day_index[day] + 1 and datetime.fromisoformat(d) - datetime.fromisoformat(day) == timedelta(days=1)), None)
+        if nxt is None:
+            continue
+        for code_a, var_a in lst:
+            end_a = bounds[(day, code_a)][1]
+            for code_b, var_b in per_worker_day_shift.get((wid, nxt), []):
+                if (bounds[(nxt, code_b)][0] - end_a).total_seconds() / 3600 < min_rest:
+                    model.Add(var_a + var_b <= 1)
 
     consecutive_window = max_consecutive_days + 1  # smallest window that can actually bind the limit
     if len(days) >= consecutive_window:

@@ -60,6 +60,8 @@ PERMISSION_CODES: frozenset[str] = frozenset(
         "labour.exception.manage",
         # Display names on rosters/attendance. Distinct from labour.worker_pii (deeper personal data).
         "labour.worker_names",
+        # Approve attendance/timesheets and request supervised corrections.
+        "labour.attendance.approve",
     }
 )
 
@@ -67,12 +69,12 @@ PERMISSION_CODES: frozenset[str] = frozenset(
 # (§6.2) except labour_provider, which is a "Labour-provider user" —
 # see ROLE_PRINCIPAL_TYPE below.
 ROLE_PERMISSION_MATRIX: dict[str, frozenset[str]] = {
-    "supervisor": frozenset({"labour.read", "labour.exception.manage", "labour.worker_names"}),
+    "supervisor": frozenset({"labour.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
     "analyst": frozenset({"labour.read"}),
     "executive": frozenset({"labour.read", "labour.margin.read", "labour.rates.read"}),
-    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names"}),
+    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
     "planner": frozenset({"labour.read", "labour.plan", "labour.rates.read", "labour.worker_names"}),
-    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names"}),
+    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
     "finance": frozenset({"labour.margin.read", "labour.rates.read"}),
     "3pl_commercial": frozenset({"labour.margin.read"}),
     "hr_authorised": frozenset({"labour.worker_pii", "labour.worker_names"}),

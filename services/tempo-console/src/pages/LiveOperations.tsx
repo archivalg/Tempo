@@ -44,9 +44,15 @@ export default function LiveOperationsPage() {
   const win = useMemo(() => { const n = live ? new Date(live.as_of).getTime() : Date.now(); return { start: n - 4 * 3600e3, end: n + 8 * 3600e3, now: n } }, [live])
   const pct = (t: number) => Math.max(0, Math.min(100, ((t - win.start) / (win.end - win.start)) * 100))
 
-  async function act(fn: () => Promise<unknown>, done: string) {
+  /** keepOpen: refresh the case in place (acknowledge/assign) instead of closing the panel (resolve/dismiss). */
+  async function act(fn: () => Promise<unknown>, done: string, keepOpen = false) {
     setBusy(true); setMsg(null)
-    try { await fn(); setMsg(done); setReason(''); await load(false); setOpenCase(null) } catch (e) { setMsg(e instanceof Error ? e.message : 'Action failed') } finally { setBusy(false) }
+    try {
+      const id = openCase?.id
+      await fn(); setMsg(done); setReason('')
+      if (keepOpen && site) { const l = await getLive(site.site_id); setLive(l); setUpdated(new Date()); setOpenCase(l.exceptions.find((e) => e.id === id) ?? null) }
+      else { await load(false); setOpenCase(null) }
+    } catch (e) { setMsg(e instanceof Error ? e.message : 'Action failed') } finally { setBusy(false) }
   }
   const openList = live?.exceptions.filter((e) => ['detected', 'triaged', 'assigned'].includes(e.state)) ?? []
   const closed = live?.exceptions.filter((e) => !['detected', 'triaged', 'assigned'].includes(e.state)) ?? []
@@ -146,8 +152,8 @@ export default function LiveOperationsPage() {
           {['detected', 'triaged', 'assigned'].includes(openCase.state) && (manage ? (
             <div className="tp-stack" style={{ marginTop: 16 }}>
               <div className="tp-row">
-                {openCase.state === 'detected' && <button className="tp-btn" disabled={busy} onClick={() => void act(() => acknowledgeException(openCase.id), 'Acknowledged')}>Acknowledge</button>}
-                {openCase.state !== 'assigned' && <button className="tp-btn" disabled={busy} onClick={() => void act(() => assignException(openCase.id), 'Assigned to you')}>Assign to me</button>}
+                {openCase.state === 'detected' && <button className="tp-btn" disabled={busy} onClick={() => void act(() => acknowledgeException(openCase.id), 'Acknowledged', true)}>Acknowledge</button>}
+                {openCase.state !== 'assigned' && <button className="tp-btn" disabled={busy} onClick={() => void act(() => assignException(openCase.id), 'Assigned to you', true)}>Assign to me</button>}
               </div>
               <label className="tp-field">Resolution note (required, min 3 characters)<textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} /></label>
               <div className="tp-row">

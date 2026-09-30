@@ -101,7 +101,7 @@ def clock_in_endpoint(
     db: Session = Depends(get_db),
 ) -> ClockInResponse:
     site_id = _kiosk_site(kiosk, request.site_id)
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
 
     geofence_status = "skipped"
     if request.gps:
@@ -123,7 +123,7 @@ def clock_out_endpoint(
     kiosk: KioskContext = Depends(get_kiosk_context),
     db: Session = Depends(get_db),
 ) -> ClockOutResponse:
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
     session = clock_out(db, kiosk.tenant_id, worker)
     duration_minutes = (to_aware(session.end_at) - to_aware(session.start_at)).total_seconds() / 60
     return ClockOutResponse(
@@ -195,7 +195,7 @@ def whoami(
     shifts before they choose to clock in/out (a genuine clock-in commits
     an AttendanceSession row; this is read-only).
     """
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
     now = datetime.now(timezone.utc)
     rows = db.scalars(
         select(ShiftAssignment)

@@ -30,6 +30,7 @@ from app.db import begin_auth_lookup, bind_tenant
 from app.errors import AuthForbidden, AuthInvalid
 from app.models.attendance import WorkerCredential
 from app.models.canonical import Worker
+from app.models.directory import WorkerPerson
 from app.models.identity import KioskDevice, Tenant
 
 _ph = PasswordHasher()  # Argon2id defaults (argon2-cffi: time_cost=3, memory_cost=64MiB, parallelism=4)
@@ -154,10 +155,14 @@ def _record_failure(db: Session, ctx: KioskContext, worker_id: str | None, cred:
 
 
 def verify_worker(db: Session, ctx: KioskContext, *, method: str, worker_id: str | None, pin: str | None,
-                  nfc_tag_id: str | None) -> Worker:
+                  nfc_tag_id: str | None, worker_no: str | None = None) -> Worker:
     """Identify the worker at this kiosk. Failure is deliberately non-specific."""
     generic = AuthInvalid("credential not recognised")
     cred: WorkerCredential | None = None
+    if method == "pin" and worker_no and not worker_id:
+        # Badge number -> worker, scoped to the device's tenant. Unknown numbers take the same path as a wrong PIN.
+        person = db.scalar(select(WorkerPerson).where(WorkerPerson.tenant_id == ctx.tenant_id, WorkerPerson.employee_no == worker_no))
+        worker_id = person.worker_id if person else None
     if method == "pin":
         cred = db.get(WorkerCredential, worker_id) if worker_id else None
         if cred is not None and cred.tenant_id != ctx.tenant_id:

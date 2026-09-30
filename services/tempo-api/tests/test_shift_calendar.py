@@ -82,3 +82,30 @@ def test_shares_must_be_complete_and_sum_to_one():
         calendar_from_constraints({"shift_calendar": [{"code": "a", "start_hour": 6, "end_hour": 14, "share": 0.5}, {"code": "b", "start_hour": 14, "end_hour": 22}]})
     with pytest.raises(ValueError):
         calendar_from_constraints({"shift_calendar": [{"code": "a", "start_hour": 6, "end_hour": 14, "share": 0.5}, {"code": "b", "start_hour": 14, "end_hour": 22, "share": 0.4}]})
+
+
+def test_roster_never_breaks_the_rest_rule_and_uses_site_local_days(client):
+    from datetime import datetime, timedelta
+
+    from app.models.canonical import OptimisationPolicy
+
+    _seed(client)
+    with client.session_local() as s:
+        s.add(OptimisationPolicy(policy_version="rest_v1", tenant_id="ten_test", constraints={
+            "min_rest_hours": 10, "shift_calendar": [{"code": "early", "start_hour": 6, "end_hour": 14}, {"code": "late", "start_hour": 14, "end_hour": 22},
+                                                     {"code": "night", "start_hour": 22, "end_hour": 6}]}))
+        s.commit()
+    r = client.post("/v1/optimisations/named_roster", json={**VALID_REQUEST, "configuration": {"policy_version": "rest_v1"}}, headers=_headers())
+    assert r.status_code == 202, r.text
+    with client.session_local() as s:
+        rows = s.scalars(select(ShiftAssignment).where(ShiftAssignment.tenant_id == "ten_test")).all()
+    by_worker = {}
+    for row in rows:
+        by_worker.setdefault(row.worker_id, []).append(row)
+    for wid, lst in by_worker.items():
+        lst.sort(key=lambda x: x.start_at)
+        for a, b in zip(lst, lst[1:]):
+            assert (b.start_at - a.end_at) >= timedelta(hours=10), f"{wid}: {a.end_at} -> {b.start_at}"
+    # days are local: no shift starts on a local date outside the requested window
+    local_days = {row.start_at.astimezone(ZoneInfo(MEL)).date().isoformat() for row in rows}
+    assert min(local_days) >= "2026-09-08" and max(local_days) <= "2026-09-15"

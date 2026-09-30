@@ -15,7 +15,7 @@ from .test_run_endpoint import VALID_REQUEST, WINDOW_START, _headers, _seed
 
 TENANT_B, SITE_B = "ten_matrix_b", "site_b_01"
 PUBLIC = {  # intentionally unauthenticated (pre-login) — each is separately tested
-    ("GET", "/healthz"), ("GET", "/v1/auth/config"), ("POST", "/v1/auth/dev-login"), ("GET", "/v1/auth/login"),
+    ("GET", "/healthz"), ("GET", "/readyz"), ("GET", "/v1/auth/config"), ("GET", "/v1/auth/dev-identities"), ("POST", "/v1/auth/dev-login"), ("GET", "/v1/auth/login"),
     ("GET", "/v1/auth/callback"), ("POST", "/v1/auth/refresh"), ("POST", "/v1/kiosk/enrol"),
 }
 

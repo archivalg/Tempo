@@ -13,9 +13,12 @@ export const useSite = () => useContext(SiteContext)
 
 const NAV: { to: string; label: string; perm: string; end?: boolean; group?: string }[] = [
   { to: '/', label: 'Overview', perm: 'labour.read', end: true, group: 'Operate' },
+  { to: '/demand', label: 'Demand', perm: 'labour.read' },
   { to: '/roster', label: 'Roster Planner', perm: 'labour.read' },
   { to: '/live', label: 'Live Operations', perm: 'labour.read' },
-  { to: '/actions', label: 'Approvals', perm: 'labour.read', group: 'Decide' },
+  { to: '/attendance', label: 'Attendance', perm: 'labour.read' },
+  { to: '/approvals', label: 'Approvals', perm: 'labour.read', group: 'Decide' },
+  { to: '/reports', label: 'Insights & Reports', perm: 'labour.read' },
   { to: '/runs', label: 'Optimisation Studio', perm: 'labour.read' },
   { to: '/providers', label: 'Team & Skills', perm: 'labour.read', group: 'Manage' },
   { to: '/onboarding', label: 'Data & Connections', perm: 'labour.configure' },

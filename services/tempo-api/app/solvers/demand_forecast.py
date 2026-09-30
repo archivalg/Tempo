@@ -49,6 +49,36 @@ def _backtest_mape(actual: list[float], fitted: list[float]) -> float | None:
     return sum(errors) / len(errors)
 
 
+def _aggregate_finer_history(db: Session, tenant_id: str, site_ids: list[str], window, bucket):
+    """No history at the requested granularity: sum finer rows into whole buckets aligned to the window start.
+    Only *complete* buckets are used (a partial day is never treated as a full day)."""
+    fine_minutes = 60
+    lookback_start = window.start - bucket * HISTORY_LOOKBACK_BUCKETS
+    fine = db.scalars(
+        select(DemandBucket).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id.in_(site_ids), DemandBucket.bucket_minutes == fine_minutes,
+                                   DemandBucket.interval_start >= lookback_start, DemandBucket.interval_start < window.start)
+        .order_by(DemandBucket.activity, DemandBucket.interval_start)
+    ).all()
+    if not fine:
+        return [], None
+    per_bucket = int(bucket.total_seconds() // (fine_minutes * 60))
+    sums: dict[tuple[str, int], list] = defaultdict(lambda: [0.0, set()])
+    for r in fine:
+        ts = r.interval_start if r.interval_start.tzinfo else r.interval_start.replace(tzinfo=timezone.utc)
+        idx = -math.ceil((window.start - ts) / bucket)
+        cell = sums[(r.activity, idx)]
+        cell[0] += r.volume
+        cell[1].add(ts)
+    out = []
+    for (activity, idx), (total, stamps) in sorted(sums.items()):
+        if len(stamps) < per_bucket:
+            continue  # incomplete bucket
+        row = DemandBucket(tenant_id=tenant_id, activity=activity, site_id=site_ids[0], customer_id=None,
+                           interval_start=window.start + bucket * idx, volume=total, source="derived_from_hourly", bucket_minutes=window.bucket_minutes)
+        out.append(row)
+    return out, f"daily totals derived from hourly history ({len(out)} complete buckets)"
+
+
 def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: RunRequest) -> SolverOutcome:
     window = request.planning_window
     bucket = timedelta(minutes=window.bucket_minutes)
@@ -65,6 +95,9 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         .order_by(DemandBucket.activity, DemandBucket.interval_start)
     ).all()
 
+    derived_note = None
+    if not rows and window.bucket_minutes > 60:
+        rows, derived_note = _aggregate_finer_history(db, tenant_id, site_ids, window, bucket)
     if not rows:
         raise InsufficientData(f"no historical demand_bucket rows for tenant '{tenant_id}' before the planning window")
 
@@ -131,7 +164,7 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
     freshness_seconds = max(0.0, (window.start - most_recent).total_seconds())
     freshness_days = freshness_seconds / 86400
 
-    missing_evidence = []
+    missing_evidence = ([derived_note] if derived_note else [])
     if activities_with_trend < len(by_activity):
         missing_evidence.append(
             f"{len(by_activity) - activities_with_trend} of {len(by_activity)} activities have <2 historical "

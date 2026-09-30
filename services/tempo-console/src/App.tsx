@@ -4,6 +4,10 @@ import { TempoContextProvider } from './context/TempoContextProvider'
 import { ActionDetailPage } from './pages/ActionDetail'
 import { ActionsListPage } from './pages/ActionsList'
 import AdminPage from './pages/Admin'
+import ApprovalsPage from './pages/Approvals'
+import AttendancePage from './pages/Attendance'
+import DemandPage from './pages/Demand'
+import ReportsPage from './pages/Reports'
 import { KioskPage } from './pages/Kiosk'
 import { LabourProvidersPage } from './pages/LabourProviders'
 import LiveOperationsPage from './pages/LiveOperations'
@@ -25,7 +29,11 @@ function App() {
           <Route path="/kiosk" element={<KioskPage />} />
           <Route element={<AppShell />}>
             <Route path="/" element={<OverviewPage />} />
+            <Route path="/demand" element={<DemandPage />} />
             <Route path="/roster" element={<RosterPlannerPage />} />
+            <Route path="/attendance" element={<AttendancePage />} />
+            <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/approvals" element={<ApprovalsPage />} />
             <Route path="/live" element={<LiveOperationsPage />} />
             <Route path="/runs" element={<RunsListPage />} />
             <Route path="/runs/new" element={<NewRunPage />} />
