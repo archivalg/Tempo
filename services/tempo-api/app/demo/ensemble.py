@@ -99,7 +99,15 @@ def reset(db: Session) -> None:
     if db.get(Tenant, TENANT) is None:
         return
     persona_ids = [u.user_id for u in db.scalars(select(TempoUser).where(TempoUser.email.like(f"%@{DEMO_DOMAIN}")))]
+    # also people invited into the demo tenant (and nowhere else, and not platform admins): they only exist because of it
+    from app.models.identity import PlatformAdmin, UserInvitation
+    members = {m.user_id for m in db.scalars(select(TenantMembership).where(TenantMembership.tenant_id == TENANT))}
+    for uid in members - set(persona_ids):
+        elsewhere = db.scalar(select(TenantMembership.tenant_id).where(TenantMembership.user_id == uid, TenantMembership.tenant_id != TENANT).limit(1))
+        if elsewhere is None and db.get(PlatformAdmin, uid) is None:
+            persona_ids.append(uid)
     if persona_ids:
+        db.execute(delete(UserInvitation).where(UserInvitation.user_id.in_(persona_ids)))
         db.execute(delete(UserSession).where(UserSession.user_id.in_(persona_ids)))
     bind_tenant(db, TENANT)
     for table in reversed(Base.metadata.sorted_tables):

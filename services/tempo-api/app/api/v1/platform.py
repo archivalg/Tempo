@@ -93,7 +93,12 @@ def create_tenant(body: TenantCreate, request: Request, p: auth.ResolvedPrincipa
     begin_auth_lookup(db)
     auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, tenant_id=body.tenant_id, action="platform.tenant_create",
                decision="allowed", correlation_id=_cid(request))
-    return {"tenant_id": body.tenant_id, "first_admin_user_id": admin.user_id, "status": "active"}
+    from app.core import password_login as pl
+    from app.db import begin_auth_lookup as _b
+    _b(db)
+    token = pl.create_invitation(db, admin, p.user_id) if admin.password_hash is None else None
+    return {"tenant_id": body.tenant_id, "first_admin_user_id": admin.user_id, "status": "active", "invite_token": token,
+            "invite_path": f"/invite?token={token}" if token else None}
 
 
 @router.post("/tenants/{tenant_id}/status")

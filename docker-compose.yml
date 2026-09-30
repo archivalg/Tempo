@@ -45,12 +45,14 @@ services:
     ports:
       - "${BACKEND_PORT:-8007}:8000"
     environment:
-      TEMPO_ENV: local
+      TEMPO_ENV: uat                       # start-up refuses insecure defaults in uat/production (see app/config.py validate_settings)
       TEMPO_DEV_IDP_ENABLED: "false"
+      TEMPO_PASSWORD_AUTH_ENABLED: "true"
+      TEMPO_REQUIRE_HTTPS: "true"          # password sign-in is refused over plain HTTP; enable HTTPS on the gateway to use it
       TEMPO_DATABASE_URL: postgresql+psycopg://tempo_app:${TEMPO_DB_APP_PASSWORD}@tempo_postgres:5432/tempo
       TEMPO_SESSION_SIGNING_KEY: ${TEMPO_SESSION_SIGNING_KEY:?set in .env}
       TEMPO_ACTION_TOKEN_SECRET: ${TEMPO_ACTION_TOKEN_SECRET:?set in .env}
-      TEMPO_SESSION_COOKIE_SECURE: "false"   # gateway serves HTTP until a certificate exists; set true with TLS
+      TEMPO_SESSION_COOKIE_SECURE: "true"
       TEMPO_CONSOLE_CORS_ORIGINS: http://tempo.ensemblesolutions.com.au,https://tempo.ensemblesolutions.com.au
     depends_on:
       tempo_migrate:

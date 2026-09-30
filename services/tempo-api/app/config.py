@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     oidc_jwks_url: str = ""
     # Restricted local identity provider: only honoured when env == "local"/"test".
     dev_idp_enabled: bool = False
+    # Username + password sign-in (Argon2id, lockout, TOTP for admins). Refuses plain HTTP outside local/test.
+    password_auth_enabled: bool = True
+    require_https: bool = True
+    login_max_failures: int = 5
+    login_lock_minutes: int = 15
+    invite_ttl_hours: int = 72
     # DAT-04: pooling/retry/timeout, applied by app/db.py only for a real
     # (non-SQLite) database — SQLite's default poolclass (NullPool)
     # doesn't accept pool_size/max_overflow at all, so these are inert
@@ -81,8 +87,11 @@ def validate_settings(config: Settings) -> None:
             problems.append("TEMPO_DEV_IDP_ENABLED must be false")
         if not config.session_cookie_secure:
             problems.append("TEMPO_SESSION_COOKIE_SECURE must be true")
-        if not (config.oidc_issuer and config.oidc_audience and config.oidc_jwks_url):
-            problems.append("OIDC issuer/audience/jwks_url must be configured")
+        has_oidc = bool(config.oidc_issuer and config.oidc_audience and config.oidc_jwks_url)
+        if not (has_oidc or config.password_auth_enabled):
+            problems.append("configure OIDC or enable password sign-in")
+        if not config.require_https:
+            problems.append("TEMPO_REQUIRE_HTTPS must be true")
         if "*" in config.console_cors_origins:
             problems.append("TEMPO_CONSOLE_CORS_ORIGINS must not be '*'")
         if problems:

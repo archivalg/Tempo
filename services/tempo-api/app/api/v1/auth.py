@@ -43,14 +43,16 @@ class AuthConfig(BaseModel):
     provider: str
     production_authentication: bool
     notice: str | None = None
+    methods: list[str] = []
 
 
 @router.get("/auth/config", response_model=AuthConfig)
 def auth_config() -> AuthConfig:
+    methods = (["password"] if settings.password_auth_enabled else []) + (["oidc"] if get_oidc() else []) + (["dev-local"] if settings.dev_idp_enabled else [])
     if settings.dev_idp_enabled:
-        return AuthConfig(provider="dev-local", production_authentication=False,
-                          notice="Local development identity. Not production authentication.")
-    return AuthConfig(provider="oidc" if get_oidc() else "unconfigured", production_authentication=bool(get_oidc()))
+        return AuthConfig(provider="dev-local", production_authentication=False, notice="Local development identity. Not production authentication.", methods=methods)
+    primary = "password" if settings.password_auth_enabled else ("oidc" if get_oidc() else "unconfigured")
+    return AuthConfig(provider=primary, production_authentication=bool(methods), methods=methods)
 
 
 @router.get("/auth/dev-identities")
@@ -85,7 +87,7 @@ def dev_login(body: DevLogin, request: Request, response: Response, db: Session 
             "csrf_token": issued.csrf_token, "expires_at": issued.access_expires_at.isoformat()}
 
 
-@router.get("/auth/login")
+@router.get("/auth/oidc/login")
 def oidc_login(request: Request) -> Response:
     provider = get_oidc()
     if provider is None:
@@ -99,7 +101,7 @@ def oidc_login(request: Request) -> Response:
     return resp
 
 
-@router.get("/auth/callback", name="oidc_callback")
+@router.get("/auth/oidc/callback", name="oidc_callback")
 def oidc_callback(request: Request, code: str, state: str, db: Session = Depends(get_db)) -> Response:
     provider = get_oidc()
     packed = request.cookies.get(_STATE_COOKIE)
@@ -150,10 +152,15 @@ def logout(response: Response, principal: auth.ResolvedPrincipal = Depends(get_p
 
 
 @router.get("/me/access")
-def me_access(principal: auth.ResolvedPrincipal = Depends(get_principal)) -> dict:
+def me_access(principal: auth.ResolvedPrincipal = Depends(get_principal), db: Session = Depends(get_db)) -> dict:
     """The server's resolved view of the caller: what the UI may show (never authority itself)."""
-    base = {"user_id": principal.user_id, "platform_admin": principal.is_platform_admin,
-            "mfa_verified": principal.mfa_verified_at is not None, "idp": "dev-local" if settings.dev_idp_enabled else "oidc"}
+    from app.core import password_login as _pl
+    begin_auth_lookup(db)
+    u = db.get(TempoUser, principal.user_id)
+    base = {"user_id": principal.user_id, "platform_admin": principal.is_platform_admin, "email": u.email if u else None, "username": u.username if u else None,
+            "mfa_verified": principal.mfa_verified_at is not None, "mfa_enabled": bool(u and u.totp_enabled_at),
+            "mfa_required": bool(u and _pl.needs_mfa(db, u) and principal.mfa_verified_at is None),
+            "idp": "dev-local" if settings.dev_idp_enabled else "password" if (u and u.password_hash) else "oidc"}
     if principal.tenant_id is None:
         return {**base, "tenant_id": None, "permissions": [], "site_ids": [], "customer_ids": [], "provider_ids": [], "roles": []}
     scope = resolve_access_scope(PrincipalContext(
@@ -163,3 +170,129 @@ def me_access(principal: auth.ResolvedPrincipal = Depends(get_principal)) -> dic
     return {**base, "tenant_id": principal.tenant_id, "roles": sorted(principal.roles),
             "permissions": sorted(scope.permissions), "site_ids": sorted(scope.site_ids),
             "customer_ids": sorted(scope.customer_ids), "provider_ids": sorted(scope.provider_ids)}
+
+
+# ---------------------------------------------------------------- username / password + TOTP
+from fastapi import Body  # noqa: E402
+
+from app.core import passwords, password_login as pl  # noqa: E402
+from app.db import begin_auth_lookup  # noqa: E402
+from app.models.identity import TempoUser  # noqa: E402
+
+
+def _cid(request: Request) -> str:
+    return getattr(request.state, "correlation_id", "n/a")
+
+
+class PasswordLogin(BaseModel):
+    username: str
+    password: str
+
+
+class MfaVerify(BaseModel):
+    challenge: str
+    code: str
+
+
+def _session_response(response: Response, issued: auth.IssuedSession, extra: dict | None = None) -> dict:
+    _set_session_cookies(response, issued)
+    return {"status": "signed_in", "expires_at": issued.access_expires_at.isoformat(), **(extra or {})}
+
+
+@router.post("/auth/login")
+def password_login(body: PasswordLogin, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+    out = pl.password_login(db, request, body.username, body.password, _cid(request))
+    if out.kind == "mfa_required":
+        return {"status": "mfa_required", "challenge": out.challenge}
+    return _session_response(response, out.issued, {"mfa_enrol_required": out.kind == "mfa_enrol_required"})
+
+
+@router.post("/auth/mfa/verify")
+def mfa_verify(body: MfaVerify, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+    return _session_response(response, pl.mfa_verify(db, request, body.challenge, body.code, _cid(request)))
+
+
+@router.post("/auth/mfa/enroll")
+def mfa_enroll(request: Request, principal: auth.ResolvedPrincipal = Depends(get_principal), db: Session = Depends(get_db)) -> dict:
+    """Starts TOTP enrolment for the signed-in user. The secret is shown once; it becomes active only after a valid code."""
+    pl.require_secure_transport(request)
+    begin_auth_lookup(db)
+    user = db.get(TempoUser, principal.user_id)
+    if user.totp_enabled_at is not None:
+        raise AuthInvalid("A second factor is already set up. Ask an administrator to reset it if you lost your device.")
+    secret = passwords.new_totp_secret()
+    user.totp_secret_enc = passwords.encrypt_secret(secret, settings.session_signing_key or auth._signing_key())
+    return {"secret": secret, "otpauth_uri": passwords.otpauth_uri(secret, user.email or user.username or user.user_id)}
+
+
+class Code(BaseModel):
+    code: str
+
+
+@router.post("/auth/mfa/confirm")
+def mfa_confirm(body: Code, request: Request, principal: auth.ResolvedPrincipal = Depends(get_principal), db: Session = Depends(get_db)) -> dict:
+    from datetime import datetime, timezone
+    from app.models.identity import UserSession
+
+    begin_auth_lookup(db)
+    user = db.get(TempoUser, principal.user_id)
+    secret = passwords.decrypt_secret(user.totp_secret_enc, settings.session_signing_key or auth._signing_key()) if user.totp_secret_enc else None
+    step = passwords.verify_totp(secret, body.code, user.totp_last_step) if secret and user.totp_enabled_at is None else None
+    if step is None:
+        raise AuthInvalid("That code is not valid. Check the time on your device and try again.")
+    now = datetime.now(timezone.utc)
+    user.totp_enabled_at, user.totp_last_step = now, step
+    sess = db.get(UserSession, principal.session_id)
+    sess.mfa_verified_at = now
+    auth.audit(db, actor_type="user", actor_id=user.user_id, action="mfa.enrolled", decision="allowed", correlation_id=_cid(request))
+    return {"status": "mfa_enabled"}
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/auth/password")
+def change_password(body: PasswordChange, request: Request, response: Response, principal: auth.ResolvedPrincipal = Depends(get_principal),
+                    db: Session = Depends(get_db)) -> dict:
+    from datetime import datetime, timezone
+    from app.errors import ScopeError
+
+    pl.require_secure_transport(request)
+    begin_auth_lookup(db)
+    user = db.get(TempoUser, principal.user_id)
+    ok, _ = passwords.verify_password(user.password_hash, body.current_password)
+    if not ok:
+        auth.audit(db, actor_type="user", actor_id=user.user_id, action="password.change", decision="denied", reason_code="bad_current", correlation_id=_cid(request))
+        db.commit()
+        raise AuthInvalid("Your current password is not correct.")
+    problems = passwords.policy_problems(body.new_password, username=user.username, email=user.email)
+    if problems or body.new_password == body.current_password:
+        raise ScopeError("New password: " + ("; ".join(problems) or "choose a different password"))
+    user.password_hash, user.password_changed_at = passwords.hash_password(body.new_password), datetime.now(timezone.utc)
+    mfa = principal.mfa_verified_at is not None
+    auth.revoke_user_everywhere(db, user.user_id, reason="password_changed", correlation_id=_cid(request))  # signs out every other device
+    db.flush()
+    issued = auth.create_session(db, user, mfa=mfa, auth_method="password")
+    auth.audit(db, actor_type="user", actor_id=user.user_id, action="password.change", decision="allowed", correlation_id=_cid(request))
+    return _session_response(response, issued)
+
+
+class Invitation(BaseModel):
+    token: str
+    password: str
+    username: str | None = None
+
+
+@router.get("/auth/invite/{token}")
+def invite_info(token: str, db: Session = Depends(get_db)) -> dict:
+    inv, user = pl.load_invitation(db, token)
+    return {"email": user.email, "username": user.username, "purpose": inv.purpose, "expires_at": inv.expires_at.isoformat(),
+            "password_rules": {"min_length": passwords.MIN_LEN, "max_length": passwords.MAX_LEN}}
+
+
+@router.post("/auth/accept-invite")
+def accept_invite(body: Invitation, request: Request, db: Session = Depends(get_db)) -> dict:
+    user = pl.accept_invitation(db, request, body.token, body.password, body.username, _cid(request))
+    return {"status": "password_set", "username": user.username}

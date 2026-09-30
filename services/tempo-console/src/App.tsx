@@ -8,6 +8,8 @@ import ApprovalsPage from './pages/Approvals'
 import AttendancePage from './pages/Attendance'
 import DemandPage from './pages/Demand'
 import ReportsPage from './pages/Reports'
+import AccountPage from './pages/Account'
+import InvitePage from './pages/Invite'
 import { KioskPage } from './pages/Kiosk'
 import { LabourProvidersPage } from './pages/LabourProviders'
 import LiveOperationsPage from './pages/LiveOperations'
@@ -27,6 +29,7 @@ function App() {
         <Routes>
           {/* Kiosk is a device surface: no session, no navigation. */}
           <Route path="/kiosk" element={<KioskPage />} />
+          <Route path="/invite" element={<InvitePage />} />
           <Route element={<AppShell />}>
             <Route path="/" element={<OverviewPage />} />
             <Route path="/demand" element={<DemandPage />} />
@@ -45,6 +48,7 @@ function App() {
             <Route path="/onboarding" element={<OnboardingPage />} />
             <Route path="/providers" element={<LabourProvidersPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/account" element={<AccountPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

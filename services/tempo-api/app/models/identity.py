@@ -72,6 +72,16 @@ class TempoUser(Base):
     # verified login links the real IdP subject (bootstrap / invitations).
     email: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Password sign-in. Only an Argon2id hash is stored; there is no default or shared password anywhere.
+    username: Mapped[str | None] = mapped_column(String, nullable=True, unique=True, index=True)
+    password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failed_logins: Mapped[int] = mapped_column(default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # TOTP second factor: secret encrypted at rest; last accepted time-step blocks replay of a used code.
+    totp_secret_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    totp_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    totp_last_step: Mapped[int] = mapped_column(default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -312,5 +322,20 @@ class Tenant(Base):
     plan: Mapped[str] = mapped_column(String, default="pilot")
     feature_flags: Mapped[dict] = mapped_column(JSON, default=dict)
     writeback_enabled: Mapped[bool] = mapped_column(default=False)  # tenant kill switch (default OFF)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class UserInvitation(Base):
+    """One-time invitation to set a password. Only a digest of the token is stored; it expires and is single-use."""
+
+    __tablename__ = "user_invitation"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("tempo_user.user_id"), index=True)
+    token_digest: Mapped[str] = mapped_column(String, unique=True, index=True)
+    purpose: Mapped[str] = mapped_column(String, default="invite")  # invite | reset
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -67,6 +67,7 @@ export function AppShell() {
             <div className="tp-spacer" />
             <div className="tp-user">
               <div><div>{access.roles.map((r) => r.replace(/_/g, ' ')).join(', ') || 'no role'}</div><small>{access.tenant_id}{access.mfa_verified ? ' · MFA' : ''}</small></div>
+              <NavLink className="tp-iconbtn" style={{ textDecoration: 'none' }} to="/account">Account</NavLink>
               <button className="tp-iconbtn" onClick={() => void signOut()}>Sign out</button>
             </div>
           </header>
@@ -81,6 +82,7 @@ export function AppShell() {
             </nav>
           </aside>
           <main className="tp-main" id="main" tabIndex={-1}>
+            {access.mfa_required && <Banner tone="warn" title="Set up two-step verification">Your role needs it. Until then admin actions are unavailable. <NavLink to="/account">Set it up now</NavLink></Banner>}
             {sitesQ.error ? <Banner tone="bad" title="Could not load your sites">Try again shortly.</Banner> : <Outlet />}
           </main>
         </div>

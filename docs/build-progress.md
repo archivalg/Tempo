@@ -30,6 +30,16 @@ Sequence:
 5. Browser e2e of the whole flow (Playwright) + screenshots.
 6. Then: login milestone (username/password), full RBAC matrix, site/customer RLS, service clients, then remaining modules.
 
+## Product workflow increment (30 Sep 2026) — status
+Verified in a real local browser (Playwright, `scripts/e2e.sh`, screenshots in `docs/screenshots/`):
+- **Demand → roster → approval → publish → reconcile:** roster *versions* (`roster_version`, append-only `roster_event`); generate from forecast (persisted forecast run), edit by form with server-side re-validation (overlap, 10 h rest, availability, certification, site eligibility, max hours), hard conflicts block submit; submitter ≠ approver; any edit after submission voids approval; publish is idempotent, promotes proposed rows once, supersedes the previous published rows, and reconciles (counts, duplicates, hash, no stray live rows).
+- **Attendance:** kiosk enrolment (one-time code, numeric badge + PIN, lockouts), live operations with source freshness and stale suppression, exception lifecycle, timesheet approval, supervised corrections (original never edited; second approver).
+- **Variance:** plan vs attended (estimate) vs payable (confirmed), adherence, forecast WAPE, cost — all labelled; future days show dashes, not zeros.
+- **Solver fixes found by the screens:** rest rule added; days are site-local (were UTC); daily totals derived from hourly history; per-shift headcount share.
+- **Password sign-in (Argon2id), lockout, IP throttle, TOTP for admins, invite-only accounts, per-tenant suspension, delegation limits** — `tests/test_password_login.py` (17) + `e2e/password-login.spec.ts` (3).
+Known gaps: drag-and-drop editing (form editing exists); notifications; Demand overrides; reports export; vendor writeback; forecast has no seasonal term (WAPE ≈ 10 %); break rules nominal; OIDC untested against a real IdP.
+**HTTPS:** the gateway serves `tempo.ensemblesolutions.com.au` over HTTP only. Password sign-in is *refused* over HTTP by design, so the hostname cannot be used to sign in until the gateway has a certificate.
+
 ## Gate 1 — safe standalone foundation
 | ID | Requirement (Blueprint) | Status | Evidence / gap |
 |---|---|---|---|

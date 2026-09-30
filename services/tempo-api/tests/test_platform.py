@@ -57,9 +57,12 @@ def test_email_invitation_only_links_the_matching_verified_identity(client):
 
 def test_no_default_password_or_credential_is_created(client):
     _bootstrap(subject="idp|x", email=None)
+    _bootstrap(subject=None, email="never@example.test")  # refused: an admin exists
     with client.session_local() as s:
         cols = set(TempoUser.__table__.columns.keys())
-        assert not any("password" in c for c in cols)
+        assert not any("password" in c and c not in ("password_hash", "password_changed_at") for c in cols)  # no plaintext / default column
+        users = s.scalars(select(TempoUser)).all()
+        assert users and all(u.password_hash is None for u in users), "bootstrap must never set a password"
 
 
 def test_platform_routes_reject_tenant_users_and_non_mfa_admins(client):

@@ -105,3 +105,15 @@ def init_db() -> None:
     import app.models.rosters  # noqa: F401
     import app.models.identity  # noqa: F401
     import app.models.runs  # noqa: F401
+
+
+@contextmanager
+def auth_phase(session: Session, tenant_id: str) -> Iterator[Session]:
+    """Temporarily allow identity-table writes (users, invitations) from a tenant-scoped request, then re-bind the tenant.
+    Only tenant-admin user management uses this; every use is audited by its caller."""
+    begin_auth_lookup(session)
+    try:
+        yield session
+    finally:
+        session.flush()
+        bind_tenant(session, tenant_id)
