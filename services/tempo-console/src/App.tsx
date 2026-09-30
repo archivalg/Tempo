@@ -1,28 +1,32 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import { Layout } from './components/Layout'
+import { AppShell } from './components/AppShell'
 import { TempoContextProvider } from './context/TempoContextProvider'
-import { ContextSetupPage } from './pages/ContextSetup'
-import { DashboardPage } from './pages/Dashboard'
-import { RunsListPage } from './pages/RunsList'
-import { NewRunPage } from './pages/NewRun'
-import { RunDetailPage } from './pages/RunDetail'
-import { RunComparisonsPage } from './pages/RunComparisons'
-import { ActionsListPage } from './pages/ActionsList'
-import { NewActionPage } from './pages/NewAction'
 import { ActionDetailPage } from './pages/ActionDetail'
-import { OnboardingPage } from './pages/Onboarding'
+import { ActionsListPage } from './pages/ActionsList'
+import AdminPage from './pages/Admin'
 import { KioskPage } from './pages/Kiosk'
-import { TeamAttendancePage } from './pages/TeamAttendance'
 import { LabourProvidersPage } from './pages/LabourProviders'
+import LiveOperationsPage from './pages/LiveOperations'
+import { NewActionPage } from './pages/NewAction'
+import { NewRunPage } from './pages/NewRun'
+import { OnboardingPage } from './pages/Onboarding'
+import OverviewPage from './pages/Overview'
+import RosterPlannerPage from './pages/RosterPlanner'
+import { RunComparisonsPage } from './pages/RunComparisons'
+import { RunDetailPage } from './pages/RunDetail'
+import { RunsListPage } from './pages/RunsList'
 
 function App() {
   return (
     <TempoContextProvider>
       <BrowserRouter>
         <Routes>
-          <Route path="/setup" element={<ContextSetupPage />} />
-          <Route element={<Layout />}>
-            <Route path="/" element={<DashboardPage />} />
+          {/* Kiosk is a device surface: no session, no navigation. */}
+          <Route path="/kiosk" element={<KioskPage />} />
+          <Route element={<AppShell />}>
+            <Route path="/" element={<OverviewPage />} />
+            <Route path="/roster" element={<RosterPlannerPage />} />
+            <Route path="/live" element={<LiveOperationsPage />} />
             <Route path="/runs" element={<RunsListPage />} />
             <Route path="/runs/new" element={<NewRunPage />} />
             <Route path="/runs/compare" element={<RunComparisonsPage />} />
@@ -32,8 +36,7 @@ function App() {
             <Route path="/actions/:actionId" element={<ActionDetailPage />} />
             <Route path="/onboarding" element={<OnboardingPage />} />
             <Route path="/providers" element={<LabourProvidersPage />} />
-            <Route path="/kiosk" element={<KioskPage />} />
-            <Route path="/attendance" element={<TeamAttendancePage />} />
+            <Route path="/admin" element={<AdminPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -1,4 +1,4 @@
-import { apiFetch, newIdempotencyKey } from './client'
+import { apiFetch, newIdempotencyKey, randomUUID } from './client'
 import type {
   ObjectiveProfile,
   RunComparisonResponse,
@@ -26,7 +26,7 @@ export function createRun(context: TempoContext, input: NewRunInput): Promise<Ru
     method: 'POST',
     idempotencyKey: newIdempotencyKey(),
     body: {
-      request_id: `req_${crypto.randomUUID().slice(0, 12)}`,
+      request_id: `req_${randomUUID().slice(0, 12)}`,
       scope: { tenant_id: context.tenant_id, site_ids: input.siteIds, customer_ids: input.customerIds },
       planning_window: {
         start: input.windowStart,

@@ -33,7 +33,7 @@ from app.models.identity import (  # noqa: E402
 
 def _url(role: str) -> str:
     pw = os.environ["TEMPO_DB_OWNER_PASSWORD" if role == "tempo_owner" else "TEMPO_DB_APP_PASSWORD"]
-    host = os.environ.get("TEMPO_TEST_DB_HOST", "localhost:5447")
+    host = os.environ.get("TEMPO_TEST_DB_HOST", "localhost:5439")
     return f"postgresql+psycopg://{role}:{pw}@{host}/tempo_test"
 
 

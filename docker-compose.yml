@@ -1,0 +1,80 @@
+# Tempo — Ensemble App 7 (frontend 3007, backend 8007, PostgreSQL 5439, Redis 6386 reserved/unused).
+# Routed by the central gateway (Ensemble_NGNIX) over the central_nginx_proxy network: /v1, /docs, /healthz -> tempo_backend:8000,
+# everything else -> tempo_frontend:80. The gateway config is not changed by this file.
+#
+# Secrets come from ./.env (gitignored). The runtime backend uses the NON-owner `tempo_app` role; only the one-shot
+# `tempo_migrate` service holds the owner role. TEMPO_DEV_IDP_ENABLED stays false here: the dev identity picker must
+# never be reachable on a public hostname.
+services:
+  tempo_postgres:
+    image: postgres:16
+    container_name: tempo_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set in .env}
+      TEMPO_DB_OWNER_PASSWORD: ${TEMPO_DB_OWNER_PASSWORD:?set in .env}
+      TEMPO_DB_APP_PASSWORD: ${TEMPO_DB_APP_PASSWORD:?set in .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5439}:5432"
+    volumes:
+      - tempo_pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/01-roles.sh:/docker-entrypoint-initdb.d/01-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 20
+    networks: [central_nginx_proxy]
+
+  tempo_migrate:
+    build: ./services/tempo-api
+    image: tempo-api:local
+    container_name: tempo_migrate
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      TEMPO_DATABASE_MIGRATION_URL: postgresql+psycopg://tempo_owner:${TEMPO_DB_OWNER_PASSWORD}@tempo_postgres:5432/tempo
+    depends_on:
+      tempo_postgres:
+        condition: service_healthy
+    networks: [central_nginx_proxy]
+
+  tempo_backend:
+    image: tempo-api:local
+    container_name: tempo_backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8007}:8000"
+    environment:
+      TEMPO_ENV: local
+      TEMPO_DEV_IDP_ENABLED: "false"
+      TEMPO_DATABASE_URL: postgresql+psycopg://tempo_app:${TEMPO_DB_APP_PASSWORD}@tempo_postgres:5432/tempo
+      TEMPO_SESSION_SIGNING_KEY: ${TEMPO_SESSION_SIGNING_KEY:?set in .env}
+      TEMPO_ACTION_TOKEN_SECRET: ${TEMPO_ACTION_TOKEN_SECRET:?set in .env}
+      TEMPO_SESSION_COOKIE_SECURE: "false"   # gateway serves HTTP until a certificate exists; set true with TLS
+      TEMPO_CONSOLE_CORS_ORIGINS: http://tempo.ensemblesolutions.com.au,https://tempo.ensemblesolutions.com.au
+    depends_on:
+      tempo_migrate:
+        condition: service_completed_successfully
+    networks: [central_nginx_proxy]
+
+  tempo_frontend:
+    build:
+      context: ./services/tempo-console
+      args:
+        VITE_API_BASE_URL: /v1     # same origin behind the gateway
+    container_name: tempo_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3007}:80"
+    depends_on:
+      tempo_backend:
+        condition: service_healthy
+    networks: [central_nginx_proxy]
+
+volumes:
+  tempo_pgdata:
+  tempo_data:   # legacy SQLite scaffold data from the pre-Gate-1 build: retained, unused
+
+networks:
+  central_nginx_proxy:
+    external: true

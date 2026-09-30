@@ -1,0 +1,73 @@
+/* Tempo design tokens. Colours are sampled from the supplied brand board ("Tempo Traffic Light.png"):
+   charcoal #1b262b, green #069b57, amber #f9a92f, red #e8372f. Status colours carry operational meaning only;
+   every status is ALSO expressed by an icon and a text label (never colour alone). Text on tinted status
+   backgrounds uses the darker *-ink tokens so it meets WCAG AA (>= 4.5:1). */
+:root {
+  color-scheme: light;
+  /* chrome */
+  --tp-charcoal: #1b262b;
+  --tp-charcoal-2: #25343a;
+  --tp-charcoal-3: #33454d;
+  --tp-on-chrome: #f4f7f7;
+  --tp-on-chrome-muted: #a9b8bd;
+  /* surfaces + text */
+  --tp-canvas: #f3f5f5;
+  --tp-surface: #ffffff;
+  --tp-surface-2: #f8fafa;
+  --tp-line: #d7dee0;
+  --tp-line-strong: #b7c2c6;
+  --tp-ink: #1b262b;
+  --tp-ink-2: #43545b;
+  --tp-ink-muted: #5f7079; /* 5.0:1 on white */
+  --tp-focus: #0b57d0;
+  /* status (brand) */
+  --tp-green: #069b57;
+  --tp-amber: #f9a92f;
+  --tp-red: #e8372f;
+  /* status tints + ink (AA on tint) */
+  --tp-green-bg: #e1f4ea;
+  --tp-green-ink: #045c34;
+  --tp-amber-bg: #fff1d6;
+  --tp-amber-ink: #6d4200;
+  --tp-red-bg: #fde9e7;
+  --tp-red-ink: #9c140c;
+  --tp-info-bg: #e6eef2;
+  --tp-info-ink: #2a4a5a;
+  /* chart neutrals: legible without relying on hue */
+  --tp-chart-actual: #1b262b;
+  --tp-chart-forecast: #5f7079;
+  --tp-chart-band: rgba(95, 112, 121, 0.16);
+  --tp-chart-capacity: #2c7391;
+  --tp-chart-grid: #e3e8ea;
+  /* scale */
+  --tp-space-1: 4px; --tp-space-2: 8px; --tp-space-3: 12px; --tp-space-4: 16px; --tp-space-5: 24px; --tp-space-6: 32px;
+  --tp-radius-s: 6px; --tp-radius-m: 10px; --tp-radius-l: 14px;
+  --tp-shadow-1: 0 1px 2px rgba(27, 38, 43, 0.08);
+  --tp-shadow-2: 0 6px 20px rgba(27, 38, 43, 0.16);
+  --tp-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --tp-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --tp-sidebar-w: 236px;
+  --tp-topbar-h: 60px;
+}
+
+/* Dark content theme (chrome is charcoal in both). Applied by OS preference or [data-theme="dark"]. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --tp-canvas: #11191d; --tp-surface: #182227; --tp-surface-2: #1e2a30; --tp-line: #2c3b42; --tp-line-strong: #43565f;
+    --tp-ink: #eef3f4; --tp-ink-2: #c4d0d4; --tp-ink-muted: #9db0b7; --tp-focus: #8ab4f8;
+    --tp-green-bg: #0d3222; --tp-green-ink: #7fe0ae; --tp-amber-bg: #3d2c08; --tp-amber-ink: #ffd489;
+    --tp-red-bg: #45140f; --tp-red-ink: #ffb1aa; --tp-info-bg: #1f3540; --tp-info-ink: #a9d3e6;
+    --tp-chart-actual: #eef3f4; --tp-chart-forecast: #9db0b7; --tp-chart-band: rgba(157, 176, 183, 0.18);
+    --tp-chart-capacity: #63b6d6; --tp-chart-grid: #26353c;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --tp-canvas: #11191d; --tp-surface: #182227; --tp-surface-2: #1e2a30; --tp-line: #2c3b42; --tp-line-strong: #43565f;
+  --tp-ink: #eef3f4; --tp-ink-2: #c4d0d4; --tp-ink-muted: #9db0b7; --tp-focus: #8ab4f8;
+  --tp-green-bg: #0d3222; --tp-green-ink: #7fe0ae; --tp-amber-bg: #3d2c08; --tp-amber-ink: #ffd489;
+  --tp-red-bg: #45140f; --tp-red-ink: #ffb1aa; --tp-info-bg: #1f3540; --tp-info-ink: #a9d3e6;
+  --tp-chart-actual: #eef3f4; --tp-chart-forecast: #9db0b7; --tp-chart-band: rgba(157, 176, 183, 0.18);
+  --tp-chart-capacity: #63b6d6; --tp-chart-grid: #26353c;
+}

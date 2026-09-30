@@ -44,6 +44,33 @@ async def attach_correlation_id(request: Request, call_next):
     return response
 
 
+@app.get("/readyz", tags=["ops"])
+def readyz() -> dict[str, str]:
+    """Readiness: the runtime role can reach PostgreSQL and the code's migration head is known."""
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import text
+
+    from app import db as db_module
+    from app.errors import TempoError
+
+    class NotReady(TempoError):
+        status, error_code, title = 503, "TEMPO-SVC-503", "Not ready"
+
+    try:
+        with db_module.engine.connect() as c:
+            who = c.execute(text("SELECT current_user")).scalar()
+            applied = c.execute(text("SELECT to_regclass('public.alembic_version') IS NOT NULL")).scalar()
+        head = ScriptDirectory.from_config(Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))).get_current_head()
+    except Exception as exc:  # noqa: BLE001
+        raise NotReady("database not reachable") from exc
+    if not applied:
+        raise NotReady("schema not migrated")
+    return {"status": "ready", "database": "postgresql", "role": str(who), "migration_head": str(head)}
+
+
 @app.get("/healthz", tags=["ops"])
 def healthz() -> dict[str, str]:
     return {"status": "ok", "service": settings.service_name}

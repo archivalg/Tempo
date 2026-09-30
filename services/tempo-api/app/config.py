@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     # `database_migration_url` (the `tempo_owner` role). No default password:
     # the URL must come from the environment (.env.example documents it).
     env: str = "local"  # local | test | uat | production
-    database_url: str = "postgresql+psycopg://tempo_app@localhost:5447/tempo"
-    database_migration_url: str = "postgresql+psycopg://tempo_owner@localhost:5447/tempo"
+    database_url: str = "postgresql+psycopg://tempo_app@localhost:5439/tempo"
+    database_migration_url: str = "postgresql+psycopg://tempo_owner@localhost:5439/tempo"
     # Signs Tempo-issued short-lived access tokens (HS256). Required outside local.
     session_signing_key: str = ""
     access_token_ttl_seconds: int = 900
