@@ -10,18 +10,30 @@ Branch `build/tempo-standalone-gate1`. Spec: [`Tempo_Product_Build_Blueprint.md`
 - Production IdP: **open** (ADR-0001). Adapter is provider-agnostic; local dev IdP is env-restricted and labelled non-production.
 
 ## Environment (this host)
-- `tempo_postgres` (postgres:16, 127.0.0.1:5447, roles `tempo_owner` migrations / `tempo_app` runtime, dbs `tempo`, `tempo_test`) defined in `docker-compose.yml` (still uncommitted: user-owned working-tree file) with `docker/postgres/01-roles.sh`.
+- `tempo_postgres` (postgres:16, 127.0.0.1:5439, roles `tempo_owner` migrations / `tempo_app` runtime, dbs `tempo`, `tempo_test`) defined in `docker-compose.yml` with `docker/postgres/01-roles.sh`.
 - Generated secrets live in gitignored `/home/opc/tempo/.env` (mode 600, owner `opc`). Rotation: regenerate values, `docker compose up -d`, re-run role script (`ALTER ROLE ... PASSWORD`), invalidate sessions by changing `TEMPO_SESSION_SIGNING_KEY`. Not yet automated. Dedicated `.env.development.local`/`.env.uat` outside the repo: **open**.
-- Existing `tempo_backend`:8007 / `tempo_frontend`:3007 containers are **unchanged and still run the pre-Gate-1 SQLite build**; they'll be rebuilt when the console is migrated to sessions.
+- **Deployed (30 Sep 2026, commit 4f7ae61):** `tempo_postgres` 127.0.0.1:5439 (volume `tempo_tempo_pgdata` preserved; backup `~/tempo-backups/`), one-shot `tempo_migrate`, `tempo_backend` 8007 (image `tempo-api:local`, non-owner `tempo_app`, `/readyz` ok, dev IdP OFF), `tempo_frontend` 3007. Gateway unchanged (it already targets `tempo_backend:8000` / `tempo_frontend:80`; only `/readyz` is not in its route regex). The public hostname shows the sign-in page with *no identity provider configured* — nobody can sign in there until the login milestone. Legacy SQLite volume `tempo_tempo_data` retained, unused.
+- Local dev/verification stack (dev IdP ON, loopback only): API 127.0.0.1:8017, console 127.0.0.1:5174, driven by local Playwright Chromium (`/tmp/claude-1000/dev-up.sh`).
 - Python 3.12 venv: `/tmp/claude-1000/v312` (`uv venv`), system Python untouched.
 
 ## Verification run (2026-09-30, real PostgreSQL, non-owner runtime role)
 `pytest --ignore=tests/test_capacity.py` → **244 passed** (baseline before Gate 1: 187 on SQLite).
 
+## Build priority (revised 30 Sep 2026, owner instruction)
+Product workflow first; the full login / RBAC / security-hardening milestone is **deferred** until the workflow works, and will add a username+password experience. Tenant-aware data model and RLS continue as we build. Until then: dev IdP is local-only, never on the public hostname.
+
+Sequence:
+1. Professional Overview / Roster Planner / Live Operations on Ensemble sample data — **built, browser-verified locally** (see Screens).
+2. Demand → roster: Demand workspace; roster **versions** (draft → edit → validate → submit → approve → publish → reconcile); rest/availability/cert rules in the solver.
+3. Approvals inbox; attendance timesheets + corrections (never overwrite the original punch).
+4. Variance: planned vs attended vs payable hours/cost, adherence, forecast accuracy — labelled estimate vs confirmed.
+5. Browser e2e of the whole flow (Playwright) + screenshots.
+6. Then: login milestone (username/password), full RBAC matrix, site/customer RLS, service clients, then remaining modules.
+
 ## Gate 1 — safe standalone foundation
 | ID | Requirement (Blueprint) | Status | Evidence / gap |
 |---|---|---|---|
-| G1-01 | Remove caller-asserted identity (§5.1) | **partial** | `X-Tempo-Context` no longer read anywhere; `tests/test_identity_boundary.py` (forged header ignored/401, tenant selector checked vs memberships, tampered/unsigned/expired tokens, revocation, token_version, grant removal, refresh replay, CSRF, prod-config refusal). **Gap:** console still sends the old header and `/setup`; needs migration (next). |
+| G1-01 | Remove caller-asserted identity (§5.1) | **partial** | `X-Tempo-Context` no longer read anywhere; `tests/test_identity_boundary.py` (forged header ignored/401, tenant selector checked vs memberships, tampered/unsigned/expired tokens, revocation, token_version, grant removal, refresh replay, CSRF, prod-config refusal). **Gap:** console still sends the old header and `/setup`; needs migration (deferred to the login milestone). |
 | G1-02 | OIDC adapter + sessions (§5.1) | **partial** | Code: `core/oidc.py` (PKCE, JWKS rotation, iss/aud/exp/nonce), `core/auth.py`, `api/v1/auth.py`. Rotating refresh + family revocation + HttpOnly/CSRF tested with the **dev IdP only**. **Not verified against any real IdP** (blocked: IdP choice). Access-token revocation is DB-checked per request. |
 | G1-03 | MFA for admins (§5.1) | **partial** | Admin role without MFA loses admin permissions; platform routes require MFA + 30-min step-up. MFA assertion comes from IdP `amr`; untested with a real IdP. |
 | G1-04 | AccessScope single resolver (§5.2) | **partial** | Principal→`AccessScope` used by `/me/access`; handlers use the resolved `RequestContext` (roles/grants from Tempo tables). Legacy per-handler `context.has_permission` calls remain — not yet a single decorator; permission catalogue (`platform.*`, `site.*`, `device.*` …) **not yet implemented** (still 8 legacy codes). |
