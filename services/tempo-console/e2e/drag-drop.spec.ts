@@ -21,16 +21,18 @@ test('planner drags a shift to another worker and day, the server re-checks, and
   const rowIdx = await srcCell.evaluate((td) => (td.parentElement as HTMLTableRowElement).sectionRowIndex)
   const colIdx = await srcCell.evaluate((td) => (td as HTMLTableCellElement).cellIndex)
   const label = (await src.getAttribute('aria-label'))!
+  const countOf = (l: string) => page.locator('.tp-shift').evaluateAll((els, x) => els.filter((e) => e.getAttribute('aria-label') === x).length, l)
+  const before = await countOf(label)
   const target = page.locator('tbody tr').nth(rowIdx + 1).locator('td').nth(colIdx === 7 ? colIdx - 1 : colIdx + 1)
   await src.dragTo(target)
   await expect(page.getByRole('status').filter({ hasText: 'Moved' })).toBeVisible()
   await expect(page.getByRole('status')).toContainText('server re-checked')
-  expect(await page.locator('.tp-shift').evaluateAll((els, l) => els.filter((e) => e.getAttribute('aria-label') === l).length, label)).toBe(0)  // no longer the same worker/day
+  expect(await countOf(label)).toBe(before - 1)   // that worker's shift left its cell (the label is not unique across days, so compare counts)
   await page.screenshot({ path: '../../docs/screenshots/roster-drag-drop.png', fullPage: true })
 
   await page.getByRole('button', { name: 'Undo' }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Moved' })).toHaveCount(0)
-  await expect(page.locator(`.tp-shift[aria-label="${label.replace(/"/g, '\\"')}"]`)).toHaveCount(1)
+  await expect.poll(() => countOf(label)).toBe(before)   // Undo put it back
 })
 
 test('an analyst cannot drag shifts', async ({ page }) => {

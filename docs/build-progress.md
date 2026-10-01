@@ -40,7 +40,7 @@ Verified in a real local browser (Playwright, `scripts/e2e.sh`, screenshots in `
 Known gaps: forecast has no seasonal term (WAPE ≈ 10 %); break rules nominal; OIDC untested against a real IdP.
 
 ## Product gaps closed (1 Oct 2026) — commits 828c2bd, bfb299f, 166e709, 2e0a447
-Each was verified by API tests on real PostgreSQL **and** a Playwright run in a real browser (`e2e/*.spec.ts`, screenshots in `docs/screenshots/`).
+Each was verified by API tests on real PostgreSQL (full suite: **297 passed**) **and** a Playwright run (full suite: **16 passed**) in a real browser (`e2e/*.spec.ts`, screenshots in `docs/screenshots/`).
 | Gap | What was built | Honest limits |
 |---|---|---|
 | **Report export** | Audited CSV for variance / timesheets / demand (`labour.export`, a new permission; ops manager, planner, tenant admin, executive). Same read models as the screens, so rates and worker names stay permission-gated. Cells are formula-injection safe; upcoming days are blank, not zero; estimate vs confirmed is in the column names. | CSV only (no PDF/XLSX). No scheduled or emailed exports. |
