@@ -25,7 +25,7 @@ METRIC_DEFS = {
     "scheduled_workers": "Distinct workers with a published (committed) shift starting in the site's local day.",
     "clocked_in": "Workers with an open attendance session (clocked in, not yet out) as of the last attendance update.",
     "coverage": "Σ over the day's hours of min(rostered hours, required hours) ÷ Σ required hours. Required hours = forecast (else actual) units × work-standard seconds ÷ 3600. Planned basis, not live.",
-    "work_units": "Units actually received so far today ÷ forecast units for the whole local day (Holt-linear forecast, no seasonality).",
+    "work_units": "Units actually received so far today ÷ forecast units for the whole local day (the forecast model; see the method shown on the Demand page).",
     "labour_cost": "Planned = Σ published shift hours × the matching cost rule's rate. Actual (estimate) = Σ attendance hours to date × rate; attendance not yet approved is an estimate, not payable actual.",
     "open_exceptions": "Exceptions in state detected/triaged/assigned at this site.",
 }
@@ -69,6 +69,15 @@ def _standards(db: Session, tenant_id: str, at: datetime) -> dict[str, float]:
         if _aware(w.effective_from) <= at and (w.effective_to is None or _aware(w.effective_to) > at):
             out[w.activity] = w.time_per_unit_seconds
     return out
+
+
+METHOD_LABEL = {"holt_linear_weekly": "Holt linear trend with a day-of-week pattern", "holt_linear_weekly_partial": "Holt linear trend; day-of-week pattern for some activities only",
+                "holt_linear": "Holt linear trend (no weekly pattern — under two weeks of daily history, or an older run)"}
+
+
+def method_label(run) -> str:
+    """What the forecast actually did, taken from the run itself (older runs predate the weekly pattern)."""
+    return METHOD_LABEL.get(((run.result or {}).get("method")) if run else None, METHOD_LABEL["holt_linear"])
 
 
 def _latest_forecast(db: Session, tenant_id: str, site_id: str) -> tuple[OptimisationRun | None, list[dict]]:
@@ -280,7 +289,7 @@ def overview(db: Session, tenant_id: str, site: Site, day_iso: str | None, now: 
                  "is_synthetic": site.is_synthetic, "local_now": now.astimezone(tz).isoformat()},
         "day": day, "as_of": now, "metric_version": METRIC_VERSION, "data_sources": sources, "attendance_verified": att_verified,
         "forecast": {"run_id": fc_run.run_id if fc_run else None,
-                     "method": "Daily total: Holt linear smoothing (no seasonal term). Hourly shape: this site's own same-weekday history, last 28 days." if fc_run else None,
+                     "method": f"Daily total: {method_label(fc_run)}. Hourly shape: this site's own same-weekday history, last 28 days." if fc_run else None,
                      "confidence": conf, "created_at": fc_run.created_at if fc_run else None},
         "kpis": kpis, "hourly": hourly, "heatmap": {"zones": [{"zone_id": z.zone_id, "name": z.name} for z in zones], "shifts": [
             {"code": w["code"], "start": w["start"], "end": w["end"]} for w in windows], "cells": cells},
@@ -524,7 +533,7 @@ def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, 
         "totals": {"published": totals("committed"), "draft": totals("proposed")},
         "publication": {"latest_action_status": act.status if act else None, "latest_action_id": act.action_id if act else None,
                         "can_publish": not conflicts},
-        "forecast": {"run_id": fc_run.run_id if fc_run else None, "method": "Daily total: Holt linear smoothing (no seasonal term)"},
+        "forecast": {"run_id": fc_run.run_id if fc_run else None, "method": f"Daily total: {method_label(fc_run)}"},
         "notes": ["Break length is a nominal 30 min; break rules are not yet configurable.", "Site is derived from the worker's home site."],
     }
 

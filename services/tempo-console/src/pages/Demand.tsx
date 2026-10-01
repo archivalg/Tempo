@@ -86,7 +86,7 @@ export default function DemandPage() {
               <dt>Snapshot</dt><dd style={{ wordBreak: 'break-all' }}>{d?.forecast.snapshot_id ?? '—'}</dd>
               <dt>Method</dt><dd>{d?.forecast.method}</dd>
               <dt>Back-test MAPE</dt><dd>{d?.forecast.backtest_mape != null ? `${(d.forecast.backtest_mape * 100).toFixed(1)}%` : '—'}</dd>
-            </dl><p className="tp-muted" style={{ fontSize: 12.5 }}>{d?.overrides_note} The forecast has no seasonal term, so weekday/weekend swings show as error.</p></div>
+            </dl><p className="tp-muted" style={{ fontSize: 12.5 }}>{d?.overrides_note}</p></div>
           </section>
         </aside>
       </div>

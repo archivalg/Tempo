@@ -11,6 +11,7 @@ docs/roadmap.md).
 from __future__ import annotations
 
 import math
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -40,6 +41,24 @@ def _fit_holt_linear(series: list[float]) -> tuple[float, float, list[float]]:
         new_trend = BETA * (new_level - level) + (1 - BETA) * trend
         level, trend = new_level, new_trend
     return level, trend, fitted
+
+
+MIN_SEASON_OBS = 2  # every weekday needs at least two observations (two full weeks) before a weekly pattern is trusted
+
+
+def _weekly_index(rows: list, tz: ZoneInfo) -> dict[int, float] | None:
+    """Day-of-week multipliers (mean 1.0) from daily history, or None when there is not enough history to trust them."""
+    by: dict[int, list[float]] = defaultdict(list)
+    for r in rows:
+        st = r.interval_start if r.interval_start.tzinfo else r.interval_start.replace(tzinfo=timezone.utc)
+        by[st.astimezone(tz).weekday()].append(r.volume)
+    if len(by) < 7 or any(len(v) < MIN_SEASON_OBS for v in by.values()):
+        return None
+    means = {d: sum(v) / len(v) for d, v in by.items()}
+    overall = sum(means.values()) / 7
+    if overall <= 0:
+        return None
+    return {d: max(0.2, m / overall) for d, m in means.items()}
 
 
 def _backtest_mape(actual: list[float], fitted: list[float]) -> float | None:
@@ -110,6 +129,9 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
     model_totals: dict[str, float] = {}
     mapes: list[float] = []
     activities_with_trend = 0
+    tz = ZoneInfo(window.timezone)
+    seasonal_on: list[str] = []
+    seasonal_off: list[str] = []
 
     for activity, activity_rows in by_activity.items():
         series = [r.volume for r in activity_rows]
@@ -131,7 +153,16 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
             continue
 
         activities_with_trend += 1
-        level, trend, fitted = _fit_holt_linear(series)
+        idx = _weekly_index(activity_rows, tz) if window.bucket_minutes == 1440 else None
+        (seasonal_on if idx else seasonal_off).append(activity)
+
+        def dow(dt: datetime) -> int:
+            return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(tz).weekday()
+
+        work = [r.volume / idx[dow(r.interval_start)] for r in activity_rows] if idx else series
+        level, trend, fitted = _fit_holt_linear(work)
+        if idx:  # put the weekly pattern back so the back-test and the error band are in real units
+            fitted = [f * idx[dow(r.interval_start)] for f, r in zip(fitted, activity_rows)]
         mape = _backtest_mape(series, fitted)
         if mape is not None:
             mapes.append(mape)
@@ -140,7 +171,8 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
 
         activity_total = 0.0
         for h in range(1, horizon_buckets + 1):
-            point = max(0.0, level + trend * h)
+            target = window.start + bucket * (h - 1)
+            point = max(0.0, level + trend * h) * (idx[dow(target)] if idx else 1.0)
             spread = Z_90 * sigma * math.sqrt(h)
             activity_total += point
             forecasts.append(
@@ -157,7 +189,6 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
     applied_overrides: list[str] = []
     override_note = None
     if len(site_ids) == 1:
-        from zoneinfo import ZoneInfo
         from app.core import overrides as ov
         forecasts, applied_overrides = ov.apply(forecasts, ov.active_for(db, tenant_id, site_ids[0], datetime.now(timezone.utc)), ZoneInfo(window.timezone))
     elif len(site_ids) > 1:
@@ -181,6 +212,8 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         )
     if avg_mape is None:
         missing_evidence.append("insufficient history to backtest forecast error")
+    if seasonal_off and window.bucket_minutes == 1440:
+        missing_evidence.append(f"no weekly pattern for {', '.join(sorted(seasonal_off))}: under two weeks of daily history (trend only)")
     if override_note:
         missing_evidence.append(override_note)
 
@@ -189,6 +222,8 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
             "forecast": forecasts,
             "backtest_mape": round(avg_mape, 4) if avg_mape is not None else None,
             "overrides_applied": applied_overrides,
+            "method": "holt_linear_weekly" if seasonal_on and not seasonal_off else ("holt_linear_weekly_partial" if seasonal_on else "holt_linear"),
+            "seasonality": {"weekly_applied_to": sorted(seasonal_on), "no_pattern_for": sorted(seasonal_off)},
             "kpis": {"activities_forecast": len(by_activity), "horizon_buckets": horizon_buckets},
         },
         baseline={"method": "naive_last_observed", "total_by_activity": naive_totals},
@@ -208,6 +243,6 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         primary_drivers=[f"Fitted Holt linear trend over {len(rows)} historical buckets across {len(by_activity)} activities"]
         + ([f"{len(applied_overrides)} manual demand override(s) applied on top of the model"] if applied_overrides else []),
         missing_evidence=missing_evidence,
-        assumptions=[f"forecast method fixed to Holt linear smoothing (alpha={ALPHA}, beta={BETA})"],
+        assumptions=[f"Holt linear smoothing (alpha={ALPHA}, beta={BETA}); on daily buckets with two or more weeks of history a day-of-week multiplier is applied"],
         feasibility="feasible",
     )

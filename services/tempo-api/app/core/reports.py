@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core import overrides
 from app.core.exceptions_engine import EARLY_MATCH, LATE_AFTER, NO_SHOW_AFTER
-from app.core.opsview import _aware, _latest_forecast, _rates, _standards, local_day_bounds, site_sources
+from app.core.opsview import method_label, _aware, _latest_forecast, _rates, _standards, local_day_bounds, site_sources
 from app.models.canonical import ActivityRoleZoneMap, AttendanceSession, DemandBucket, ShiftAssignment, Worker, WorkStandard
 from app.models.directory import Site, WorkerPerson
 from app.models.rosters import AttendanceAdjustment, DemandOverride
@@ -158,7 +158,7 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
                       cost_variance_estimate=round(tot("estimated_actual_cost") - tot("planned_cost"), 2), missing_rate_count=missing_rate)
     return {"site": {"site_id": site.site_id, "name": site.name, "timezone": site.timezone}, "range": {"start": ds[0], "days": days}, "as_of": now,
             "metric_version": REPORT_VERSION, "definitions": METRIC_DEFS, "attendance_verified": verified, "data_sources": sources, "days": rows, "totals": totals,
-            "forecast": {"run_id": fc_run.run_id if fc_run else None, "method": "Holt linear smoothing on daily totals (no seasonal term)"},
+            "forecast": {"run_id": fc_run.run_id if fc_run else None, "method": f"{method_label(fc_run)} on daily totals"},
             "labels": {"attended": "estimate", "payable": "confirmed", "planned": "plan"},
             "notes": ["Forecast accuracy is measured on the statistical model, before any manual demand override.", "Actual cost is an estimate until timesheets are approved.", "Unrostered hours count in attended hours but have no scheduled counterpart."]}
 
@@ -239,7 +239,7 @@ def demand(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, n
     return {"site": {"site_id": site.site_id, "name": site.name, "timezone": site.timezone}, "range": {"start": ds[0], "days": days}, "as_of": now, "rows": rows,
             "activities": activities, "standards": standards, "zone_map": zone_map, "readiness": readiness, "data_sources": sources,
             "forecast": {"run_id": fc_run.run_id if fc_run else None, "created_at": fc_run.created_at if fc_run else None, "snapshot_id": fc_run.snapshot_id if fc_run else None,
-                         "method": "Holt linear smoothing on daily totals (no seasonal term)", "backtest_mape": (fc_run.result or {}).get("backtest_mape") if fc_run else None,
+                         "method": f"{method_label(fc_run)} on daily totals", "backtest_mape": (fc_run.result or {}).get("backtest_mape") if fc_run else None,
                          "confidence": (fc_run.explanation or {}).get("confidence") if fc_run else None},
             "overrides": [overrides.serialise(o, now) for o in db.scalars(select(DemandOverride).where(DemandOverride.tenant_id == tenant_id, DemandOverride.site_id == site.site_id,
                                                                                                DemandOverride.end_date >= ds[0], DemandOverride.start_date <= ds[-1]).order_by(DemandOverride.created_at.desc()))],
