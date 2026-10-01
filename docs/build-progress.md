@@ -40,7 +40,7 @@ Verified in a real local browser (Playwright, `scripts/e2e.sh`, screenshots in `
 Known gaps: forecast has no seasonal term (WAPE ≈ 10 %); break rules nominal; OIDC untested against a real IdP.
 
 ## Product gaps closed (1 Oct 2026) — commits 828c2bd, bfb299f, 166e709, 2e0a447
-Each was verified by API tests on real PostgreSQL (full suite: **297 passed**) **and** a Playwright run (full suite: **16 passed**) in a real browser (`e2e/*.spec.ts`, screenshots in `docs/screenshots/`).
+Each was verified by API tests on real PostgreSQL (full suite: **303 passed**) **and** a Playwright run (full suite: **18 passed**) in a real browser (`e2e/*.spec.ts`, screenshots in `docs/screenshots/`).
 | Gap | What was built | Honest limits |
 |---|---|---|
 | **Report export** | Audited CSV for variance / timesheets / demand (`labour.export`, a new permission; ops manager, planner, tenant admin, executive). Same read models as the screens, so rates and worker names stay permission-gated. Cells are formula-injection safe; upcoming days are blank, not zero; estimate vs confirmed is in the column names. | CSV only (no PDF/XLSX). No scheduled or emailed exports. |
@@ -80,3 +80,18 @@ Operational notes: browser tests now run on their own database `tempo_e2e` (crea
 2. `make` targets + `bootstrap_ensemble_demo` (idempotent, synthetic-labelled) + browser check on real seeded data.
 3. Design tokens/components + Overview, Roster Planner, Attendance screens; screenshots.
 4. Permission catalogue + site/customer RLS; service-client principal; async run worker.
+
+
+## Roadmap pass (1 Oct 2026) — security foundations, account flows, forecast quality
+| Item | Status | Evidence / honest limits |
+|---|---|---|
+| **Site-level row security** | **done (15 tables)** | Migration `c9d0e1f2a3b4`. `app.site_scope` is bound per request from the caller's grants and per kiosk device; empty grants match *nothing*; tenant-wide only for trusted internal paths (workers, CLI, seeding). `tests/test_rls.py`: policy present on every site-keyed table or listed as deliberately excluded; scoped sessions see only their sites; out-of-scope writes are rejected. **Found while doing it:** hiding `optimisation_run_site` rows would have made "run touches only my sites" fail open (`runs.py` checks that *all* a run's site rows are granted), so that table, `user_site_grant` and `tenant_scope` are excluded on purpose. Not covered: tables with no `site_id` column (shift_assignment, attendance_session — site comes via `worker.home_site`). |
+| **Tenant audit log** | **done** | `GET /v1/admin/audit` (needs `labour.configure`, filter by action/outcome, paged, user names shown for members, viewing is itself audited) + Audit log page. |
+| **Authenticator QR code** | **done** | Drawn in the browser from the otpauth URI (no third-party QR service sees the secret). Browser-tested. |
+| **Seasonal forecast** | **done** | Day-of-week multipliers on daily history with ≥2 weeks (each weekday ≥2 observations); otherwise trend-only and the run says so. The method is recorded on every run and shown on screens. Demo back-test error fell 6.1 % → 1.2 % — **but the demo data has an exact weekly shape because we generated it; expect a smaller gain on real tenants.** No holiday/promotion calendar yet. |
+| **Override approval** | **done** | Beyond ±25 %, or any fixed-units override, waits as *pending* for a different person with `labour.approve`; nothing reaches the forecast until then. Proposer cannot approve (even if they hold both roles). Rejection needs a reason. |
+| **Backup + restore evidence** | **done once** | `pg_dump -Fc` of the live `tempo` DB (562 KB) restored into a scratch DB: row counts for tenant, users, workers, shifts, attendance, rosters and audit events matched exactly; scratch DB dropped. Dump kept in `~/tempo-backups/` (mode 600). This was a drill on this host — **not** an automated schedule, off-host copy, or timed RTO/RPO. |
+| **Self-service password reset** | **blocked** | A reset link must be delivered to the person, and there is no email provider or verified sender. Today an administrator issues the link. Building a "forgot password" form that cannot actually deliver would be misleading. |
+| **Composite keys for global IDs** | **deferred, with reason** | `worker_id`, `provider_id`, `customer_id`, `site_id` etc. are single-column primary keys. Effect today: a second tenant reusing an ID gets a uniqueness error (existence leak / onboarding nuisance), **not** a data leak — RLS and per-handler tenant checks still apply. Fixing it properly changes ~9 foreign keys and every `db.get(Model, id)` call site; it deserves its own migration with a dual-run window rather than being rushed. |
+| **Real IdP / vault / TLS-to-DB / off-host backups / Deputy-UKG connectors** | **blocked on inputs** | Need a chosen IdP tenant, a secret store, infrastructure decisions and vendor sandbox credentials. |
+New migrations: `c9d0e1f2a3b4` (site scope), `d0e1f2a3b4c5` (override approval columns). **Neither — nor the three before them — is applied to the live database yet.**

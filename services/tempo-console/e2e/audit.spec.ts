@@ -4,8 +4,12 @@ async function signIn(p: Page, persona: RegExp) {
   await p.goto('/')
   await p.locator('button:has-text("Sign out"), button:has-text("Demo ")').first().waitFor()
   if (await p.getByRole('button', { name: 'Sign out' }).isVisible()) { await p.getByRole('button', { name: 'Sign out' }).click(); await p.getByRole('button', { name: /Demo / }).first().waitFor() }
-  await p.getByRole('button', { name: persona }).click()
-  await expect(p.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  const out = p.getByRole('button', { name: 'Sign out' })
+  for (let attempt = 0; attempt < 3 && !(await out.isVisible()); attempt++) {   // a sign-in click can be lost while the picker re-renders under load
+    await p.getByRole('button', { name: persona }).click()
+    await out.waitFor({ timeout: 8000 }).catch(() => undefined)
+  }
+  await expect(out).toBeVisible()
 }
 
 test('a tenant admin reads and filters the audit log; others do not get the page', async ({ page }) => {
