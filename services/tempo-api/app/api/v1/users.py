@@ -33,6 +33,8 @@ def _require(ctx: RequestContext) -> None:
 
 
 def _check_delegation(ctx: RequestContext, roles: list[str], sites: list[str], customers: list[str]) -> None:
+    if "integration_import" in roles:
+        raise ScopeError("integration_import is for service credentials only — create an API credential instead of assigning it to a person")
     unknown = [r for r in roles if r not in ROLE_PERMISSION_MATRIX]
     if unknown:
         raise ScopeError(f"unknown role(s): {', '.join(unknown)}")

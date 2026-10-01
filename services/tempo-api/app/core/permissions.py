@@ -64,6 +64,8 @@ PERMISSION_CODES: frozenset[str] = frozenset(
         "labour.attendance.approve",
         # Download report data as files. Separate from labour.read so viewing a screen never implies taking a copy.
         "labour.export",
+        # Load master, forecast and workload data (CSV upload or API) and undo a load. Service credentials get only this.
+        "labour.data.import",
     }
 )
 
@@ -74,14 +76,15 @@ ROLE_PERMISSION_MATRIX: dict[str, frozenset[str]] = {
     "supervisor": frozenset({"labour.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
     "analyst": frozenset({"labour.read"}),
     "executive": frozenset({"labour.read", "labour.margin.read", "labour.rates.read", "labour.export"}),
-    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve", "labour.export"}),
+    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve", "labour.export", "labour.data.import"}),
     "planner": frozenset({"labour.read", "labour.plan", "labour.rates.read", "labour.worker_names", "labour.export"}),
-    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve", "labour.export"}),
+    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve", "labour.export", "labour.data.import"}),
     "finance": frozenset({"labour.margin.read", "labour.rates.read"}),
     "3pl_commercial": frozenset({"labour.margin.read"}),
     "hr_authorised": frozenset({"labour.worker_pii", "labour.worker_names"}),
     "integration_restricted": frozenset({"labour.writeback"}),
     "labour_provider": frozenset({"labour.provider.manage"}),
+    "integration_import": frozenset({"labour.data.import"}),   # carried only by service credentials (CSV/API ingestion)
 }
 
 # §6.2's principal type each role belongs to. Every role above is
@@ -100,6 +103,7 @@ ROLE_PRINCIPAL_TYPE: dict[str, str] = {
     "hr_authorised": "tenant_user",
     "integration_restricted": "tenant_user",
     "labour_provider": "labour_provider_user",
+    "integration_import": "integration_client",
 }
 
 assert set(ROLE_PERMISSION_MATRIX) == set(ROLE_PRINCIPAL_TYPE), "every role must have exactly one principal type"
