@@ -76,8 +76,13 @@ METHOD_LABEL = {"holt_linear_weekly": "Holt linear trend with a day-of-week patt
 
 
 def method_label(run) -> str:
-    """What the forecast actually did, taken from the run itself (older runs predate the weekly pattern)."""
-    return METHOD_LABEL.get(((run.result or {}).get("method")) if run else None, METHOD_LABEL["holt_linear"])
+    """What the forecast actually did, taken from the run itself (older runs predate the weekly pattern and the supplied-forecast option)."""
+    res = (run.result or {}) if run else {}
+    src, ver = res.get("forecast_source"), ", ".join(res.get("supplied_versions") or [])
+    if src == "supplied":
+        return f"Customer-supplied forecast ({ver})"
+    base = METHOD_LABEL.get(res.get("method"), METHOD_LABEL["holt_linear"])
+    return f"{base}; customer-supplied forecast ({ver}) for the activities it covers" if src == "mixed" else base
 
 
 def _latest_forecast(db: Session, tenant_id: str, site_id: str) -> tuple[OptimisationRun | None, list[dict]]:

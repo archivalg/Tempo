@@ -84,6 +84,12 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
     for b in db.scalars(select(DemandBucket).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id == site.site_id, DemandBucket.bucket_minutes == 60,
                                                    DemandBucket.interval_start >= w_start, DemandBucket.interval_start < w_end)):
         act_by_day[_aware(b.interval_start).astimezone(tz).date().isoformat()] += b.volume
+    hourly_days = set(act_by_day)
+    for b in db.scalars(select(DemandBucket).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id == site.site_id, DemandBucket.bucket_minutes == 1440,
+                                                   DemandBucket.interval_start >= w_start - timedelta(hours=2), DemandBucket.interval_start < w_end)):
+        day = (_aware(b.interval_start) + timedelta(hours=12)).astimezone(tz).date().isoformat()   # daily totals count for days with no hourly data
+        if day not in hourly_days:
+            act_by_day[day] += b.volume
 
     rows, missing_rate = [], 0
     for d in ds:
@@ -160,7 +166,7 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
             "metric_version": REPORT_VERSION, "definitions": METRIC_DEFS, "attendance_verified": verified, "data_sources": sources, "days": rows, "totals": totals,
             "forecast": {"run_id": fc_run.run_id if fc_run else None, "method": f"{method_label(fc_run)} on daily totals"},
             "labels": {"attended": "estimate", "payable": "confirmed", "planned": "plan"},
-            "notes": ["Forecast accuracy is measured on the statistical model, before any manual demand override.", "Actual cost is an estimate until timesheets are approved.", "Unrostered hours count in attended hours but have no scheduled counterpart."]}
+            "notes": ["Forecast accuracy is measured on the forecast source in use (Tempo's model or a customer-supplied forecast), before any manual demand override.", "Actual cost is an estimate until timesheets are approved.", "Unrostered hours count in attended hours but have no scheduled counterpart."]}
 
 
 def timesheets(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, now: datetime, *, can_see_names: bool) -> dict:
@@ -211,6 +217,11 @@ def demand(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, n
     for b in db.scalars(select(DemandBucket).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id == site.site_id, DemandBucket.bucket_minutes == 60,
                                                    DemandBucket.interval_start >= w_start, DemandBucket.interval_start < w_end)):
         act[(_aware(b.interval_start).astimezone(tz).date().isoformat(), b.activity)] += b.volume
+    for b in db.scalars(select(DemandBucket).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id == site.site_id, DemandBucket.bucket_minutes == 1440,
+                                                   DemandBucket.interval_start >= w_start - timedelta(hours=2), DemandBucket.interval_start < w_end)):
+        key = ((_aware(b.interval_start) + timedelta(hours=12)).astimezone(tz).date().isoformat(), b.activity)
+        if key not in act:                      # daily totals fill days that have no hourly workload for that activity
+            act[key] = b.volume
     activities = sorted({a for _d, a in fc} | {a for _d, a in act} | set(std))
     rows = []
     for d in ds:
@@ -240,7 +251,8 @@ def demand(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, n
             "activities": activities, "standards": standards, "zone_map": zone_map, "readiness": readiness, "data_sources": sources,
             "forecast": {"run_id": fc_run.run_id if fc_run else None, "created_at": fc_run.created_at if fc_run else None, "snapshot_id": fc_run.snapshot_id if fc_run else None,
                          "method": f"{method_label(fc_run)} on daily totals", "backtest_mape": (fc_run.result or {}).get("backtest_mape") if fc_run else None,
-                         "confidence": (fc_run.explanation or {}).get("confidence") if fc_run else None},
+                         "confidence": (fc_run.explanation or {}).get("confidence") if fc_run else None,
+                         "source": (fc_run.result or {}).get("forecast_source", "generated") if fc_run else None, "supplied_versions": (fc_run.result or {}).get("supplied_versions", []) if fc_run else []},
             "overrides": [overrides.serialise(o, now) for o in db.scalars(select(DemandOverride).where(DemandOverride.tenant_id == tenant_id, DemandOverride.site_id == site.site_id,
                                                                                                DemandOverride.end_date >= ds[0], DemandOverride.start_date <= ds[-1]).order_by(DemandOverride.created_at.desc()))],
             "overrides_note": "Manual adjustments sit on top of the statistical forecast: each needs a reason and an expiry, the model's own number is kept, and accuracy is measured on the model."}

@@ -117,7 +117,13 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
     derived_note = None
     if not rows and window.bucket_minutes > 60:
         rows, derived_note = _aggregate_finer_history(db, tenant_id, site_ids, window, bucket)
-    if not rows:
+    supplied: dict[str, list[dict]] = {}
+    supplied_versions: list[str] = []
+    supplied_notes: list[str] = []
+    from app.imports import supplied as sup
+    if sup.wants_supplied(db, tenant_id, site_ids):
+        supplied, supplied_versions, supplied_notes = sup.for_window(db, tenant_id, site_ids[0], window.start, bucket, horizon_buckets, ZoneInfo(window.timezone))
+    if not rows and not supplied:
         raise InsufficientData(f"no historical demand_bucket rows for tenant '{tenant_id}' before the planning window")
 
     by_activity: dict[str, list[DemandBucket]] = defaultdict(list)
@@ -186,6 +192,10 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
             )
         model_totals[activity] = activity_total
 
+    for act, srows in supplied.items():  # a complete customer-supplied forecast replaces the model for that activity, visibly
+        forecasts = [f for f in forecasts if f["activity"] != act] + srows
+        if act in model_totals:
+            model_totals[act] = sum(r["point"] for r in srows)
     applied_overrides: list[str] = []
     override_note = None
     if len(site_ids) == 1:
@@ -195,7 +205,7 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         override_note = "manual demand overrides are applied to single-site forecasts only; none were applied to this multi-site run"
 
     avg_mape = sum(mapes) / len(mapes) if mapes else None
-    most_recent = max(r.interval_start for r in rows)
+    most_recent = max((r.interval_start for r in rows), default=window.start)
     if most_recent.tzinfo is None:
         # SQLite has no native datetime type — timestamps round-trip as naive
         # even through a DateTime(timezone=True) column. Every canonical
@@ -214,6 +224,7 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         missing_evidence.append("insufficient history to backtest forecast error")
     if seasonal_off and window.bucket_minutes == 1440:
         missing_evidence.append(f"no weekly pattern for {', '.join(sorted(seasonal_off))}: under two weeks of daily history (trend only)")
+    missing_evidence.extend(supplied_notes)
     if override_note:
         missing_evidence.append(override_note)
 
@@ -222,6 +233,8 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
             "forecast": forecasts,
             "backtest_mape": round(avg_mape, 4) if avg_mape is not None else None,
             "overrides_applied": applied_overrides,
+            "forecast_source": ("supplied" if supplied and len(supplied) >= len({f["activity"] for f in forecasts}) else ("mixed" if supplied else "generated")),
+            "supplied_versions": supplied_versions,
             "method": "holt_linear_weekly" if seasonal_on and not seasonal_off else ("holt_linear_weekly_partial" if seasonal_on else "holt_linear"),
             "seasonality": {"weekly_applied_to": sorted(seasonal_on), "no_pattern_for": sorted(seasonal_off)},
             "kpis": {"activities_forecast": len(by_activity), "horizon_buckets": horizon_buckets},

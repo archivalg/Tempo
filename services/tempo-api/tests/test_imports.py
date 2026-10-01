@@ -402,3 +402,55 @@ def test_service_credentials_are_scoped_rotatable_revocable_and_shown_once(clien
     with client.session_local() as s:
         evs = s.execute(text("SELECT action, actor_type FROM security_audit_event WHERE action LIKE 'import.%' OR action LIKE 'credential.%'")).all()
         assert ("import.apply", "service") in {tuple(e) for e in evs} and not s.execute(text("SELECT 1 FROM security_audit_event WHERE reason_code LIKE '%tsc_%'")).first()
+
+
+# ------------------------------------------------------------------------------------------------ forecast source drives the planner
+def test_a_chosen_supplied_forecast_replaces_the_model_visibly_and_falls_back_when_incomplete(client):
+    from zoneinfo import ZoneInfo
+    from app.schemas.runs import PlanningWindow, RunRequest, RunScope
+    from app.solvers.demand_forecast import forecast_demand
+    seed(client, standards=("picking", "packing"))
+    h = admin()
+    days = [f"2026-10-{d:02d}" for d in range(5, 12)]
+    sup_rows = [[MEL, "picking", d, "day", 5000 + i, 4500 + i, 5500 + i] for i, d in enumerate(days)] + [[MEL, "packing", d, "day", 700] for d in days[:3]]   # packing is incomplete
+    f = csv_text(["site", "activity", "period_start", "grain", "units", "lower", "upper"], [r + [""] * (7 - len(r)) for r in sup_rows])
+    b = stage(client, h, "forecast", f, forecast_version="W41-v1").json()
+    assert b["state"] == "validated", b
+    client.post(f"/v1/imports/batches/{b['id']}/apply", headers=h)
+    with client.session_local() as s:   # some history so the model can still forecast packing
+        for i in range(28):
+            d = datetime(2026, 9, 1, tzinfo=ZoneInfo("Australia/Melbourne")) + timedelta(days=i)
+            s.add(DemandBucket(tenant_id="ten_test", activity="packing", site_id=MEL, interval_start=d.astimezone(timezone.utc), volume=600 + i, source="hist", bucket_minutes=1440))
+        s.commit()
+    mel = ZoneInfo("Australia/Melbourne")
+    start = datetime(2026, 10, 5, tzinfo=mel).astimezone(timezone.utc)
+
+    def run():
+        req = RunRequest(request_id="r", scope=RunScope(tenant_id="ten_test", site_ids=[MEL], customer_ids=["cust_A"]),
+                         planning_window=PlanningWindow(start=start, end=start + timedelta(days=7), timezone="Australia/Melbourne", bucket_minutes=1440))
+        with client.app_session_local() as db:
+            from app.db import bind_sites, bind_tenant
+            bind_tenant(db, "ten_test")
+            return forecast_demand(db, "ten_test", [MEL], req)
+    model_only = run()                                                                             # default source: Tempo's model
+    assert model_only.result["forecast_source"] == "generated" and model_only.result["supplied_versions"] == []
+    client.put(f"/v1/sites/{MEL}/forecast-source", json={"source": "supplied"}, headers=h)
+    mixed = run()
+    assert mixed.result["forecast_source"] == "mixed" and mixed.result["supplied_versions"] == ["W41-v1"]
+    picks = [r for r in mixed.result["forecast"] if r["activity"] == "picking"]
+    assert [r["point"] for r in picks] == [5000 + i for i in range(7)] and {r["origin"] for r in picks} == {"supplied:W41-v1"} and picks[0]["lower"] == 4500
+    assert len([r for r in mixed.result["forecast"] if r["activity"] == "packing"]) == 7 and all("origin" not in r for r in mixed.result["forecast"] if r["activity"] == "packing")   # fallback is the model
+    assert any("does not cover every period for packing" in m for m in mixed.missing_evidence)
+    client.put(f"/v1/sites/{MEL}/forecast-source", json={"source": "generated"}, headers=h)
+    assert run().result["forecast_source"] == "generated"                                          # choosing the model again restores it
+
+
+def test_daily_totals_show_in_the_demand_and_variance_reports(client):
+    seed(client)
+    h = admin()
+    client.post("/v1/imports/batches", json={"data_class": "bulk", "apply": True, "rows": bulk(["2026-09-14", "2026-09-15"], base=1000)}, headers=h)
+    d = client.get(f"/v1/sites/{MEL}/demand", params={"start": "2026-09-14"}, headers=h).json()
+    got = {(r["date"], r["activity"]): r["actual_units"] for r in d["rows"] if r["actual_units"] is not None}
+    assert got == {("2026-09-14", "picking"): 1000, ("2026-09-15", "picking"): 1001}
+    v = client.get(f"/v1/sites/{MEL}/reports/variance", params={"start": "2026-09-14"}, headers=h).json()
+    assert {x["date"]: x["actual_units"] for x in v["days"] if x["actual_units"]} == {"2026-09-14": 1000, "2026-09-15": 1001}
