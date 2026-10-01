@@ -58,6 +58,53 @@ def bootstrap_platform_admin(*, subject: str | None, email: str | None, operator
         db.close()
 
 
+def _create_user(args) -> int:
+    from datetime import datetime, timezone
+
+    from app.core import passwords
+    from app.core.permissions import ROLE_PERMISSION_MATRIX
+    from app.db import bind_tenant
+    from app.models.identity import Tenant, TenantMembership, UserCustomerGrant, UserRoleAssignment, UserSiteGrant
+
+    pw = sys.stdin.readline().rstrip("\n")
+    roles = [r for r in args.roles.split(",") if r]
+    sites = [x for x in args.sites.split(",") if x]
+    customers = [x for x in args.customers.split(",") if x]
+    uname, email = args.username.strip().lower(), args.email.strip().lower()
+    problems = passwords.policy_problems(pw, username=uname, email=email)
+    if problems or not roles or not sites or any(r not in ROLE_PERMISSION_MATRIX for r in roles):
+        print("rejected: " + ("; ".join(problems) or "check roles and sites"), file=sys.stderr)
+        return 2
+    db = db_module.SessionLocal()
+    try:
+        begin_auth_lookup(db)
+        if db.get(Tenant, args.tenant) is None:
+            print("no such tenant", file=sys.stderr)
+            return 2
+        if db.scalar(select(TempoUser).where((TempoUser.username == uname) | (TempoUser.email == email))) is not None:
+            print("that username or email already exists", file=sys.stderr)
+            return 2
+        u = TempoUser(external_subject=f"pw:{uname}", email=email, username=uname, display_name=uname,
+                      password_hash=passwords.hash_password(pw), password_changed_at=datetime.now(timezone.utc))
+        db.add(u)
+        db.flush()
+        auth.audit(db, actor_type="operator", actor_id=args.operator, tenant_id=args.tenant, action="user.create_cli", decision="allowed", session_ref=u.user_id,
+                   reason_code=",".join(sorted(roles)))
+        bind_tenant(db, args.tenant)
+        db.add(TenantMembership(user_id=u.user_id, tenant_id=args.tenant, is_default=True, invitation_source=f"operator:{args.operator}"))
+        for r in roles:
+            db.add(UserRoleAssignment(user_id=u.user_id, tenant_id=args.tenant, role=r))
+        for x in sites:
+            db.add(UserSiteGrant(user_id=u.user_id, tenant_id=args.tenant, site_id=x))
+        for x in customers:
+            db.add(UserCustomerGrant(user_id=u.user_id, tenant_id=args.tenant, customer_id=x))
+        db.commit()
+        print(f"created {uname} in {args.tenant} with roles {','.join(roles)}")
+        return 0
+    finally:
+        db.close()
+
+
 def _user_command(args) -> int:
     import getpass
     from datetime import datetime, timezone
@@ -114,6 +161,15 @@ def main(argv: list[str] | None = None) -> int:
     ul = sub.add_parser("unlock-user", help="clear a lockout")
     ul.add_argument("--username", required=True)
     ul.add_argument("--operator", required=True)
+    cu = sub.add_parser("create-user", help="create a user in a tenant with an initial password read from stdin (never an argument)")
+    cu.add_argument("--tenant", required=True)
+    cu.add_argument("--email", required=True)
+    cu.add_argument("--username", required=True)
+    cu.add_argument("--roles", required=True, help="comma-separated role names")
+    cu.add_argument("--sites", required=True, help="comma-separated site ids")
+    cu.add_argument("--customers", default="", help="comma-separated customer ids")
+    cu.add_argument("--password-stdin", action="store_true", required=True)
+    cu.add_argument("--operator", required=True)
     sub.add_parser("demo-status", help="show the demo seed manifest")
     args = ap.parse_args(argv)
     if args.cmd == "bootstrap-platform-admin":
@@ -121,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: pass --confirm-verified-identity after verifying the identity with the IdP", file=sys.stderr)
             return 2
         return bootstrap_platform_admin(subject=args.subject, email=args.email, operator=args.operator)
+    if args.cmd == "create-user":
+        return _create_user(args)
     if args.cmd in ("set-password", "unlock-user"):
         return _user_command(args)
     if args.cmd in ("bootstrap-ensemble-demo", "reset-ensemble-demo", "demo-status"):

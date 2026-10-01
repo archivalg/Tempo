@@ -271,3 +271,25 @@ def test_platform_tenant_creation_returns_an_invitation_not_a_password(client):
     r = client.post("/v1/platform/tenants", headers={"Authorization": f"Bearer {access}"}, json={"tenant_id": "acme_wms", "name": "Acme WMS", "first_admin": {"email": "owner@acme.test"}, "initial_site_ids": ["s1"]})
     assert r.status_code == 201 and r.json()["invite_token"] and "password" not in r.text.lower().replace("invite", "")
     client.cookies.clear()
+
+
+def test_cli_create_user_reads_the_password_from_stdin_and_enforces_policy(client, monkeypatch):
+    import io
+
+    from app import cli
+
+    with client.session_local() as s:
+        s.add(Tenant(tenant_id="ten_cli", name="CLI"))
+        s.commit()
+    args = ["create-user", "--tenant", "ten_cli", "--email", "ops@cli.test", "--username", "ops.cli", "--roles", "operations_manager,planner",
+            "--sites", "s1", "--password-stdin", "--operator", "tester"]
+    monkeypatch.setattr("sys.stdin", io.StringIO("short\n"))
+    assert cli.main(args) == 2  # policy applies to operators too
+    monkeypatch.setattr("sys.stdin", io.StringIO(PW + "\n"))
+    assert cli.main(args) == 0
+    monkeypatch.setattr("sys.stdin", io.StringIO(PW + "\n"))
+    assert cli.main(args) == 2  # duplicate refused
+    r = login(client, "ops.cli")
+    assert r.status_code == 200
+    assert client.get("/v1/me/access").json()["roles"] == ["operations_manager", "planner"]
+    client.cookies.clear()
