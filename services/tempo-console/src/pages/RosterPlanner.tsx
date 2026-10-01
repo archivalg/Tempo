@@ -6,6 +6,7 @@ import {
 } from '../api/ops'
 import { ApiError } from '../api/client'
 import { useSite } from '../components/AppShell'
+import { HandoffCard } from '../components/HandoffCard'
 import { Banner, Drawer, Empty, PageHead, RosterSteps, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { fmtMoney, fmtNum, fmtTime, localDate } from '../lib/format'
@@ -118,7 +119,7 @@ export default function RosterPlannerPage() {
       </PageHead>
 
       {err && <Banner tone="bad" title="That didn’t work">{err}</Banner>}
-      {board && site.operating_mode === 'overlay' && <Banner tone="info" title="Overlay site">The roster of record is in the external system. Publication back needs a vendor-specific approval gate that is not enabled.</Banner>}
+      {board && site.operating_mode === 'overlay' && <Banner tone="info" title="Overlay site">The roster of record is in the external system. After you publish, Tempo prepares a hand-over: download the file and record that it was loaded, or send it through a vendor connector once one is connected and your organisation has writeback switched on.</Banner>}
 
       <section className="tp-card" style={{ marginBottom: 12 }} aria-label="Roster version and workflow">
         <div className="tp-body tp-row" style={{ justifyContent: 'space-between' }}>
@@ -134,6 +135,7 @@ export default function RosterPlannerPage() {
           </div>
           <div className="tp-row">
             {!v && can('labour.plan') && <button className="tp-btn primary" disabled={!!busy} onClick={() => void run('gen', () => generateRoster(site.site_id, start), adopt)}>{busy === 'gen' ? 'Generating… (running solver)' : 'Generate draft from forecast'}</button>}
+            {!v && can('labour.plan') && <button className="tp-btn" disabled={!!busy} title="Clone the shifts that are live for this week into an editable draft" onClick={() => void run('copy', () => copyPublished(site.site_id, start), adopt)}>Start from the live roster</button>}
             {v && v.state === 'draft' && can('labour.plan') && (<>
               <button className="tp-btn" disabled={!!busy} onClick={() => setConfirm({ kind: 'reoptimise', note: '' })}>Re-optimise</button>
               <button className="tp-btn primary" disabled={!!busy || board!.hard_conflicts > 0 || board!.shifts.length === 0} title={board!.hard_conflicts ? 'Resolve hard conflicts first' : ''}
@@ -240,6 +242,7 @@ export default function RosterPlannerPage() {
               <Link to="/approvals" className="tp-btn" style={{ textDecoration: 'none', display: 'inline-block' }}>Open Approvals</Link>
             </div>
           </section>
+          {v && site.operating_mode === 'overlay' && ['published', 'reconciled'].includes(v.state) && <HandoffCard site={site.site_id} versionId={v.id} canAct={can('labour.approve')} />}
           <section className="tp-card"><header><h2>Basis</h2></header><div className="tp-body tp-muted" style={{ fontSize: 12.5 }}>{board?.forecast.method}. {(board?.notes ?? []).join(' ')}</div></section>
         </aside>
       </div>

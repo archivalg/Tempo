@@ -132,3 +132,36 @@ class Notification(Base):
     dedup_key: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RosterHandoff(Base):
+    """A published roster at an Overlay site that has to reach the external roster of record.
+
+    Tempo never claims the vendor accepted it unless a real connector says so. States:
+      pending → exported (file taken) → confirmed_by_operator (a named person attests they loaded it; NOT vendor-confirmed)
+      pending/exported → submitted → vendor_confirmed | rejected | unconfirmed (the vendor outcome is unknown: reconcile)
+      any open state → superseded (a newer publish replaced it)
+    """
+
+    __tablename__ = "roster_handoff"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: _id("hof"))
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String, index=True)
+    version_id: Mapped[str] = mapped_column(String, index=True)
+    payload_hash: Mapped[str] = mapped_column(String)
+    payload: Mapped[list] = mapped_column(JSON, default=list)
+    state: Mapped[str] = mapped_column(String, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_by: Mapped[str] = mapped_column(String)
+    exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exported_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    file_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    submitted_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    vendor_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    confirm_reference: Mapped[str | None] = mapped_column(String, nullable=True)
+    confirm_note: Mapped[str | None] = mapped_column(String, nullable=True)

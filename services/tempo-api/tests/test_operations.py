@@ -229,3 +229,87 @@ def test_notifications_are_personal_scoped_and_workflow_driven(demo):
     assert n >= 1 and mine("ops_manager")["unread"] == 0
     assert mine("supervisor")["unread"] == sup["unread"]                                      # someone else's read-all did not touch them
     assert c.get("/v1/notifications").status_code == 401
+
+
+SYD = "syd_dc_02"
+
+
+def _publish_week(demo, site, week):
+    """Standalone: solve a draft. Overlay demo site: it has a (simulated) live roster but no demand history, so adjust a copy of what is live."""
+    c = demo["client"]
+    author = "planner" if site == MEL else "tenant_admin"      # the Melbourne-only planner has no Sydney grant
+    if site == MEL:
+        g = c.post(f"/v1/sites/{site}/rosters/generate", json={"week_start": week}, headers=H(demo, author))
+    else:
+        g = c.post(f"/v1/sites/{site}/rosters/copy-published", json={"week_start": week}, headers=H(demo, author))
+    assert g.status_code == 201, g.text
+    vid = g.json()["version"]["id"]
+    assert c.post(f"/v1/rosters/{vid}/submit", headers=H(demo, author)).status_code == 200
+    assert c.post(f"/v1/rosters/{vid}/approve", json={"note": "ok"}, headers=H(demo, "ops_manager")).status_code == 200
+    r = c.post(f"/v1/rosters/{vid}/publish", headers={**H(demo, "ops_manager"), "Idempotency-Key": f"pub-{vid}"})
+    assert r.status_code == 200 and r.json()["state"] == "reconciled", r.text
+    return vid
+
+
+def test_overlay_publish_creates_a_handoff_that_is_never_claimed_vendor_confirmed_without_a_connector(demo, monkeypatch, owner_engine):
+    from sqlalchemy import text
+    from app.maestro import roster_handoff as rh
+    c, week = demo["client"], _week_in(0)
+    mel = _publish_week(demo, MEL, _week_in(5))
+    assert c.get(f"/v1/sites/{MEL}/handoffs", headers=H(demo, "ops_manager"), params={"version_id": mel}).json() == []        # standalone: nothing to hand off
+    vid = _publish_week(demo, SYD, week)
+    hs = c.get(f"/v1/sites/{SYD}/handoffs", headers=H(demo, "ops_manager"), params={"version_id": vid}).json()
+    assert len(hs) == 1 and hs[0]["state"] == "pending" and hs[0]["shifts"] > 0
+    hid = hs[0]["id"]
+    # the file: approvers only, audited, hashed; taking it moves pending → exported
+    assert c.get(f"/v1/handoffs/{hid}/file.csv", headers=H(demo, "tenant_admin")).status_code == 403    # admin plans but does not approve
+    assert c.post(f"/v1/handoffs/{hid}/confirm", json={"reference": "IMP-1"}, headers=H(demo, "ops_manager")).status_code == 422   # nothing to attest yet
+    f = c.get(f"/v1/handoffs/{hid}/file.csv", headers=H(demo, "ops_manager"))
+    assert f.status_code == 200 and "worker_ref" in f.text and f.headers["cache-control"] == "no-store"
+    h = c.get(f"/v1/sites/{SYD}/handoffs", headers=H(demo, "ops_manager")).json()[0]
+    assert h["state"] == "exported" and len(h["file_sha256"]) == 64
+    # an operator attestation is labelled as such — it is not vendor confirmation
+    assert c.post(f"/v1/handoffs/{hid}/confirm", json={"reference": "x"}, headers=H(demo, "ops_manager")).status_code == 422       # reference too short
+    ok = c.post(f"/v1/handoffs/{hid}/confirm", json={"reference": "IMP-1001", "note": "loaded by hand"}, headers=H(demo, "ops_manager")).json()
+    assert ok["state"] == "confirmed_by_operator" and ok["confirmation_kind"] == "operator_attestation"
+
+    # vendor submit: needs the idempotency key, the tenant switch, and a person other than the publisher
+    vid2 = _publish_week(demo, SYD, week)
+    hid2 = c.get(f"/v1/sites/{SYD}/handoffs", headers=H(demo, "ops_manager"), params={"version_id": vid2}).json()[0]["id"]
+    ops = H(demo, "ops_manager")
+    assert c.post(f"/v1/handoffs/{hid2}/submit", headers=ops).status_code == 400                                                    # no Idempotency-Key
+    assert c.post(f"/v1/handoffs/{hid2}/submit", headers={**ops, "Idempotency-Key": "k1"}).status_code == 422                      # kill switch off
+    with owner_engine.begin() as conn:
+        conn.execute(text("UPDATE tenant SET writeback_enabled = true WHERE tenant_id = 'ensemble_solutions'"))
+        conn.execute(text("UPDATE roster_version SET published_by = 'someone_else' WHERE id = :v"), {"v": vid2})
+    try:
+        r = c.post(f"/v1/handoffs/{hid2}/submit", headers={**ops, "Idempotency-Key": "k1"}).json()
+        assert r["state"] == "unconfirmed" and r["attempts"] == 1 and "no vendor roster connector" in r["vendor_detail"]       # honest default: unknown stays open
+        assert r["confirmation_kind"] is None
+
+        class Fake:
+            def __init__(self, status): self.status, self.calls = status, []
+            def submit_roster(self, site_id, payload_hash, shifts, key):
+                self.calls.append(key)
+                return rh.HandoffOutcome(self.status, "fake vendor")
+        fake = Fake("confirmed")
+        monkeypatch.setattr(rh, "vendor_roster_client", fake)
+        r = c.post(f"/v1/handoffs/{hid2}/submit", headers={**ops, "Idempotency-Key": "k2"}).json()
+        assert r["state"] == "vendor_confirmed" and r["confirmation_kind"] == "vendor" and len(fake.calls) == 1
+        again = c.post(f"/v1/handoffs/{hid2}/submit", headers={**ops, "Idempotency-Key": "k3"}).json()
+        assert again["idempotent_replay"] is True and len(fake.calls) == 1                                                          # never sent twice
+        # same publisher is refused (segregation of duties)
+        vid3 = _publish_week(demo, SYD, week)
+        hid3 = c.get(f"/v1/sites/{SYD}/handoffs", headers=ops, params={"version_id": vid3}).json()[0]["id"]
+        assert c.post(f"/v1/handoffs/{hid3}/submit", headers={**ops, "Idempotency-Key": "k4"}).status_code == 403
+        with owner_engine.begin() as conn:
+            conn.execute(text("UPDATE roster_version SET published_by = 'someone_else' WHERE id = :v"), {"v": vid3})
+        monkeypatch.setattr(rh, "vendor_roster_client", Fake("rejected"))
+        assert c.post(f"/v1/handoffs/{hid3}/submit", headers={**ops, "Idempotency-Key": "k5"}).json()["state"] == "rejected"
+    finally:
+        with owner_engine.begin() as conn:
+            conn.execute(text("UPDATE tenant SET writeback_enabled = false WHERE tenant_id = 'ensemble_solutions'"))
+    # a newer publish for the same week retires an open handoff
+    vid4 = _publish_week(demo, SYD, week)   # same week as vid2 (vendor_confirmed, closed) and vid3's week differs; vid2 stays confirmed
+    st = {h["version_id"]: h["state"] for h in c.get(f"/v1/sites/{SYD}/handoffs", headers=ops).json()}
+    assert st[vid2] == "vendor_confirmed" and st[vid4] == "pending"

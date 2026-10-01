@@ -337,7 +337,10 @@ def publish(version_id: str, ctx: RequestContext = Depends(get_request_context),
     db.flush()
     v.published_at, v.published_by, v.state = datetime.now(timezone.utc), ctx.user_id, "published"
     svc.event(db, ctx, v, "published", {"promoted": promoted, "superseded_previous_rows": superseded})
-    return _reconcile(db, ctx, v, site)
+    out = _reconcile(db, ctx, v, site)
+    from app.api.v1 import handoffs
+    handoffs.create_for_version(db, ctx, v, site)
+    return out
 
 
 def _reconcile(db: Session, ctx: RequestContext, v: RosterVersion, site) -> dict:

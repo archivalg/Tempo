@@ -110,3 +110,9 @@ export interface Notice { id: string; kind: string; severity: 'info' | 'action' 
 export const getNotifications = () => apiRequest<{ unread: number; items: Notice[] }>('/notifications')
 export const markNoticeRead = (id: string) => apiRequest<Notice>(`/notifications/${id}/read`, { method: 'POST' })
 export const markAllNoticesRead = () => apiRequest<{ marked: number }>('/notifications/read-all', { method: 'POST' })
+
+export interface Handoff { id: string; site_id: string; version_id: string; state: 'pending' | 'exported' | 'confirmed_by_operator' | 'submitted' | 'vendor_confirmed' | 'unconfirmed' | 'rejected' | 'superseded'; shifts: number; created_at: string; exported_at: string | null; file_sha256: string | null; attempts: number; vendor_detail: string | null; confirmed_at: string | null; confirmed_by: string | null; confirm_reference: string | null; confirm_note: string | null; confirmation_kind: 'operator_attestation' | 'vendor' | null }
+export const listHandoffs = (site: string, versionId: string) => apiRequest<Handoff[]>(`/sites/${site}/handoffs?version_id=${versionId}`)
+export const downloadHandoff = (id: string) => downloadFile(`/handoffs/${id}/file.csv`)
+export const confirmHandoff = (id: string, reference: string, note: string) => apiRequest<Handoff>(`/handoffs/${id}/confirm`, { method: 'POST', body: { reference, note } })
+export const submitHandoff = (id: string) => apiRequest<Handoff>(`/handoffs/${id}/submit`, { method: 'POST', idempotencyKey: newIdempotencyKey() })

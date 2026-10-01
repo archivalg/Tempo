@@ -90,7 +90,7 @@ def status(db: Session) -> dict | None:
 
 
 # --------------------------------------------------------------------------- reset
-_APPEND_ONLY = {"demand_override", "notification", "security_audit_event", "audit_record", "event_record", "roster_event"}
+_APPEND_ONLY = {"demand_override", "notification", "roster_handoff", "security_audit_event", "audit_record", "event_record", "roster_event"}
 
 
 def reset(db: Session) -> None:
@@ -112,6 +112,7 @@ def reset(db: Session) -> None:
     bind_tenant(db, TENANT)
     # overrides are never deleted (their history is evidence); a reset retires them so they cannot apply to the re-seeded tenant
     db.execute(text("UPDATE demand_override SET state = 'revoked', revoke_reason = 'demo reset' WHERE state = 'active'"))
+    db.execute(text("UPDATE roster_handoff SET state = 'superseded' WHERE state IN ('pending', 'exported', 'unconfirmed')"))
     for table in reversed(Base.metadata.sorted_tables):
         if table.name in _APPEND_ONLY or "tenant_id" not in table.c or table.name == "tenant":
             continue
