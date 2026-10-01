@@ -7,18 +7,18 @@ Update it whenever the deployed stack changes. Last verified: **1 October 2026**
 
 | Item | Value |
 |---|---|
-| Source revision of the running code | `51e3b64` on `build/tempo-standalone-gate1` (images built from that tree at 06:32–06:33 UTC). Later commits on the branch are documentation, CI, scripts and a guard — no running code differs except where listed under *Not yet deployed*. |
-| Backend | container `tempo_backend`, image `tempo-api:local` (`d5e44d51f98f`), host port **8007** → 8000, runs as non-owner role `tempo_app` |
-| Frontend | container `tempo_frontend`, image `tempo-tempo_frontend` (`ef336d462c69`), host port **3007** → 80 |
+| Source revision of the running code | `40ef0c3` on `build/tempo-standalone-gate1` (images built 1 Oct 2026 from that tree). Later commits are documentation only unless listed under *Not yet deployed*. |
+| Backend | container `tempo_backend`, image `tempo-api:local`, host port **8007** → 8000, runs as non-owner role `tempo_app` |
+| Frontend | container `tempo_frontend`, host port **3007** → 80 |
 | Database | container `tempo_postgres` (postgres:16), host `127.0.0.1:5439`, database `tempo`, roles `tempo_owner` (migrations) / `tempo_app` (runtime, no BYPASSRLS), volume `tempo_tempo_pgdata` |
-| Migration head | **`d0e1f2a3b4c5`** (read from `alembic_version` in database `tempo`) |
+| Migration head | **`e1f2a3b4c5d6`** (read from `alembic_version` in database `tempo`) |
 | Migration job | `tempo_migrate` (one-shot, owner role, `alembic upgrade head`) |
 | Redis | not used (6386 reserved) |
 | Dev identity picker | **OFF** in the deployed stack (`TEMPO_DEV_IDP_ENABLED=false`); password sign-in only |
 | Gateway | `central_nginx` (separate repo `Ensemble_NGNIX`): HTTP→HTTPS redirect, TLS on the Tempo hostname, upstreams `tempo_backend:8000` and `tempo_frontend:80` |
 
 ## Not yet deployed
-Anything committed after `51e3b64` that changes behaviour: the demo-reset guard (`SAFE_RESET_DATABASES`), the CI workflow and `scripts/smoke.sh` (tooling only). Rebuild and redeploy with the commands below to bring the containers to branch head.
+Nothing: the running containers were built from `40ef0c3` (includes M0 tooling, the demo-reset guard, the commit-before-response fix and the M1 ingestion work).
 
 ## How to deploy (no data loss)
 ```bash
@@ -39,9 +39,9 @@ Never use `docker compose down --volumes`. Never point the demo reset or browser
 The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database other than `tempo_e2e` / `tempo_test` unless `TEMPO_DEMO_RESET_DB=<name>` is set on purpose (tested).
 
 ## Verification record
-- Smoke test against the public hostname (`scripts/smoke.sh`): readiness, console, anonymous refusal, password sign-in, and read-only calls for overview, demand, rosters, roster, live attendance, timesheets, variance, notifications; sign-out. Last run: **passed**, 1 Oct 2026.
-- API suite (real PostgreSQL, non-owner role): 303 passed on 1 Oct 2026 (run on this host; **not yet run in GitHub CI**).
-- Browser suite (dev stack on `tempo_e2e`): 18 passed on 1 Oct 2026 (**not yet run in GitHub CI**).
+- Smoke test against the public hostname (`scripts/smoke.sh`): readiness, console, anonymous refusal, password sign-in, and read-only calls for overview, demand, rosters, roster, live attendance, timesheets, variance, notifications, data status, setup checklist, data contracts; sign-out. Last run: **passed**, 1 Oct 2026.
+- API suite (real PostgreSQL, non-owner role): 325 passed on 1 Oct 2026 (run on this host; **not yet run in GitHub CI**).
+- Browser suite (dev stack on `tempo_e2e`): 21 passed on 1 Oct 2026 (**not yet run in GitHub CI**).
 - Backup/restore drill: one manual `pg_dump`/`pg_restore` of `tempo` into a scratch database on 1 Oct 2026; row counts matched. No schedule, off-host copy or timed recovery yet.
 
 ## Known operational gaps

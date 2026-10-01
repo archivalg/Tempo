@@ -23,7 +23,7 @@ r=$(curl -s -c "$JAR" -X POST "$B/auth/login" -H 'content-type: application/json
 echo "$r" | grep -q '"signed_in"' && ok "password sign-in" || { bad "password sign-in ($r)"; echo "stopping: cannot continue without a session"; exit 1; }
 site=$(curl -s -b "$JAR" "$B/sites" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d[0]["site_id"] if d else "")' 2>/dev/null)
 [ -n "$site" ] && ok "sites visible (first: $site)" || { bad "no sites visible"; exit 1; }
-for p in "me/access" "notifications" "sites/$site/overview" "sites/$site/demand" "sites/$site/rosters" "sites/$site/roster" "sites/$site/attendance/live" "sites/$site/timesheets" "sites/$site/reports/variance"; do
+for p in "me/access" "notifications" "sites/$site/overview" "sites/$site/demand" "sites/$site/rosters" "sites/$site/roster" "sites/$site/attendance/live" "sites/$site/timesheets" "sites/$site/reports/variance" "imports/status" "setup/checklist" "imports/contracts"; do
   c=$(code "$B/$p"); [ "$c" = 200 ] && ok "GET /$p" || bad "GET /$p -> $c"
 done
 c=$(curl -s -b "$JAR" -o /dev/null -w '%{http_code}' -X POST "$B/auth/logout" -H "X-CSRF-Token: $(grep tempo_csrf "$JAR" | awk '{print $7}')"); [ "$c" = 200 ] && ok "sign-out" || bad "sign-out -> $c"
