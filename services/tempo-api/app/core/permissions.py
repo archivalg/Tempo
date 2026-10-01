@@ -62,6 +62,8 @@ PERMISSION_CODES: frozenset[str] = frozenset(
         "labour.worker_names",
         # Approve attendance/timesheets and request supervised corrections.
         "labour.attendance.approve",
+        # Download report data as files. Separate from labour.read so viewing a screen never implies taking a copy.
+        "labour.export",
     }
 )
 
@@ -71,10 +73,10 @@ PERMISSION_CODES: frozenset[str] = frozenset(
 ROLE_PERMISSION_MATRIX: dict[str, frozenset[str]] = {
     "supervisor": frozenset({"labour.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
     "analyst": frozenset({"labour.read"}),
-    "executive": frozenset({"labour.read", "labour.margin.read", "labour.rates.read"}),
-    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
-    "planner": frozenset({"labour.read", "labour.plan", "labour.rates.read", "labour.worker_names"}),
-    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve"}),
+    "executive": frozenset({"labour.read", "labour.margin.read", "labour.rates.read", "labour.export"}),
+    "operations_manager": frozenset({"labour.read", "labour.plan", "labour.approve", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve", "labour.export"}),
+    "planner": frozenset({"labour.read", "labour.plan", "labour.rates.read", "labour.worker_names", "labour.export"}),
+    "tenant_admin": frozenset({"labour.read", "labour.plan", "labour.configure", "labour.rates.read", "labour.exception.manage", "labour.worker_names", "labour.attendance.approve", "labour.export"}),
     "finance": frozenset({"labour.margin.read", "labour.rates.read"}),
     "3pl_commercial": frozenset({"labour.margin.read"}),
     "hr_authorised": frozenset({"labour.worker_pii", "labour.worker_names"}),

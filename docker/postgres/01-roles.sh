@@ -8,8 +8,9 @@ CREATE ROLE tempo_owner LOGIN PASSWORD '${TEMPO_DB_OWNER_PASSWORD}' NOSUPERUSER 
 CREATE ROLE tempo_app   LOGIN PASSWORD '${TEMPO_DB_APP_PASSWORD}'   NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB;
 CREATE DATABASE tempo      OWNER tempo_owner;
 CREATE DATABASE tempo_test OWNER tempo_owner;
+CREATE DATABASE tempo_e2e  OWNER tempo_owner;
 SQL
-for db in tempo tempo_test; do
+for db in tempo tempo_test tempo_e2e; do
 psql -v ON_ERROR_STOP=1 -U postgres -d "$db" <<SQL
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 ALTER SCHEMA public OWNER TO tempo_owner;

@@ -92,3 +92,22 @@ export function randomUUID(): string {
   const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('')
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
+
+/** Downloads a file response (CSV export) through the same cookie session; the browser saves it under the server's filename. */
+export async function downloadFile(path: string): Promise<void> {
+  let response = await send(path, {}, {})
+  if (response.status === 401 && (await refreshSession())) response = await send(path, {}, {})
+  if (!response.ok) {
+    const parsed = await response.json().catch(() => undefined)
+    throw new ApiError(response.status, typeof parsed?.detail === 'string' ? parsed.detail : `export failed with status ${response.status}`)
+  }
+  const name = /filename="([^"]+)"/.exec(response.headers.get('content-disposition') ?? '')?.[1] ?? 'tempo-export.csv'
+  const url = URL.createObjectURL(await response.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { getVariance, type Variance } from '../api/ops'
 import { useSite } from '../components/AppShell'
-import { Banner, Empty, FreshnessBanner, PageHead, Skeleton, SourcePills, Status } from '../components/ui'
+import { useTempoContext } from '../context/TempoContextProvider'
+import { exportCsv } from '../api/ops'
+import { Banner, ExportButton, Empty, FreshnessBanner, PageHead, Skeleton, SourcePills, Status } from '../components/ui'
 import { fmtMoney, fmtNum, fmtTime, localDate } from '../lib/format'
 
 const addDays = (date: string, n: number) => { const d = new Date(`${date}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
@@ -9,6 +11,7 @@ const mondayOf = (date: string) => { const d = new Date(`${date}T00:00:00Z`); re
 
 export default function ReportsPage() {
   const { site } = useSite()
+  const { can } = useTempoContext()
   const tz = site?.timezone ?? 'UTC'
   const [start, setStart] = useState(() => mondayOf(localDate(new Date(), tz)))
   const [v, setV] = useState<Variance | null>(null)
@@ -26,6 +29,7 @@ export default function ReportsPage() {
   return (
     <>
       <PageHead title="Insights & Reports — plan vs actual" sub={`${site.name} · week of ${start} · ${v?.metric_version ?? ''}`}>
+        {can('labour.export') && site && <ExportButton run={() => exportCsv(site.site_id, 'variance', start)} />}
         <div className="tp-row"><button className="tp-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Previous week">←</button><button className="tp-btn" onClick={() => setStart(mondayOf(localDate(new Date(), tz)))}>This week</button><button className="tp-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Next week">→</button></div>
       </PageHead>
       {err && <Banner tone="bad" title="Could not load the report">{err}</Banner>}

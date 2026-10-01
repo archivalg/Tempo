@@ -169,3 +169,26 @@ def test_exception_actions_need_the_manage_permission_and_site_scope(demo):
     assert c.post(f"/v1/exceptions/{case['id']}/acknowledge", headers=H(demo, "analyst")).status_code == 403
     assert c.post(f"/v1/exceptions/{case['id']}/dismiss", headers=H(demo, "executive"), json={"reason": "not mine"}).status_code == 403
     assert c.post("/v1/exceptions/does-not-exist/acknowledge", headers=H(demo, "supervisor")).status_code == 404
+
+
+def test_csv_export_is_gated_audited_and_formula_safe(demo):
+    from app.core.exports import safe_cell, to_csv
+    c = demo["client"]
+    assert safe_cell("=HYPERLINK(1)") == "'=HYPERLINK(1)" and safe_cell("-1+2") == "'-1+2" and safe_cell(-3) == "-3" and safe_cell(None) == ""
+    assert "'=x" in to_csv(["a"], [["=x"]], ["p"])
+    for kind in ("variance", "timesheets", "demand"):
+        r = c.get(f"/v1/sites/{MEL}/exports/{kind}.csv", headers=H(demo, "ops_manager"))
+        assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv") and "attachment" in r.headers["content-disposition"] and r.headers["cache-control"] == "no-store"
+        assert r.text.startswith("# Tempo ")
+    # screens-only roles cannot take a copy; unknown kind and out-of-scope site are not found
+    assert c.get(f"/v1/sites/{MEL}/exports/variance.csv", headers=H(demo, "analyst")).status_code == 403
+    assert c.get(f"/v1/sites/{MEL}/exports/payroll.csv", headers=H(demo, "ops_manager")).status_code == 404
+    assert c.get("/v1/sites/nope/exports/variance.csv", headers=H(demo, "ops_manager")).status_code == 404
+    # rates only appear for callers who may see them
+    hdr = lambda t: next(l for l in t.splitlines() if not l.startswith("#"))  # noqa: E731
+    assert "planned_cost" in hdr(c.get(f"/v1/sites/{MEL}/exports/variance.csv", headers=H(demo, "ops_manager")).text)
+    # the export is in the audit trail with its row count
+    from sqlalchemy import text
+    with demo["sl"]() as s:
+        db_module.begin_auth_lookup(s)
+        assert s.execute(text("SELECT count(*) FROM security_audit_event WHERE action LIKE 'export.%' AND reason_code LIKE 'rows=%'")).scalar() >= 3

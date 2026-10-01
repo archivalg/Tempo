@@ -176,3 +176,15 @@ export function RosterSteps({ state }: { state: string }) {
     </div>
   )
 }
+
+/** Download the on-screen report as CSV. Hidden for callers without labour.export; errors are shown, never swallowed. */
+export function ExportButton({ run, label = 'Export CSV' }: { run: () => Promise<void>; label?: string }) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  return (
+    <span className="tp-row">
+      <button className="tp-btn" disabled={busy} onClick={() => { setBusy(true); setErr(null); run().catch((e) => setErr(e.message)).finally(() => setBusy(false)) }}>{busy ? 'Preparing…' : `⭳ ${label}`}</button>
+      {err && <span role="status" className="tp-badge bad">✕ {err}</span>}
+    </span>
+  )
+}

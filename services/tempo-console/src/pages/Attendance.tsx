@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { approveSession, decideAdjustment, getTimesheets, requestAdjustment, type Timesheet, type TimesheetData } from '../api/ops'
 import { ApiError } from '../api/client'
 import { useSite } from '../components/AppShell'
-import { Banner, Drawer, Empty, PageHead, Skeleton, Status } from '../components/ui'
+import { exportCsv } from '../api/ops'
+import { Banner, ExportButton, Drawer, Empty, PageHead, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { fmtTime, localDate } from '../lib/format'
 import { utcToZonedInput, zonedToUtcIso } from '../lib/zoned'
@@ -36,6 +37,7 @@ export default function AttendancePage() {
   return (
     <>
       <PageHead title="Attendance & timesheets" sub={`${site.name} · week of ${start} · originals are never overwritten; corrections need a second approver`}>
+        {can('labour.export') && site && <ExportButton run={() => exportCsv(site.site_id, 'timesheets', start)} />}
         <div className="tp-row"><button className="tp-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Previous week">←</button><button className="tp-btn" onClick={() => setStart(mondayOf(localDate(new Date(), tz)))}>This week</button><button className="tp-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Next week">→</button></div>
       </PageHead>
       {err && <Banner tone="bad" title="Problem">{err}</Banner>}

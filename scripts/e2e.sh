@@ -5,6 +5,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 set -a; . ./.env; set +a
 PY="${PYTHON:-$ROOT/.venv/bin/python}"
 export TEMPO_ENV=local TEMPO_DEV_IDP_ENABLED=true
-export TEMPO_DATABASE_URL="postgresql+psycopg://tempo_app:${TEMPO_DB_APP_PASSWORD}@127.0.0.1:${POSTGRES_PORT:-5439}/tempo"
+export TEMPO_DATABASE_URL="postgresql+psycopg://tempo_app:${TEMPO_DB_APP_PASSWORD}@127.0.0.1:${POSTGRES_PORT:-5439}/${E2E_DB:-tempo_e2e}"
 ( cd services/tempo-api && "$PY" -m app.cli bootstrap-ensemble-demo --reset | grep -E '"result"' )
 cd services/tempo-console && npx playwright test "$@"

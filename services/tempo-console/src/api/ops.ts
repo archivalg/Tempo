@@ -1,4 +1,4 @@
-import { apiRequest, newIdempotencyKey } from './client'
+import { apiRequest, downloadFile, newIdempotencyKey } from './client'
 
 export interface DataSource { key: string; label: string; kind: string; mode: string; declared_mode: string; last_success_at: string | null; age_seconds: number | null; fresh: boolean; note: string | null }
 export interface SiteSummary { site_id: string; name: string; timezone: string; operating_mode: string; is_synthetic: boolean; data_sources: DataSource[]; all_sources_fresh: boolean }
@@ -98,3 +98,5 @@ export const getVariance = (site: string, start?: string) => apiRequest<Variance
 export interface DemandRow { date: string; activity: string; actual_units: number | null; forecast_units: number | null; forecast_lower: number | null; forecast_upper: number | null; seconds_per_unit: number | null; required_hours: number | null }
 export interface Demand { range: { start: string; days: number }; rows: DemandRow[]; activities: string[]; standards: { activity: string; seconds_per_unit: number; effective_from: string }[]; zone_map: { activity: string; role: string; zone: string; weight: number }[]; readiness: { check: string; ok: boolean; detail: string }[]; data_sources: DataSource[]; forecast: { run_id: string | null; created_at: string | null; snapshot_id: string | null; method: string; backtest_mape: number | null; confidence: Record<string, unknown> | null }; overrides_note: string }
 export const getDemand = (site: string, start?: string) => apiRequest<Demand>(`/sites/${site}/demand${start ? `?start=${start}` : ''}`)
+
+export const exportCsv = (site: string, kind: 'variance' | 'timesheets' | 'demand', start: string) => downloadFile(`/sites/${site}/exports/${kind}.csv?start=${start}`)

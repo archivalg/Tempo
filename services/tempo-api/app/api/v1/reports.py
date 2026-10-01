@@ -4,11 +4,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.v1.operations import _site
-from app.core import auth, reports
+from app.core import auth, exports, reports
 from app.dependencies import get_db, get_request_context
 from app.errors import AuthForbidden, PolicyConflict, RunNotFound, ScopeError
 from app.models.canonical import AttendanceSession, Worker
@@ -131,3 +132,23 @@ def _decide(state: str):
 
 router.post("/attendance/adjustments/{adjustment_id}/approve")(_decide("approved"))
 router.post("/attendance/adjustments/{adjustment_id}/reject")(_decide("rejected"))
+
+
+@router.get("/sites/{site_id}/exports/{kind}.csv")
+def export_csv(kind: str, site_id: str, start: str | None = Query(default=None, pattern=D), days: int = Query(default=7, ge=1, le=14),
+               ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> Response:
+    """Same data, same permission filters as the screens; the file is audited with its row count."""
+    if not ctx.has_permission("labour.export"):
+        raise AuthForbidden("caller lacks labour.export")
+    if kind not in ("variance", "timesheets", "demand"):
+        raise RunNotFound("unknown export")
+    site = _site(db, ctx, site_id)
+    st, now = start or _default_week(site.timezone), _now()
+    if kind == "variance":
+        body, n = exports.variance_csv(reports.variance(db, ctx.tenant_id, site, st, days, now, can_rates=ctx.has_permission("labour.rates.read")), now)
+    elif kind == "timesheets":
+        body, n = exports.timesheets_csv(reports.timesheets(db, ctx.tenant_id, site, st, days, now, can_see_names=ctx.has_permission("labour.worker_names")), now)
+    else:
+        body, n = exports.demand_csv(reports.demand(db, ctx.tenant_id, site, st, days, now), now)
+    auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action=f"export.{kind}", decision="allowed", reason_code=f"rows={n}", session_ref=site.site_id, correlation_id=ctx.correlation_id)
+    return Response(body, media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="tempo-{kind}-{site.site_id}-{st}.csv"', "Cache-Control": "no-store"})
