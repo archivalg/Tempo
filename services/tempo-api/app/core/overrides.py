@@ -21,6 +21,7 @@ MULTIPLY_MIN, MULTIPLY_MAX = 0.2, 3.0
 MAX_DAYS = 14
 MAX_EXPIRY_DAYS = 90
 MIN_REASON = 10
+APPROVAL_ABOVE = 0.25  # a percentage change beyond ±25 % (or any fixed-units override) needs a second person before it affects the plan
 
 
 def _aware(d: datetime) -> datetime:
@@ -48,6 +49,10 @@ def validate(mode: str, value: float, start: str, end: str, reason: str, expires
     return None
 
 
+def needs_approval(mode: str, value: float) -> bool:
+    return mode == "set_units" or abs(value - 1.0) > APPROVAL_ABOVE
+
+
 def active_for(db: Session, tenant_id: str, site_id: str, now: datetime) -> list[DemandOverride]:
     return [o for o in db.scalars(select(DemandOverride).where(DemandOverride.tenant_id == tenant_id, DemandOverride.site_id == site_id,
                                                                  DemandOverride.state == "active").order_by(DemandOverride.created_at))
@@ -55,13 +60,16 @@ def active_for(db: Session, tenant_id: str, site_id: str, now: datetime) -> list
 
 
 def status_of(o: DemandOverride, now: datetime) -> str:
-    return "revoked" if o.state == "revoked" else ("expired" if _aware(o.expires_at) <= now else "active")
+    if o.state in ("revoked", "rejected", "pending"):
+        return o.state
+    return "expired" if _aware(o.expires_at) <= now else "active"
 
 
 def serialise(o: DemandOverride, now: datetime) -> dict:
     return {"id": o.id, "site_id": o.site_id, "activity": o.activity, "start_date": o.start_date, "end_date": o.end_date, "mode": o.mode, "value": o.value,
             "reason": o.reason, "origin": o.origin, "status": status_of(o, now), "expires_at": o.expires_at, "created_by": o.created_by, "created_at": o.created_at,
-            "revoked_by": o.revoked_by, "revoked_at": o.revoked_at, "revoke_reason": o.revoke_reason}
+            "revoked_by": o.revoked_by, "revoked_at": o.revoked_at, "revoke_reason": o.revoke_reason,
+            "needs_approval": o.state == "pending", "decided_by": o.decided_by, "decided_at": o.decided_at, "decision_note": o.decision_note}
 
 
 def apply(rows: list[dict], overrides: list[DemandOverride], tz: ZoneInfo) -> tuple[list[dict], list[str]]:

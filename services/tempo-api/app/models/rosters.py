@@ -105,7 +105,10 @@ class DemandOverride(Base):
     value: Mapped[float] = mapped_column()
     reason: Mapped[str] = mapped_column(String)
     origin: Mapped[str] = mapped_column(String, default="manual")
-    state: Mapped[str] = mapped_column(String, default="active")  # active | revoked
+    state: Mapped[str] = mapped_column(String, default="active")  # pending | active | rejected | revoked
+    decided_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(String, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

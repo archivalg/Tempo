@@ -39,3 +39,30 @@ test('planner adjusts demand, sees it flagged, then revokes it; an analyst canno
   await expect(page.getByRole('heading', { name: 'Manual adjustments' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Adjust demand' })).toHaveCount(0)
 })
+
+test('a large adjustment waits for a different approver and only then reaches the forecast', async ({ page }) => {
+  await signIn(page, /Demo Planner/)
+  await page.goto('/demand')
+  await page.getByRole('button', { name: 'Adjust demand' }).click()
+  const form = page.getByRole('form', { name: 'New demand adjustment' })
+  await form.getByLabel('Percent (+/−)').fill('45')
+  await form.getByLabel(/Reason/).fill('Peak sale event confirmed by the customer')
+  const exp = new Date(); exp.setUTCDate(exp.getUTCDate() + 10)
+  await form.getByLabel('Expires').fill(exp.toISOString().slice(0, 10))
+  await form.getByRole('button', { name: /Save/ }).click()
+  const list = page.getByRole('list', { name: 'Adjustments' })
+  await expect(list).toContainText('pending')
+  await expect(list).toContainText('Not applied yet')
+  await expect(page.locator('td .tp-badge', { hasText: 'adjusted' })).toHaveCount(0)           // the plan has not moved
+  await expect(list.getByRole('button', { name: 'Approve' })).toHaveCount(0)                    // the proposer cannot approve
+
+  await signIn(page, /Demo Ops Manager/)
+  await page.goto('/demand')
+  await page.getByRole('list', { name: 'Adjustments' }).getByRole('button', { name: 'Approve' }).click()
+  await expect(page.getByRole('list', { name: 'Adjustments' })).toContainText('active')
+  await expect(page.locator('td .tp-badge', { hasText: 'adjusted' }).first()).toBeVisible()
+  await page.getByRole('list', { name: 'Adjustments' }).getByRole('button', { name: 'Revoke' }).click()
+  await page.getByLabel('Reason for revoking').fill('Test finished, restoring the model')
+  await page.getByRole('button', { name: 'Confirm revoke' }).click()
+  await expect(page.locator('td .tp-badge', { hasText: 'adjusted' })).toHaveCount(0)
+})

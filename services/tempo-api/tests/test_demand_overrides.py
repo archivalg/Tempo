@@ -90,3 +90,39 @@ def test_permissions_and_tenant_isolation(client):
     other = context_header(roles=["planner"], user_id="usr_o", tenant_id="ten_other")
     assert c.get(f"/v1/sites/{SITE}/demand/overrides", headers=other).status_code == 404
     assert c.post(f"/v1/demand/overrides/{oid}/revoke", json={"reason": "cross tenant attempt"}, headers=other).status_code == 404
+
+
+def test_large_adjustments_need_a_second_person_before_they_touch_the_plan(client):
+    _seed(client)
+    c = client
+    base = c.get(f"/v1/sites/{SITE}/demand?start={WEEK}", headers=planner()).json()
+    big = {**OK, "value": 1.6}
+    r = c.post(f"/v1/sites/{SITE}/demand/overrides", json=big, headers=planner())
+    assert r.status_code == 201 and r.json()["status"] == "pending" and r.json()["needs_approval"] and r.json()["forecast_run_id"] is None
+    oid = r.json()["id"]
+    after = c.get(f"/v1/sites/{SITE}/demand?start={WEEK}", headers=planner()).json()
+    assert not any(x["adjusted"] for x in after["rows"]) and [x["forecast_units"] for x in after["rows"]] == [x["forecast_units"] for x in base["rows"]]   # nothing moved
+    assert c.post(f"/v1/sites/{SITE}/demand/overrides", json=big, headers=planner()).status_code == 422                       # a pending proposal blocks stacking too
+    # the proposer cannot approve; a role without labour.approve cannot either
+    assert c.post(f"/v1/demand/overrides/{oid}/approve", json={}, headers=planner()).status_code == 403
+    # a different approver: rejection needs a reason, approval makes it live and re-runs the forecast
+    assert c.post(f"/v1/demand/overrides/{oid}/reject", json={"note": "x"}, headers=manager()).status_code == 400
+    ok = c.post(f"/v1/demand/overrides/{oid}/approve", json={"note": "agreed"}, headers=manager())
+    assert ok.status_code == 200 and ok.json()["status"] == "active" and ok.json()["forecast_run_id"]
+    d = c.get(f"/v1/sites/{SITE}/demand?start={WEEK}", headers=planner()).json()
+    assert any(x["adjusted"] for x in d["rows"])
+    assert c.post(f"/v1/demand/overrides/{oid}/approve", json={}, headers=manager()).status_code == 422                       # already decided
+    # a proposer who is also an approver still cannot approve their own proposal
+    both = context_header(roles=["planner", "operations_manager"], user_id="usr_both")
+    mine = c.post(f"/v1/sites/{SITE}/demand/overrides", json={**big, "start_date": "2026-09-14", "end_date": "2026-09-15"}, headers=both).json()
+    assert mine["status"] == "pending"
+    assert c.post(f"/v1/demand/overrides/{mine['id']}/approve", json={}, headers=both).status_code == 403
+    assert c.post(f"/v1/demand/overrides/{mine['id']}/approve", json={}, headers=manager()).status_code == 200
+    # a rejected proposal never applies
+    assert c.post(f"/v1/demand/overrides/{oid}/revoke", json={"reason": "reset for next check"}, headers=planner()).status_code == 200
+    p2 = c.post(f"/v1/sites/{SITE}/demand/overrides", json={**big, "mode": "set_units", "value": 5000}, headers=planner()).json()
+    assert p2["status"] == "pending"                                                                                       # fixed-units always needs a second person
+    rj = c.post(f"/v1/demand/overrides/{p2['id']}/reject", json={"note": "not supported by the customer forecast"}, headers=manager()).json()
+    assert rj["status"] == "rejected" and rj["decision_note"].startswith("not supported")
+    rows = c.get(f"/v1/sites/{SITE}/demand?start={WEEK}", headers=planner()).json()["rows"]
+    assert not any(x["adjusted"] for x in rows if x["date"] <= "2026-09-10")                                              # the rejected range stays on the model

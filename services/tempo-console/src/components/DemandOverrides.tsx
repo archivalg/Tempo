@@ -1,18 +1,19 @@
 import { useState } from 'react'
-import { createOverride, revokeOverride, type Demand, type DemandOverride } from '../api/ops'
+import { createOverride, decideOverride, revokeOverride, type Demand, type DemandOverride } from '../api/ops'
 import { fmtTime } from '../lib/format'
 import { zonedToUtcIso } from '../lib/zoned'
 import { Status } from './ui'
 
 const describe = (o: DemandOverride) => (o.mode === 'multiply' ? `${o.value >= 1 ? '+' : '−'}${Math.abs(Math.round((o.value - 1) * 100))}%` : `set to ${o.value.toLocaleString()} units/day`)
-const tone = { active: 'risk', expired: 'neutral', revoked: 'neutral' } as const
+const tone = { pending: 'risk', active: 'risk', expired: 'neutral', revoked: 'neutral', rejected: 'bad' } as const
 
 /** Manual adjustments sit on top of the forecast: reason and expiry are required, the model's number is kept, revoking keeps the history. */
-export function DemandOverrides({ site, tz, d, days, canPlan, onChanged }: { site: string; tz: string; d: Demand | null; days: string[]; canPlan: boolean; onChanged: () => void }) {
+export function DemandOverrides({ site, tz, d, days, canPlan, canApprove, me, onChanged }: { site: string; tz: string; d: Demand | null; days: string[]; canPlan: boolean; canApprove: boolean; me: string | undefined; onChanged: () => void }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [f, setF] = useState({ activity: '', start: days[0], end: days[days.length - 1], mode: 'multiply' as 'multiply' | 'set_units', value: '10', reason: '', expires: '' })
+  const [deciding, setDeciding] = useState<{ id: string; note: string } | null>(null)
   const [revoking, setRevoking] = useState<{ id: string; reason: string } | null>(null)
   const set = (k: keyof typeof f, v: string) => setF((p) => ({ ...p, [k]: v }))
   const list = d?.overrides ?? []
@@ -27,6 +28,10 @@ export function DemandOverrides({ site, tz, d, days, canPlan, onChanged }: { sit
       })
       setOpen(false); setF((p) => ({ ...p, reason: '' })); onChanged()
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
+  }
+  async function decide(id: string, approve: boolean, note: string) {
+    setBusy(true); setErr(null)
+    try { await decideOverride(id, approve, note); setDeciding(null); onChanged() } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
   async function revoke() {
     if (!revoking) return
@@ -56,11 +61,15 @@ export function DemandOverrides({ site, tz, d, days, canPlan, onChanged }: { sit
           <ul className="tp-list" aria-label="Adjustments">{list.map((o) => (
             <li key={o.id} className="tp-item" style={{ gridTemplateColumns: '1fr', cursor: 'default' }}>
               <span><Status tone={tone[o.status]}>{o.status}</Status> <strong>{describe(o)}</strong> · {o.activity ?? 'all activities'} · {o.start_date} → {o.end_date}</span>
-              <span className="s">{o.reason}<br />{o.origin} · expires {fmtTime(o.expires_at, tz, { day: '2-digit', month: 'short' })}{o.revoke_reason ? ` · revoked: ${o.revoke_reason}` : ''}</span>
-              {canPlan && o.status === 'active' && (revoking?.id === o.id ? (
+              <span className="s">{o.status === 'pending' && 'Not applied yet — a different approver must agree first. '}{o.reason}<br />{o.origin} · expires {fmtTime(o.expires_at, tz, { day: '2-digit', month: 'short' })}{o.revoke_reason ? ` · revoked: ${o.revoke_reason}` : ''}{o.status === 'rejected' && o.decision_note ? ` · rejected: ${o.decision_note}` : ''}</span>
+              {canApprove && o.status === 'pending' && o.created_by !== me && (
+                <span className="tp-row"><input aria-label="Reason or note" className="tp-input" placeholder="Note (required to reject)" value={deciding?.id === o.id ? deciding.note : ''} onChange={(e) => setDeciding({ id: o.id, note: e.target.value })} />
+                  <button className="tp-btn primary" disabled={busy} onClick={() => void decide(o.id, true, deciding?.id === o.id ? deciding.note : '')}>Approve</button>
+                  <button className="tp-btn danger" disabled={busy || !(deciding?.id === o.id && deciding.note.trim().length >= 3)} onClick={() => void decide(o.id, false, deciding?.note ?? '')}>Reject</button></span>)}
+              {canPlan && (o.status === 'active' || o.status === 'pending') && (revoking?.id === o.id ? (
                 <span className="tp-row"><input aria-label="Reason for revoking" className="tp-input" placeholder="Reason" value={revoking.reason} onChange={(e) => setRevoking({ id: o.id, reason: e.target.value })} />
                   <button className="tp-btn" disabled={busy || revoking.reason.trim().length < 5} onClick={() => void revoke()}>Confirm revoke</button><button className="tp-btn" onClick={() => setRevoking(null)}>Keep</button></span>
-              ) : <span><button className="tp-btn" onClick={() => setRevoking({ id: o.id, reason: '' })}>Revoke</button></span>)}
+              ) : <span><button className="tp-btn" onClick={() => setRevoking({ id: o.id, reason: '' })}>{o.status === 'pending' ? 'Withdraw' : 'Revoke'}</button></span>)}
             </li>))}</ul>
         )}
       </div>

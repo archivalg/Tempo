@@ -12,7 +12,7 @@ const mondayOf = (date: string) => { const d = new Date(`${date}T00:00:00Z`); re
 
 export default function DemandPage() {
   const { site } = useSite()
-  const { can } = useTempoContext()
+  const { can, access } = useTempoContext()
   const tz = site?.timezone ?? 'UTC'
   const [start, setStart] = useState(() => mondayOf(localDate(new Date(), tz)))
   const [d, setD] = useState<Demand | null>(null)
@@ -74,7 +74,7 @@ export default function DemandPage() {
           <section className="tp-card"><header><h2>Data readiness</h2></header>
             <ul className="tp-list">{!d ? <li className="tp-body"><Skeleton h={100} /></li> : d.readiness.map((r) => (<li key={r.check} className="tp-item" style={{ gridTemplateColumns: 'auto 1fr', cursor: 'default' }}><Status tone={r.ok ? 'ok' : 'bad'}>{r.ok ? 'Ready' : 'Not ready'}</Status><span><span className="t">{r.check}</span><br /><span className="s">{r.detail}</span></span></li>))}</ul>
           </section>
-          <DemandOverrides site={site.site_id} tz={tz} d={d} days={days} canPlan={can('labour.plan')} onChanged={load} />
+          <DemandOverrides site={site.site_id} tz={tz} d={d} days={days} canPlan={can('labour.plan')} canApprove={can('labour.approve')} me={access?.user_id} onChanged={load} />
           <section className="tp-card"><header><h2>Work standards</h2></header>
             <div className="tp-body">{!d ? <Skeleton h={80} /> : <table className="tp-table tp-num"><thead><tr><th>Activity</th><th>s / unit</th><th>Role → zone</th></tr></thead><tbody>
               {d.standards.map((s) => (<tr key={s.activity}><td>{s.activity}</td><td>{s.seconds_per_unit}</td><td className="tp-muted">{d.zone_map.filter((m) => m.activity === s.activity).map((m) => `${m.role} → ${m.zone}`).join(', ') || '—'}</td></tr>))}

@@ -101,7 +101,7 @@ export const getDemand = (site: string, start?: string) => apiRequest<Demand>(`/
 
 export const exportCsv = (site: string, kind: 'variance' | 'timesheets' | 'demand', start: string) => downloadFile(`/sites/${site}/exports/${kind}.csv?start=${start}`)
 
-export interface DemandOverride { id: string; site_id: string; activity: string | null; start_date: string; end_date: string; mode: 'multiply' | 'set_units'; value: number; reason: string; origin: string; status: 'active' | 'expired' | 'revoked'; expires_at: string; created_by: string; created_at: string; revoked_by: string | null; revoked_at: string | null; revoke_reason: string | null }
+export interface DemandOverride { id: string; site_id: string; activity: string | null; start_date: string; end_date: string; mode: 'multiply' | 'set_units'; value: number; reason: string; origin: string; status: 'pending' | 'active' | 'expired' | 'revoked' | 'rejected'; needs_approval?: boolean; decision_note?: string | null; expires_at: string; created_by: string; created_at: string; revoked_by: string | null; revoked_at: string | null; revoke_reason: string | null }
 export interface NewOverride { activity: string | null; start_date: string; end_date: string; mode: 'multiply' | 'set_units'; value: number; reason: string; expires_at: string }
 export const createOverride = (site: string, body: NewOverride) => apiRequest<DemandOverride>(`/sites/${site}/demand/overrides`, { method: 'POST', body })
 export const revokeOverride = (id: string, reason: string) => apiRequest<DemandOverride>(`/demand/overrides/${id}/revoke`, { method: 'POST', body: { reason } })
@@ -123,3 +123,4 @@ export const getAudit = (q: { action?: string; decision?: string; before?: strin
   const p = new URLSearchParams(); if (q.action) p.set('action', q.action); if (q.decision) p.set('decision', q.decision); if (q.before) p.set('before', q.before)
   return apiRequest<AuditPage>(`/admin/audit${p.size ? `?${p}` : ''}`)
 }
+export const decideOverride = (id: string, approve: boolean, note: string) => apiRequest<DemandOverride>(`/demand/overrides/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { note } })
