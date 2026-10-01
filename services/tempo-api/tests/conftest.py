@@ -21,6 +21,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 os.environ.setdefault("TEMPO_ENV", "test")
+os.environ.setdefault("TEMPO_SESSION_SIGNING_KEY", "test-only-session-key-not-a-secret-0123456789abcdef")
+os.environ.setdefault("TEMPO_ACTION_TOKEN_SECRET", "test-only-action-key-not-a-secret-0123456789abcdef")
 os.environ.setdefault("TEMPO_DEV_IDP_ENABLED", "true")
 
 from app import db as db_module  # noqa: E402

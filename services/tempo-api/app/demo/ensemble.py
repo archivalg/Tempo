@@ -93,8 +93,21 @@ def status(db: Session) -> dict | None:
 _APPEND_ONLY = {"demand_override", "notification", "roster_handoff", "security_audit_event", "audit_record", "event_record", "roster_event"}
 
 
+SAFE_RESET_DATABASES = {"tempo_e2e", "tempo_test"}
+
+
+def _guard_reset(db: Session) -> None:
+    """A reset deletes the whole demo tenant. It only runs on throw-away databases unless the operator names the database explicitly,
+    so a stray test or script can never wipe the live tenant (roadmap M0)."""
+    name = db.get_bind().url.database
+    if name not in SAFE_RESET_DATABASES and os.environ.get("TEMPO_DEMO_RESET_DB") != name:
+        raise RuntimeError(f"refusing to reset the demo tenant in database '{name}': only {sorted(SAFE_RESET_DATABASES)} are allowed "
+                           f"unless TEMPO_DEMO_RESET_DB={name} is set deliberately")
+
+
 def reset(db: Session) -> None:
     _guard()
+    _guard_reset(db)
     begin_auth_lookup(db)
     if db.get(Tenant, TENANT) is None:
         return

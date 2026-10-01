@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "build/**"]
+  pull_request:
+
+# Every job uses a throw-away PostgreSQL service container. Nothing here can reach a deployed database.
+env:
+  TEMPO_DB_OWNER_PASSWORD: ci-owner-not-a-secret
+  TEMPO_DB_APP_PASSWORD: ci-app-not-a-secret
+  TEMPO_TEST_DB_HOST: localhost:5432
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-super-not-a-secret
+          TEMPO_DB_OWNER_PASSWORD: ci-owner-not-a-secret
+          TEMPO_DB_APP_PASSWORD: ci-app-not-a-secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: services/tempo-api/requirements.txt }
+      - name: Create roles and databases (same script the compose stack uses)
+        env:
+          PGPASSWORD: ci-super-not-a-secret
+          PGHOST: localhost
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          sed 's/psql -v ON_ERROR_STOP=1 -U postgres/psql -v ON_ERROR_STOP=1 -h localhost -U postgres/' docker/postgres/01-roles.sh > /tmp/roles.sh
+          sh /tmp/roles.sh
+      - run: pip install -r services/tempo-api/requirements.txt
+      - name: API tests (capacity run is separate)
+        working-directory: services/tempo-api
+        run: python -m pytest --ignore=tests/test_capacity.py -q -p no:cacheprovider
+
+  console:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: services/tempo-console/package-lock.json }
+      - working-directory: services/tempo-console
+        run: |
+          npm ci
+          npm run build
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: [api, console]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci-super-not-a-secret
+          TEMPO_DB_OWNER_PASSWORD: ci-owner-not-a-secret
+          TEMPO_DB_APP_PASSWORD: ci-app-not-a-secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEMPO_ENV: local
+      TEMPO_DEV_IDP_ENABLED: "true"
+      TEMPO_SESSION_COOKIE_SECURE: "false"
+      TEMPO_CONSOLE_CORS_ORIGINS: http://127.0.0.1:5174
+      TEMPO_DATABASE_URL: postgresql+psycopg://tempo_app:ci-app-not-a-secret@127.0.0.1:5432/tempo_e2e
+      TEMPO_DATABASE_MIGRATION_URL: postgresql+psycopg://tempo_owner:ci-owner-not-a-secret@127.0.0.1:5432/tempo_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip, cache-dependency-path: services/tempo-api/requirements.txt }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: services/tempo-console/package-lock.json }
+      - name: Roles and databases
+        env: { PGPASSWORD: ci-super-not-a-secret }
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client >/dev/null
+          sed 's/psql -v ON_ERROR_STOP=1 -U postgres/psql -v ON_ERROR_STOP=1 -h localhost -U postgres/' docker/postgres/01-roles.sh > /tmp/roles.sh
+          TEMPO_DB_OWNER_PASSWORD=ci-owner-not-a-secret TEMPO_DB_APP_PASSWORD=ci-app-not-a-secret sh /tmp/roles.sh
+      - run: pip install -r services/tempo-api/requirements.txt
+      - name: Migrate, seed the synthetic tenant, start the API
+        working-directory: services/tempo-api
+        run: |
+          python -m alembic upgrade head
+          python -m app.cli bootstrap-ensemble-demo --reset > /dev/null
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8017 > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8017/readyz && break || sleep 1; done
+      - name: Start the console and install the browser
+        working-directory: services/tempo-console
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          VITE_API_BASE_URL=http://127.0.0.1:8017/v1 nohup npx vite --host 127.0.0.1 --port 5174 > /tmp/vite.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:5174/ >/dev/null && break || sleep 1; done
+      - name: Browser tests
+        working-directory: services/tempo-console
+        run: npx playwright test
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: browser-failure-evidence, path: "services/tempo-console/test-results\n/tmp/api.log" }

@@ -1,3 +1,6 @@
+> **Reconciled 1 Oct 2026 (roadmap M0).** This file is a *historical ledger*. For what is running now, read `docs/DEPLOYMENT.md`; for what is planned, `docs/roadmap.md`.
+> Statements below that are no longer true are marked **[superseded]** with the current fact; they are kept so the history stays honest.
+
 # Tempo build progress ledger
 
 Branch `build/tempo-standalone-gate1`. Spec: [`Tempo_Product_Build_Blueprint.md`](Tempo_Product_Build_Blueprint.md) v1.2 (30 Sep 2026).
@@ -12,12 +15,12 @@ Branch `build/tempo-standalone-gate1`. Spec: [`Tempo_Product_Build_Blueprint.md`
 ## Environment (this host)
 - `tempo_postgres` (postgres:16, 127.0.0.1:5439, roles `tempo_owner` migrations / `tempo_app` runtime, dbs `tempo`, `tempo_test`) defined in `docker-compose.yml` with `docker/postgres/01-roles.sh`.
 - Generated secrets live in gitignored `/home/opc/tempo/.env` (mode 600, owner `opc`). Rotation: regenerate values, `docker compose up -d`, re-run role script (`ALTER ROLE ... PASSWORD`), invalidate sessions by changing `TEMPO_SESSION_SIGNING_KEY`. Not yet automated. Dedicated `.env.development.local`/`.env.uat` outside the repo: **open**.
-- **Deployed (30 Sep 2026, commit 4f7ae61):** `tempo_postgres` 127.0.0.1:5439 (volume `tempo_tempo_pgdata` preserved; backup `~/tempo-backups/`), one-shot `tempo_migrate`, `tempo_backend` 8007 (image `tempo-api:local`, non-owner `tempo_app`, `/readyz` ok, dev IdP OFF), `tempo_frontend` 3007. Gateway unchanged (it already targets `tempo_backend:8000` / `tempo_frontend:80`; only `/readyz` is not in its route regex). The public hostname shows the sign-in page with *no identity provider configured* — nobody can sign in there until the login milestone. Legacy SQLite volume `tempo_tempo_data` retained, unused.
+- **[superseded — current state is in `docs/DEPLOYMENT.md`; running revision `51e3b64`, migration head `d0e1f2a3b4c5`]** **Deployed (30 Sep 2026, commit 4f7ae61):** `tempo_postgres` 127.0.0.1:5439 (volume `tempo_tempo_pgdata` preserved; backup `~/tempo-backups/`), one-shot `tempo_migrate`, `tempo_backend` 8007 (image `tempo-api:local`, non-owner `tempo_app`, `/readyz` ok, dev IdP OFF), `tempo_frontend` 3007. Gateway unchanged (it already targets `tempo_backend:8000` / `tempo_frontend:80`; only `/readyz` is not in its route regex). The public hostname shows the sign-in page with *no identity provider configured* — nobody can sign in there until the login milestone. Legacy SQLite volume `tempo_tempo_data` retained, unused.
 - Local dev/verification stack (dev IdP ON, loopback only): API 127.0.0.1:8017, console 127.0.0.1:5174, driven by local Playwright Chromium (`/tmp/claude-1000/dev-up.sh`).
 - Python 3.12 venv: `/tmp/claude-1000/v312` (`uv venv`), system Python untouched.
 
 ## Verification run (2026-09-30, real PostgreSQL, non-owner runtime role)
-`pytest --ignore=tests/test_capacity.py` → **244 passed** (baseline before Gate 1: 187 on SQLite).
+**[superseded: 303 passed on 1 Oct 2026]** `pytest --ignore=tests/test_capacity.py` → **244 passed** (baseline before Gate 1: 187 on SQLite).
 
 ## Build priority (revised 30 Sep 2026, owner instruction)
 Product workflow first; the full login / RBAC / security-hardening milestone is **deferred** until the workflow works, and will add a username+password experience. Tenant-aware data model and RLS continue as we build. Until then: dev IdP is local-only, never on the public hostname.
@@ -50,7 +53,7 @@ Each was verified by API tests on real PostgreSQL (full suite: **303 passed**) *
 | **Vendor writeback** | For Overlay sites, publishing creates a *roster hand-over*: download a hashed CSV, then a named person records the reference they loaded it under (labelled **operator attestation**, never "vendor confirmed"). A vendor client interface exists with the honest default `unknown → unconfirmed`; sending needs `labour.approve`, an Idempotency-Key, a person other than the publisher, and the tenant's platform kill switch ON (default OFF). Verified with a fake connector for confirmed / rejected / unknown / replay. | **No real Deputy/UKG write client exists** — it cannot be built or verified without a sandbox connection and credentials. Until one is supplied, "vendor confirmed" cannot occur outside tests. |
 
 Operational notes: browser tests now run on their own database `tempo_e2e` (created by `docker/postgres/01-roles.sh`, or by hand on this host) so they can never reset the live tenant; `scripts/e2e.sh` / `scripts/dev-up.sh` use it. New migrations: `f6a7b8c9d0e1` (demand_override), `a7b8c9d0e1f2` (notification), `b8c9d0e1f2a3` (roster_handoff) — each with tenant RLS and DELETE/TRUNCATE revoked for the runtime role. **These are not yet applied to the live `tempo` database or the 3007/8007 containers** (deployment is a separate step).
-**HTTPS:** the gateway serves `tempo.ensemblesolutions.com.au` over HTTP only. Password sign-in is *refused* over HTTP by design, so the hostname cannot be used to sign in until the gateway has a certificate.
+**[superseded: HTTPS has been enabled on the gateway and sign-in works]** **HTTPS:** the gateway serves `tempo.ensemblesolutions.com.au` over HTTP only. Password sign-in is *refused* over HTTP by design, so the hostname cannot be used to sign in until the gateway has a certificate.
 
 ## Gate 1 — safe standalone foundation
 | ID | Requirement (Blueprint) | Status | Evidence / gap |
@@ -70,12 +73,12 @@ Operational notes: browser tests now run on their own database `tempo_e2e` (crea
 | G1-13 | Migrations on PostgreSQL | **verified** | Alembic 0001–0003 apply on clean PG; upgrade→downgrade base→upgrade round-trip test. |
 
 ## Known unsafe / incomplete right now
-- The **console (port 3007) has not been migrated**: it still uses the removed header + `/setup`. Old backend container still runs the SQLite scaffold — do not expose either outside the box.
-- `Worker.worker_id` etc. are globally unique PKs (cross-tenant collision hazard). Composite-key migration required.
+- **[superseded: the console uses cookie sessions and the real login; the old SQLite backend was replaced on 30 Sep 2026]** The **console (port 3007) has not been migrated**: it still uses the removed header + `/setup`. Old backend container still runs the SQLite scaffold — do not expose either outside the box.
+- `Worker.worker_id` etc. are globally unique PKs (cross-tenant collision hazard — effect is a uniqueness error, not a data leak). Composite-key migration **still open**.
 - No real IdP, no vault, no TLS-to-DB, no backup/restore evidence (Gate 5 items).
 - Test-suite runtime ~10 min (Argon2 cost + FK fixtures); acceptable, to be tuned.
 
-## Next (in order)
+## Next (in order) **[superseded — see `docs/roadmap.md`; items 1–3 are done, item 4's site-level security is done]**
 1. Console: real login page (dev IdP banner), cookie session + CSRF client, `/me/access`-driven nav; delete `/setup` and header code.
 2. `make` targets + `bootstrap_ensemble_demo` (idempotent, synthetic-labelled) + browser check on real seeded data.
 3. Design tokens/components + Overview, Roster Planner, Attendance screens; screenshots.
@@ -94,4 +97,4 @@ Operational notes: browser tests now run on their own database `tempo_e2e` (crea
 | **Self-service password reset** | **blocked** | A reset link must be delivered to the person, and there is no email provider or verified sender. Today an administrator issues the link. Building a "forgot password" form that cannot actually deliver would be misleading. |
 | **Composite keys for global IDs** | **deferred, with reason** | `worker_id`, `provider_id`, `customer_id`, `site_id` etc. are single-column primary keys. Effect today: a second tenant reusing an ID gets a uniqueness error (existence leak / onboarding nuisance), **not** a data leak — RLS and per-handler tenant checks still apply. Fixing it properly changes ~9 foreign keys and every `db.get(Model, id)` call site; it deserves its own migration with a dual-run window rather than being rushed. |
 | **Real IdP / vault / TLS-to-DB / off-host backups / Deputy-UKG connectors** | **blocked on inputs** | Need a chosen IdP tenant, a secret store, infrastructure decisions and vendor sandbox credentials. |
-New migrations: `c9d0e1f2a3b4` (site scope), `d0e1f2a3b4c5` (override approval columns). **Neither — nor the three before them — is applied to the live database yet.**
+New migrations: `c9d0e1f2a3b4` (site scope), `d0e1f2a3b4c5` (override approval columns). **[superseded: all five new migrations were applied to the live database on 1 Oct 2026.]**

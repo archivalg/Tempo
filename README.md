@@ -5,6 +5,13 @@ runs standalone or as an overlay on a customer's existing Kronos/UKG or
 Deputy deployment, and as the labour-domain backend for Prime AI's Labour
 Intelligence pack.
 
+## Start here
+
+- `docs/roadmap.md` — the delivery plan and milestone status (what is open, partial, blocked or accepted).
+- `docs/DEPLOYMENT.md` — what is running now: revision, ports, migration head, how to deploy and verify.
+- `docs/build-progress.md` — the historical build ledger (evidence per feature; stale statements are marked).
+- Checks: `scripts/smoke.sh` (read-only smoke test of a running Tempo), `scripts/e2e.sh` (browser tests on the throw-away `tempo_e2e` database), GitHub CI in `.github/workflows/ci.yml`.
+
 ## Documents
 
 - `Tempo Product Strategy.docx` — market, positioning, pricing, GTM

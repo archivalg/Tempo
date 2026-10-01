@@ -336,3 +336,18 @@ def test_tenant_audit_log_is_admin_only_scoped_filterable_and_self_recording(dem
     assert seen["items"], "viewing the audit log is itself audited"
     named = [i for i in d["items"] + page2["items"] if i["actor_type"] == "user" and i["actor_name"]]
     assert named, "user actors are shown by name when they belong to this tenant"
+
+
+def test_demo_reset_refuses_databases_that_are_not_throwaway(demo, monkeypatch):
+    from types import SimpleNamespace
+    from app.demo import ensemble as e
+    fake = lambda name: SimpleNamespace(get_bind=lambda: SimpleNamespace(url=SimpleNamespace(database=name)))  # noqa: E731
+    e._guard_reset(fake("tempo_e2e"))
+    e._guard_reset(fake("tempo_test"))
+    monkeypatch.delenv("TEMPO_DEMO_RESET_DB", raising=False)
+    with pytest.raises(RuntimeError, match="refusing to reset"):
+        e._guard_reset(fake("tempo"))
+    monkeypatch.setenv("TEMPO_DEMO_RESET_DB", "tempo")           # only an explicit, named opt-in unlocks it
+    e._guard_reset(fake("tempo"))
+    with pytest.raises(RuntimeError):
+        e._guard_reset(fake("tempo_other"))
