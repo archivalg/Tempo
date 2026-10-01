@@ -43,7 +43,7 @@ Verified in a real local browser (Playwright, `scripts/e2e.sh`, screenshots in `
 Known gaps: forecast has no seasonal term (WAPE ≈ 10 %); break rules nominal; OIDC untested against a real IdP.
 
 ## Product gaps closed (1 Oct 2026) — commits 828c2bd, bfb299f, 166e709, 2e0a447
-Each was verified by API tests on real PostgreSQL (full suite: **303 passed**) **and** a Playwright run (full suite: **18 passed**) in a real browser (`e2e/*.spec.ts`, screenshots in `docs/screenshots/`).
+Each was verified by API tests on real PostgreSQL (full suite: **325 passed**) **and** a Playwright run (full suite: **21 passed**) in a real browser (`e2e/*.spec.ts`, screenshots in `docs/screenshots/`).
 | Gap | What was built | Honest limits |
 |---|---|---|
 | **Report export** | Audited CSV for variance / timesheets / demand (`labour.export`, a new permission; ops manager, planner, tenant admin, executive). Same read models as the screens, so rates and worker names stay permission-gated. Cells are formula-injection safe; upcoming days are blank, not zero; estimate vs confirmed is in the column names. | CSV only (no PDF/XLSX). No scheduled or emailed exports. |
@@ -98,3 +98,25 @@ Operational notes: browser tests now run on their own database `tempo_e2e` (crea
 | **Composite keys for global IDs** | **deferred, with reason** | `worker_id`, `provider_id`, `customer_id`, `site_id` etc. are single-column primary keys. Effect today: a second tenant reusing an ID gets a uniqueness error (existence leak / onboarding nuisance), **not** a data leak — RLS and per-handler tenant checks still apply. Fixing it properly changes ~9 foreign keys and every `db.get(Model, id)` call site; it deserves its own migration with a dual-run window rather than being rushed. |
 | **Real IdP / vault / TLS-to-DB / off-host backups / Deputy-UKG connectors** | **blocked on inputs** | Need a chosen IdP tenant, a secret store, infrastructure decisions and vendor sandbox credentials. |
 New migrations: `c9d0e1f2a3b4` (site scope), `d0e1f2a3b4c5` (override approval columns). **[superseded: all five new migrations were applied to the live database on 1 Oct 2026.]**
+
+
+## M1 — guided setup and CSV/API ingestion: first delivery (1 Oct 2026) — status: **partial, not accepted**
+Engineering evidence only; acceptance needs the customer sample files named in `docs/roadmap.md` §5. Details of every field: `docs/data-contracts.md` (generated from the validators).
+
+| Roadmap acceptance criterion | Evidence | Gap |
+|---|---|---|
+| 1. New tenant loads staff, supplied forecasts and workload by CSV without a developer | Browser test `e2e/data-import.spec.ts`; API tests `tests/test_imports.py` (staff, work standards, forecast, totals, events). Data page: checklist → template → own column names mapped (saved) → preview → confirm. | Sites, customers, shift templates/rules, availability, rates and certifications are **not** importable yet; sites are still created by an administrator. |
+| 2. Same datasets via API give equivalent totals | `test_csv_and_api_produce_identical_canonical_totals` (two tenants, identical bucket rows). API: `POST /v1/imports/batches` with service credentials (`tsc_…`, scoped to sites, rotatable, revocable, secret shown once). | No webhooks/streaming; one JSON request ≤ 20,000 rows. |
+| 3. Replay/correction tests prove no duplicate workload | Same file or same `Idempotency-Key` → same batch; events: replay no-op, higher revision corrects, lower is ignored, cancel, cancel-before-create tombstone; totals: upsert vs `replace_slice`; events and totals never both counted (first kind becomes authoritative per site + activity; the other is stored but not counted, visibly). | Switching the authoritative kind for a site + activity is **not** built (needs a rebuild of derived workload). |
+| 4. Unknown references, mixed units, missing periods, foreign-tenant IDs, partial batches → actionable results | Row-level reasons in plain language, downloadable rejected-rows CSV, accept-only-good-rows is a deliberate choice, unit mismatch refused, ambiguous replacement refused, control-total mismatch holds the batch, foreign IDs get the same answer as unknown IDs. | Missing-period detection is for daily replace slices only. |
+| 5. Overnight and daylight-saving boundaries | Local times in a clock-forward gap or clock-back overlap are refused with instructions; offsets accepted; a 23-hour day is one day (`test_local_time_rules_across_daylight_saving`). | Half-hour-offset zones are handled by local-hour flooring but not separately tested. |
+| 6. Source totals reconcile to accepted records | Preview shows rows/accepted/rejected/new/changed/total units; optional control total; applied summary kept on the batch. | No reconciliation against the *source system*, only against what was stated in the upload. |
+
+Also built: the **forecast source** choice per site (Tempo's model or the customer-supplied forecast, with visible origin and an explicit fallback per activity), revised forecasts **flag open rosters** (never rewrite published ones), daily totals feed the Demand and Variance reports, the guided **setup checklist** (Data page and Overview), and an undo for forecast/events/totals loads (the newest load per class only; staff and work-standard loads are corrected by re-upload).
+
+Limits to be honest about: synchronous apply only (batches over 20,000 rows are refused — the "durable background" processing the roadmap asks for needs a worker that does not exist); no import of availability/rates/certifications; no scheduled pulls; the CSV reader accepts comma, semicolon or tab separated UTF-8 only.
+
+### Defect found and fixed while verifying M1 (affects every write)
+With the installed FastAPI (0.141), the database session's `commit()` ran **after** the response was sent. Consequences: a client could be told "done" before the write was visible to the next request (this is what made one browser test flaky), and a commit that failed would never have reached the caller. Fixed with a function-scoped dependency on the API router that commits before the response (`commit_before_response`). `tests/test_commit_ordering.py` fails without the fix (a separate connection sees nothing when the response starts) and passes with it.
+
+Migration `e1f2a3b4c5d6` adds the ingestion tables (tenant row security; site-scoped where they carry a site; DELETE revoked on evidence tables).

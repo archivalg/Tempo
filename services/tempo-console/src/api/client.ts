@@ -111,3 +111,14 @@ export async function downloadFile(path: string): Promise<void> {
   a.remove()
   URL.revokeObjectURL(url)
 }
+
+/** Sends raw bytes (a CSV file) with the same cookie session, CSRF header and automatic refresh as every other call. */
+export async function apiUpload<T>(path: string, body: ArrayBuffer, contentType = 'text/csv'): Promise<T> {
+  const go = () => fetch(`${BASE_URL}${path}`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': contentType, 'X-CSRF-Token': csrfToken() }, body })
+  let response = await go()
+  if (response.status === 401 && (await refreshSession())) response = await go()
+  const text = await response.text()
+  const parsed = text ? JSON.parse(text) : undefined
+  if (!response.ok) throw new ApiError(response.status, typeof parsed?.detail === 'string' ? parsed.detail : `request failed with status ${response.status}`, parsed?.error_code)
+  return parsed as T
+}

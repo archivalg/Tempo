@@ -90,7 +90,7 @@ def status(db: Session) -> dict | None:
 
 
 # --------------------------------------------------------------------------- reset
-_APPEND_ONLY = {"demand_override", "notification", "roster_handoff", "security_audit_event", "audit_record", "event_record", "roster_event"}
+_APPEND_ONLY = {"demand_override", "notification", "roster_handoff", "import_batch", "import_row", "workload_event", "supplied_forecast", "security_audit_event", "audit_record", "event_record", "roster_event"}
 
 
 SAFE_RESET_DATABASES = {"tempo_e2e", "tempo_test"}
@@ -126,6 +126,10 @@ def reset(db: Session) -> None:
     # overrides are never deleted (their history is evidence); a reset retires them so they cannot apply to the re-seeded tenant
     db.execute(text("UPDATE demand_override SET state = 'revoked', revoke_reason = 'demo reset' WHERE state = 'active'"))
     db.execute(text("UPDATE roster_handoff SET state = 'superseded' WHERE state IN ('pending', 'exported', 'unconfirmed')"))
+    # imported evidence is never deleted; a reset retires it so it cannot feed the re-seeded tenant
+    db.execute(text("UPDATE supplied_forecast SET state = 'removed' WHERE state = 'active'"))
+    db.execute(text("UPDATE workload_event SET state = 'undone' WHERE state = 'active'"))
+    db.execute(text("UPDATE import_batch SET state = 'undone' WHERE state IN ('applied', 'validated')"))
     for table in reversed(Base.metadata.sorted_tables):
         if table.name in _APPEND_ONLY or "tenant_id" not in table.c or table.name == "tenant":
             continue

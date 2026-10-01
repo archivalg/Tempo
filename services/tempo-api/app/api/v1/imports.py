@@ -262,3 +262,36 @@ def set_forecast_source(site_id: str, body: PrefIn, ctx: RequestContext = Depend
         p.source, p.set_by, p.set_at = body.source, ctx.user_id, datetime.now(timezone.utc)
     auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="forecast.source", decision="allowed", reason_code=body.source, session_ref=site_id, correlation_id=ctx.correlation_id)
     return {"site_id": site_id, "forecast_source": body.source}
+
+
+# ------------------------------------------------------------------------------------------------------------------ guided setup
+@router.get("/setup/checklist")
+def checklist(ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
+    """Plain-language progress for a new customer: what is done, what is missing, and where to go next. Counts only what the caller can see."""
+    from app.models.canonical import DemandBucket, Worker, WorkStandard
+    from app.models.identity import Tenant
+    from app.models.rosters import RosterVersion
+    t = db.get(Tenant, ctx.tenant_id)
+    sites = list(db.scalars(select(Site).where(Site.tenant_id == ctx.tenant_id)))
+    sites = [s for s in sites if s.site_id in ctx.site_ids]
+    count = lambda model, *where: db.scalar(select(func.count()).select_from(model).where(model.tenant_id == ctx.tenant_id, *where)) or 0  # noqa: E731
+    workers = count(Worker, Worker.status == "active")
+    standards = count(WorkStandard, WorkStandard.effective_to.is_(None))
+    history = count(DemandBucket)
+    supplied = count(SuppliedForecast, SuppliedForecast.state == "active")
+    rosters = count(RosterVersion)
+
+    def step(key, title, done, detail, todo, link, optional=False):
+        return {"key": key, "title": title, "state": "done" if done else "todo", "detail": detail if done else todo, "link": link, "optional": optional}
+    steps = [
+        step("organisation", "Your organisation", bool(t and t.name), f"{t.name}" if t else "", "An administrator at Ensemble Solutions creates your organisation.", None),
+        step("sites", "Sites and time zones", len(sites) > 0, f"{len(sites)} site(s): " + ", ".join(f"{s.name} ({s.timezone})" for s in sites[:4]), "No site is set up yet. Ask your administrator to add your first site with its time zone.", None),
+        step("staff", "Staff", workers > 0, f"{workers} active people loaded", "Load your people from a spreadsheet (download the template, fill it in, upload it).", "/data?tab=upload&class=master&entity=workers"),
+        step("standards", "Work standards", standards > 0, f"{standards} activities have a work standard", "Tell Tempo how long each activity takes per unit. Everything about workload depends on these.", "/data?tab=upload&class=master&entity=work_standards"),
+        step("workload", "Workload", history > 0 or supplied > 0, ("Workload history is loaded" if history else "") + (" · " if history and supplied else "") + ("A supplied forecast is loaded" if supplied else ""),
+             "Load past workload (totals or individual events), or a forecast of upcoming work, so Tempo can plan.", "/data?tab=upload&class=bulk"),
+        step("roster", "First roster", rosters > 0, f"{rosters} roster version(s) created", "Generate a draft roster from the workload, adjust it and publish it.", "/roster"),
+    ]
+    done = sum(1 for s in steps if s["state"] == "done")
+    nxt = next((s for s in steps if s["state"] == "todo"), None)
+    return {"steps": steps, "done": done, "total": len(steps), "next": nxt["key"] if nxt else None, "complete": done == len(steps)}

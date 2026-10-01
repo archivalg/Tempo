@@ -4,10 +4,13 @@ import { getOverview, type ExceptionItem, type HourPoint } from '../api/ops'
 import { useSite } from '../components/AppShell'
 import { CoverageHeatmap, DemandCapacityChart } from '../components/charts'
 import { Banner, Drawer, Empty, FreshnessBanner, KIND_LABEL, KpiCard, PageHead, Skeleton, SourcePills, STATE_LABEL, Status, severityTone } from '../components/ui'
+import { SetupChecklist } from '../components/SetupChecklist'
+import { useTempoContext } from '../context/TempoContextProvider'
 import { useApi } from '../hooks/useApi'
 import { fmtAge, fmtDay, fmtNum, fmtTime, localDate } from '../lib/format'
 
 export default function OverviewPage() {
+  const { can } = useTempoContext()
   const { site } = useSite()
   const [params, setParams] = useSearchParams()
   const date = params.get('date') ?? undefined
@@ -32,6 +35,7 @@ export default function OverviewPage() {
         </label>
         <button className="tp-btn" onClick={() => setTick((n) => n + 1)}>Refresh</button>
       </PageHead>
+      {can('labour.data.import') && <SetupChecklist compact />}
 
       {ov && <div style={{ marginBottom: 12 }}><SourcePills sources={ov.data_sources} /></div>}
       {ov && <FreshnessBanner sources={ov.data_sources} attendanceVerified={ov.attendance_verified} />}

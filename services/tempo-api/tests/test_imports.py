@@ -454,3 +454,20 @@ def test_daily_totals_show_in_the_demand_and_variance_reports(client):
     assert got == {("2026-09-14", "picking"): 1000, ("2026-09-15", "picking"): 1001}
     v = client.get(f"/v1/sites/{MEL}/reports/variance", params={"start": "2026-09-14"}, headers=h).json()
     assert {x["date"]: x["actual_units"] for x in v["days"] if x["actual_units"]} == {"2026-09-14": 1000, "2026-09-15": 1001}
+
+
+def test_setup_checklist_tells_a_new_customer_what_to_do_next(client):
+    seed(client, standards=())
+    h = admin()
+    c = client.get("/v1/setup/checklist", headers=h).json()
+    st = {s["key"]: s["state"] for s in c["steps"]}
+    assert st == {"organisation": "done", "sites": "done", "staff": "todo", "standards": "todo", "workload": "todo", "roster": "todo"} and c["next"] == "staff" and c["done"] == 2
+    todo = {s["key"]: s for s in c["steps"]}["staff"]
+    assert "template" in todo["detail"] and todo["link"].startswith("/data?tab=upload")
+    for name, f, ent in (("staff", csv_text(["worker_ref", "name", "site", "employment_type"], [["E1", "A B", MEL, "casual"]]), "workers"),
+                         ("standards", csv_text(["activity", "seconds_per_unit"], [["picking", "40"]]), "work_standards")):
+        b = stage(client, h, "master", f, entity=ent).json()
+        client.post(f"/v1/imports/batches/{b['id']}/apply", headers=h)
+    client.post("/v1/imports/batches", json={"data_class": "bulk", "apply": True, "rows": bulk(["2026-09-14"])}, headers=h)
+    c = client.get("/v1/setup/checklist", headers=h).json()
+    assert {s["key"]: s["state"] for s in c["steps"]}["staff"] == "done" and c["next"] == "roster" and c["done"] == 5 and not c["complete"]

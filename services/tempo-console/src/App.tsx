@@ -5,6 +5,7 @@ import { ActionDetailPage } from './pages/ActionDetail'
 import { ActionsListPage } from './pages/ActionsList'
 import AdminPage from './pages/Admin'
 import AuditPage from './pages/Audit'
+import DataPage from './pages/Data'
 import ApprovalsPage from './pages/Approvals'
 import AttendancePage from './pages/Attendance'
 import DemandPage from './pages/Demand'
@@ -50,6 +51,7 @@ function App() {
             <Route path="/providers" element={<LabourProvidersPage />} />
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/audit" element={<AuditPage />} />
+            <Route path="/data" element={<DataPage />} />
             <Route path="/account" element={<AccountPage />} />
           </Route>
         </Routes>

@@ -38,6 +38,14 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def commit_before_response(db: Session = Depends(get_db)) -> Generator[None, None, None]:
+    """Registered on the API router with scope="function": its exit code runs when the endpoint has finished and BEFORE the response is
+    sent. Without it FastAPI commits after the response, so a client could be told "done" before the write is visible, and a failing
+    commit would never reach the client. Exceptions skip the commit; get_db rolls the session back."""
+    yield
+    db.commit()
+
+
 def _extract_token(request: Request) -> tuple[str, bool]:
     """Returns (token, via_cookie). Bearer takes precedence and is not ambient, so needs no CSRF."""
     header = request.headers.get("authorization", "")

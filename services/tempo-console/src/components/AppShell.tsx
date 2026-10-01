@@ -22,7 +22,8 @@ const NAV: { to: string; label: string; perm: string; end?: boolean; group?: str
   { to: '/reports', label: 'Insights & Reports', perm: 'labour.read' },
   { to: '/runs', label: 'Optimisation Studio', perm: 'labour.read' },
   { to: '/providers', label: 'Team & Skills', perm: 'labour.read', group: 'Manage' },
-  { to: '/onboarding', label: 'Data & Connections', perm: 'labour.configure' },
+  { to: '/data', label: 'Data', perm: 'labour.data.import' },
+  { to: '/onboarding', label: 'Connections', perm: 'labour.configure' },
   { to: '/admin', label: 'Administration', perm: 'labour.configure' },
   { to: '/audit', label: 'Audit log', perm: 'labour.configure' },
 ]
