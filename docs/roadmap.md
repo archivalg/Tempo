@@ -20,6 +20,9 @@ Owner direction on 1 October 2026:
 - Ingest forecast, master and actual data through both CSV and API.
 - Actual workload may arrive as individual transactions or bulk totals.
 - Keep Tempo independently deployable, using PostgreSQL and the established Python/FastAPI and React/TypeScript stack.
+- Provide self-service onboarding and Stripe subscriptions, plus platform-admin tenant creation without Stripe.
+- Price by plan, sites and workforce bands with unlimited platform users; retain Arch's proposed figures as indicative until commercially approved.
+- Separate app.tempo.* and api.tempo.* origins, provide platform administration with controlled tenant support access, and deliver a full customer help library and Swagger/OpenAPI reference.
 
 This roadmap replaces the older integration-led roadmap as the delivery priority. The product blueprint remains a source of detailed requirements, but its broader portal, advanced module and architecture expansion must follow this focused release scope. Prime integration, a separate Maestro service, new solver families and advanced enterprise portals are outside the first release. Existing connector code under `app/maestro` may be reused inside Tempo without requiring another customer product.
 
@@ -56,7 +59,7 @@ No milestone in this revised roadmap is marked accepted. `build-progress.md` ret
 | M3 | Simple reliable planning and reporting | Partial | M1 workload + M2 attendance | Engineering + warehouse planner |
 | M4 | Deputy connected and verified | Partial / blocked on sandbox | M1 contracts; Deputy credentials | Engineering + Deputy account owner |
 | M5 | Second workforce system connected and verified | Blocked on vendor choice | Vendor/product selection and sandbox | Trev/product owner + engineering |
-| M6 | Repeatable SaaS onboarding and operations | Partial | Core flow stable; service/infrastructure choices | Engineering + platform owner |
+| M6 | Self-service onboarding, Stripe/manual plans, platform support, separate origins and documentation | Partial; new requirements open | Core flow stable; DNS, Stripe/email setup and commercial decisions | Engineering + product/platform owner |
 | M7 | Customer pilot and release decision | Open | M1–M6 accepted for release scope | Product owner + pilot customer |
 
 M2 and M3 can progress alongside Deputy work once shared contracts are agreed. Selection of the second vendor must not stop native T&A, CSV/API ingestion or Deputy implementation. These milestones are delivery order, not promised dates. Estimate effort after M0 and sample-data review.
@@ -191,20 +194,132 @@ Acceptance for each connector: a customer can connect, map, import, refresh and 
 
 Blocked inputs: second vendor/product decision; account owners, sandbox credentials and permitted data/write scopes. Native product work continues independently.
 
-## 9. M6 — SaaS readiness without unnecessary modules
+## 9. M6 — SaaS onboarding, subscriptions, administration and support
 
-- Repeatable tenant/site provisioning and customer admin invitation, with an onboarding checklist and import/connection templates.
-- Simple initial roles: customer admin, manager/planner and supervisor; kiosk is a device identity. Reuse established controls and offer configurable extra separation only where needed.
-- Complete account invitation/password-reset delivery through a verified email provider; preserve administrator MFA.
-- Verify tenant/site boundaries for imports, API service credentials, jobs, screens, exports and connector sync.
-- Resolve source-ID collisions for multi-tenant onboarding with tenant-scoped mappings/internal IDs and tested migrations.
-- Add durable jobs for batch imports, scheduled connector sync and long planning runs, with progress/retry/recovery visible to users.
-- Protect integration secrets, rotate credentials, monitor uptime/jobs and establish automated backups, off-host retention, restore and deployment rollback evidence.
-- Define retention/deletion and customer data export. Agree RPO/RTO and availability targets, then verify them.
-- Add simple plans/subscription management and entitlement enforcement using established Ensemble patterns where suitable. Pricing/provider choices are business decisions; avoid building a separate billing engine.
-- Provide a concise getting-started guide, sample templates, operational help and support contact.
+Extend the focused product with the minimum customer and platform operations needed to sell, onboard and support it. The following are roadmap requirements, not claims of implemented functionality.
 
-Acceptance: a second customer can be provisioned repeatedly without bespoke code; account/data isolation, recovery and subscription lifecycle checks pass; onboarding and ongoing operation need no direct DB intervention.
+### M6-PLAN — plans and entitlements from Arch's notes
+
+Source: Arch's plan/subscription notes supplied as three screenshots on 1 October 2026. Prices, workforce allowances, annual commitment and add-ons below are indicative proposals. Implement configurable commercial definitions; final prices, taxes, inclusions and contract terms need product-owner approval.
+
+Core commercial model: **Platform + Sites + Workforce Band + optional compute/AI usage + optional modules**. Platform users (planners, managers, supervisors, analysts and executives) are unlimited. Do not charge for login seats or make account sharing attractive.
+
+| Proposed tier | Indicative AUD monthly price per site | Platform users | Indicative annual contract value per site |
+|---|---|---|---|
+| Essentials | A$1,500 | Unlimited | A$18,000 |
+| Optimise | A$3,500 | Unlimited | A$42,000 |
+| Orchestrate | A$6,500 | Unlimited | A$78,000 |
+| Network | Custom | Unlimited | Custom multi-site agreement |
+
+Annual values reflect Arch's proposed minimum annual commitment, not a decision to bill the whole year upfront. Billing cadence, cancellation and commitment enforcement must be agreed separately.
+
+- Support workforce allowance bands: up to 250 active workers, 251–500, 501–1,000 and 1,000+. Arch's example is Optimise at A$3,500/site/month including up to 250 active workers; do not assume that allowance for every other tier.
+- Define active-worker measurement, period, site attribution, duplicate/cross-site treatment and inactive/agency worker handling before billing. Show customers their measured count and allowance.
+- Configure plan/version, site count, workforce band, feature entitlements, effective dates and any negotiated discount. Unlimited platform users does not remove role/access controls.
+- Agree the feature matrix for Essentials/Optimise/Orchestrate/Network. A commercial tier name does not authorise building new advanced modules or claiming unfinished capabilities.
+- Support negotiated multi-site/enterprise discounts through approved commercial configuration.
+- Provide a visible allowance warning and agreed upgrade/contact route. Do not silently change bands, charge overages or block clock-out because a workforce limit was exceeded.
+- Compute/AI usage and optional modules are future commercial dimensions: reserve configuration only; introduce metering/charges when justified and approved.
+- Arch's optional future Tempo Worker mobile module at $3–$5/worker/month remains a separate proposed add-on. Currency and final pricing require confirmation. It does not change unlimited platform users and does not bring a native mobile app into first-release scope.
+
+Acceptance: a versioned plan/entitlement matrix is approved; customers can understand plan/site/workforce allowances; role permissions and subscription entitlements are enforced server-side; manual and Stripe tenants use the same entitlement model.
+
+### M6-ONBOARD — self-service onboarding wizard
+
+Create one resumable wizard shared by customer self-service and platform-assisted setup:
+
+Account/email verification → organisation details → plan/sites/workforce band → Stripe checkout or recorded manual entitlement → site/timezone → staff/master import or connector → workload/forecast and work standards → kiosk/attendance choice → first roster.
+
+- Use sensible defaults, short explanations, import templates, mapping previews and progress indicators. Hide optional advanced settings.
+- Allow save/resume, invitation of additional users and clear retry for failed steps.
+- Keep commercial/account signup distinct from operational setup so an existing tenant can resume configuration without purchasing again.
+- Show payment/provisioning status and a simple readiness checklist for missing data, rates, rules and connector mappings.
+- Prevent duplicate organisations/subscriptions on repeated signup, refresh, checkout return or retry. Record provisioning as a recoverable operation.
+- Deliver welcome/invitation/reset emails with the correct app URL and next steps through a verified sender.
+- A customer should reach a first useful roster without SQL, raw payloads or developer assistance.
+
+Acceptance: browser journeys cover new paid signup, abandoned checkout, returning customer, resumed imports and platform-assisted onboarding; retries do not create duplicate tenants, sites or subscriptions.
+
+### M6-STRIPE — subscription lifecycle
+
+Stripe is the selected payment/subscription integration. Reuse proven Ensemble patterns where suitable, with Tempo-owned configuration and tenant mappings.
+
+- Configure products/prices only after approval of plans, currency, taxes, cadence, workforce/site quantities and annual terms. Keep test/live configuration separate.
+- Implement hosted checkout and customer billing management for payment methods, invoices and permitted plan changes.
+- Treat verified server-side Stripe events/reconciliation as billing authority; a browser success redirect alone cannot activate paid entitlements.
+- Store tenant/customer/subscription mappings and process duplicate or out-of-order webhook events idempotently.
+- Cover activation, renewal, failed payment, recovery, upgrade/downgrade, site/band changes and cancellation with agreed effective-date/proration rules.
+- Make pending, active, payment-issue and cancelled states understandable. Agree grace/read-only/export behaviour; preserve records and provide an operationally safe attendance path during billing problems.
+- Provide platform visibility of billing status, event failures and reconciliation; allow retry without duplicate provisioning.
+- Do not store payment-card details in Tempo.
+
+Acceptance: Stripe test-mode lifecycle tests reconcile billing state and Tempo entitlements, including missed/replayed events and recovery. No live charges or price creation are required merely to implement this roadmap.
+
+### M6-MANUAL — platform-created tenants without Stripe
+
+A platform administrator can create a customer organisation and site(s), select plan/version and workforce allowances, apply approved entitlements and invite the first customer administrator without a Stripe checkout or payment card.
+
+- Support manual contract/invoice, pilot, demonstration or complimentary arrangements with explicit billing source, reason, reference, effective/expiry date where applicable and audit actor.
+- Manual tenants must not require a fabricated Stripe customer/subscription ID. Keep manual lifecycle separate so Stripe events cannot accidentally suspend or overwrite their entitlements.
+- Reuse the operational onboarding wizard and tenant provisioning pipeline.
+- Allow authorised plan/allowance changes and suspension/reactivation with clear impact and audit.
+- Support an explicit future conversion to Stripe with the customer owner's participation; retain the same tenant/data and prevent double billing.
+
+Acceptance: a platform admin provisions a fully usable non-Stripe tenant, the customer completes setup, and manual entitlements survive unrelated billing events; conversion is tested without data loss.
+
+### M6-ORIGINS — separate application and API URLs
+
+Deploy the customer application at **app.tempo.<approved domain>** and API at **api.tempo.<approved domain>**. These are hostname patterns: the actual domain, DNS records and certificates still need confirmation.
+
+- Configure separate HTTPS origins, gateway routes, frontend API base URL and health/readiness routes.
+- Update onboarding emails, invitation/reset links, kiosk links, Stripe return URLs/webhooks and API reference links.
+- Configure explicit credentialed CORS, cookie domain/path/SameSite/Secure settings and CSRF handling for the chosen origin relationship.
+- Verify browser login, refresh, logout, uploads, exports and kiosk requests across origins without broad wildcard access.
+- Keep development/UAT/production hostname and configuration boundaries clear; document redirection/migration from the current hostname.
+
+Acceptance: both approved URLs resolve with valid HTTPS; full browser/API journeys pass on those origins; old links have an agreed transition.
+
+### M6-ADMIN — platform administration and tenant support
+
+Provide a dedicated platform administration page, separate from customer administration, using a platform principal.
+
+- List/search tenants with lifecycle state, sites, plan/workforce allowances, Stripe/manual billing source, onboarding progress and integration/job health.
+- Create/invite/suspend/reactivate tenants, manage approved entitlements and view provisioning/billing issues.
+- Provide an explicit **Open tenant for support** action. Grant time-bound access to the selected tenant with a recorded reason, authorised role and administrator MFA/step-up, using existing support-grant groundwork.
+- Show a persistent tenant/support-session banner and a clear exit/expiry. Tenant switching must discard the previous tenant's data/cache and context.
+- Default support access to diagnostics/read-only; separately authorise operational changes, exports or sensitive data access. Preserve the platform operator's identity in every audit event rather than acting invisibly as the customer.
+- Record tenant, operator, reason, start/end, granted scope and actions; allow immediate revocation and customer-visible support history where appropriate.
+- No unrestricted ambient access to all tenants. Expired/revoked support sessions fail at the API boundary as well as in the UI.
+- Keep this a practical support console; do not add broad enterprise administration unrelated to customer operation.
+
+Acceptance: an authorised platform admin opens a specific tenant for support, sees the correct environment and exits cleanly; expiry/revocation/cross-tenant checks pass; manual creation and support actions are auditable.
+
+### M6-HELP — full customer help library and Swagger/API library
+
+Deliver a searchable, versioned help library accessible from the app navigation/profile and contextual page links. Cover all shipped features:
+- Getting started and both onboarding routes.
+- Plans, workforce allowances and billing.
+- CSV templates, mapping, validation errors, corrections and API ingestion.
+- Forecast selection, work standards, roster generation/editing/conflicts/approval/publication.
+- Kiosk setup, clock/break flow, outages, corrections and timesheet approval/export.
+- Deputy and second-connector setup, source ownership, health and troubleshooting.
+- Reports/metric definitions, roles, customer administration and support.
+- Common problems, release notes and support contact.
+
+Use task-based instructions with verified screenshots/examples; distinguish available, read-only, planned and unsupported features. Keep internal runbooks separate from customer help.
+
+Maintain an OpenAPI schema and Swagger UI on the API origin, linked from an API documentation area. Cover all supported public endpoints with authentication/service credential instructions, scopes, schema versions, sample CSV/JSON payloads, forecast/master/actual ingestion, batch receipts/status/errors, idempotency, pagination, limits, timestamps and correction semantics. Include examples and a downloadable OpenAPI schema. Interactive requests require authorised credentials and must not expose secrets or privileged internal routes.
+
+Acceptance: a new customer can complete setup and common tasks using help alone; documented examples are checked against the running API; Swagger and the schema match deployed supported endpoints; documentation is included in release checks.
+
+### M6-OPS — underlying SaaS operations
+
+- Complete account delivery, tenant/site/service/support boundaries and tenant-scoped source-ID migrations.
+- Add durable import/sync/planning jobs with progress/retry/recovery.
+- Protect/rotate integration secrets, monitor uptime/jobs, automate backups and off-host retention, and demonstrate restore and deployment rollback.
+- Agree and test retention/deletion, customer export, RPO/RTO and availability targets.
+
+Acceptance for M6: customer self-service and platform-assisted non-Stripe onboarding both work; billing/entitlements, support access, separate URLs and help/API documentation pass their journeys; a second customer needs no bespoke code or direct database intervention.
 
 ## 10. M7 — customer pilot and release
 
@@ -232,7 +347,10 @@ Release requires product-owner acceptance of critical tasks, no unresolved criti
 | Attendance, break, rounding, rest and rate policies | Operations/customer owner | M2/M3 calculations |
 | Source authority per site/data class | Customer owner | Forecast selection, workload actuals and T&A sync |
 | Representative volumes/performance thresholds | Product + engineering | Capacity and UX acceptance |
-| Email, subscription provider, retention and recovery targets | Product/platform owner | M6 |
+| Final plan feature matrix, prices, taxes, workforce measurement and annual/billing terms | Trev/Arch/product owner | M6-PLAN / M6-STRIPE |
+| Stripe account/test configuration and verified email sender | Platform/account owner | M6-STRIPE / M6-ONBOARD |
+| Approved domain for app.tempo.* and api.tempo.*, DNS/certificates | Platform/domain owner | M6-ORIGINS |
+| Manual contract policy, support permissions, retention and recovery targets | Product/platform owner | M6-MANUAL / M6-ADMIN / M6-OPS |
 | Pilot site, success measures and release boundary | Product + pilot customer | M7 |
 
 Do not stop independent work while a vendor decision is pending. Do not invent credentials, customer policy or acceptance evidence.
