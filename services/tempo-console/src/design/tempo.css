@@ -179,3 +179,11 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
 .tp-shift[draggable="true"] { cursor: grab; }
 .tp-shift.dragging { opacity: .45; }
 .tp-board td.tp-drop { outline: 2px dashed var(--tp-green); outline-offset: -3px; background: var(--tp-green-bg); }
+
+/* notification bell */
+.tp-bell { position: relative; }
+.tp-bell .tp-count { margin-left: 6px; background: var(--tp-red); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.tp-bellpanel { position: fixed; right: 16px; left: auto; top: 100px; font-size: 13px; width: 360px; max-width: 92vw; z-index: 40; color: var(--tp-ink); background: var(--tp-surface); border: 1px solid var(--tp-line-strong); border-radius: var(--tp-radius); padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.tp-notice { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; text-align: left; padding: 9px 4px; border: 0; border-bottom: 1px solid var(--tp-line); background: none; color: inherit; font: inherit; cursor: pointer; }
+.tp-notice.unread .t { font-weight: 700; }
+.tp-notice:hover { background: var(--tp-bg); }

@@ -90,7 +90,7 @@ def status(db: Session) -> dict | None:
 
 
 # --------------------------------------------------------------------------- reset
-_APPEND_ONLY = {"demand_override", "security_audit_event", "audit_record", "event_record", "roster_event"}
+_APPEND_ONLY = {"demand_override", "notification", "security_audit_event", "audit_record", "event_record", "roster_event"}
 
 
 def reset(db: Session) -> None:

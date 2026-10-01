@@ -104,6 +104,9 @@ def request_adjustment(session_id: str, body: AdjustmentIn, ctx: RequestContext 
     db.add(a)
     db.flush()
     auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="timesheet.adjust_request", decision="allowed", session_ref=a.id, correlation_id=ctx.correlation_id)
+    from app.core import notifications as nt
+    nt.notify(db, ctx.tenant_id, nt.recipients(db, ctx.tenant_id, a.site_id, "labour.approve", {ctx.user_id}), kind="correction.requested", severity="action", title="Timesheet correction awaiting a decision",
+              body=body.reason[:200], link="/approvals", site_id=a.site_id, dedup_key=f"correction:{a.id}:requested")
     return {"id": a.id, "state": a.state, "session_id": s.id}
 
 
@@ -126,6 +129,10 @@ def _decide(state: str):
             raise ScopeError("a reason is required to reject a correction")
         a.state, a.decided_by, a.decided_at, a.decision_note = state, ctx.user_id, datetime.now(timezone.utc), body.note
         auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action=f"timesheet.adjust_{state}", decision="allowed", session_ref=a.id, correlation_id=ctx.correlation_id)
+        from app.core import notifications as nt
+        if a.requested_by != ctx.user_id:
+            nt.notify(db, ctx.tenant_id, [a.requested_by], kind=f"correction.{state}", severity="info", title=f"Timesheet correction {state}", body=body.note[:200],
+                      link="/attendance", site_id=a.site_id, dedup_key=f"correction:{a.id}:{state}")
         return {"id": a.id, "state": a.state}
     return h
 

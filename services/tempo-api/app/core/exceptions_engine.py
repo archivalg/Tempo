@@ -45,6 +45,10 @@ def _upsert(db: Session, tenant_id: str, site_id: str, kind: str, severity: str,
         return False
     db.add(ExceptionCase(tenant_id=tenant_id, site_id=site_id, kind=kind, severity=severity, dedup_key=dedup, worker_id=worker_id,
                          shift_id=shift_id, source_occurred_at=occurred, detected_at=now, evidence=evidence or {}))
+    if severity in ("critical", "high"):  # one notice per case, to the people who can act on it at that site
+        from app.core import notifications as nt
+        nt.notify(db, tenant_id, nt.recipients(db, tenant_id, site_id, "labour.exception.manage"), kind=f"exception.{kind}", severity="urgent",
+                  title=f"{kind.replace('_', ' ').capitalize()} — needs attention", body=f"{severity.capitalize()} severity at {site_id}.", link="/live", site_id=site_id, dedup_key=f"exception:{dedup}")
     return True
 
 

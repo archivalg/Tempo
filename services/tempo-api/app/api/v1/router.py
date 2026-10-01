@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, demand, devices, operations, platform, reports, rosters, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
+from app.api.v1 import auth, demand, devices, notifications, operations, platform, reports, rosters, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
 
 router = APIRouter()
 router.include_router(auth.router)
@@ -12,6 +12,7 @@ router.include_router(operations.router)
 router.include_router(rosters.router)
 router.include_router(reports.router)
 router.include_router(demand.router)
+router.include_router(notifications.router)
 router.include_router(users.router)
 router.include_router(readiness.router)
 router.include_router(runs.router)

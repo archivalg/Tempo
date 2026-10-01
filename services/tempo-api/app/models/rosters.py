@@ -112,3 +112,23 @@ class DemandOverride(Base):
     revoked_by: Mapped[str | None] = mapped_column(String, nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoke_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class Notification(Base):
+    """An in-app notice for one user. Created by workflow events (roster submitted/decided/published, corrections,
+    high-severity exceptions); a (user, dedup_key) pair is only ever notified once. Never deleted: read_at is the state."""
+
+    __tablename__ = "notification"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: _id("ntf"))
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    user_id: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String)
+    severity: Mapped[str] = mapped_column(String, default="info")  # info | action | urgent
+    title: Mapped[str] = mapped_column(String)
+    body: Mapped[str] = mapped_column(String, default="")
+    link: Mapped[str | None] = mapped_column(String, nullable=True)
+    site_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    dedup_key: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

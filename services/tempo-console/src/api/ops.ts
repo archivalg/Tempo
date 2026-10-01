@@ -105,3 +105,8 @@ export interface DemandOverride { id: string; site_id: string; activity: string 
 export interface NewOverride { activity: string | null; start_date: string; end_date: string; mode: 'multiply' | 'set_units'; value: number; reason: string; expires_at: string }
 export const createOverride = (site: string, body: NewOverride) => apiRequest<DemandOverride>(`/sites/${site}/demand/overrides`, { method: 'POST', body })
 export const revokeOverride = (id: string, reason: string) => apiRequest<DemandOverride>(`/demand/overrides/${id}/revoke`, { method: 'POST', body: { reason } })
+
+export interface Notice { id: string; kind: string; severity: 'info' | 'action' | 'urgent'; title: string; body: string; link: string | null; site_id: string | null; created_at: string; read_at: string | null }
+export const getNotifications = () => apiRequest<{ unread: number; items: Notice[] }>('/notifications')
+export const markNoticeRead = (id: string) => apiRequest<Notice>(`/notifications/${id}/read`, { method: 'POST' })
+export const markAllNoticesRead = () => apiRequest<{ marked: number }>('/notifications/read-all', { method: 'POST' })

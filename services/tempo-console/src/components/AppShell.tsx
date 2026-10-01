@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { NavLink, Outlet, useSearchParams } from 'react-router-dom'
 import { listSites, type SiteSummary } from '../api/ops'
+import { NotificationBell } from './NotificationBell'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { useApi } from '../hooks/useApi'
 import { fmtTime } from '../lib/format'
@@ -67,6 +68,7 @@ export function AppShell() {
             <div className="tp-spacer" />
             <div className="tp-user">
               <div><div>{access.roles.map((r) => r.replace(/_/g, ' ')).join(', ') || 'no role'}</div><small>{access.tenant_id}{access.mfa_verified ? ' · MFA' : ''}</small></div>
+              <NotificationBell />
               <NavLink className="tp-iconbtn" style={{ textDecoration: 'none' }} to="/account">Account</NavLink>
               <button className="tp-iconbtn" onClick={() => void signOut()}>Sign out</button>
             </div>

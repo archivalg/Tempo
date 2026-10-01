@@ -39,6 +39,24 @@ def _aware(d: datetime) -> datetime:
 
 def event(db: Session, ctx: RequestContext, v: RosterVersion, action: str, detail: dict | None = None) -> None:
     db.add(RosterEvent(tenant_id=ctx.tenant_id, version_id=v.id, actor_user_id=ctx.user_id, action=action, detail=detail or {}))
+    _notify(db, ctx, v, action, detail or {})
+
+
+def _notify(db: Session, ctx: RequestContext, v: RosterVersion, action: str, detail: dict) -> None:
+    """Workflow events that need someone else to act or know. The actor is never notified of their own action."""
+    from app.core import notifications as nt
+    week = f"week of {v.week_start}"
+    link, me = f"/roster?start={v.week_start}&v={v.id}", {ctx.user_id}
+    key = f"roster:{v.id}:{action}:{v.payload_hash or v.version_no}"
+    if action == "submitted":
+        nt.notify(db, ctx.tenant_id, nt.recipients(db, ctx.tenant_id, v.site_id, "labour.approve", me), kind="roster.submitted", severity="action", title=f"Roster awaiting approval — {week}",
+                  body=f"Version {v.version_no} was submitted for approval.", link="/approvals", site_id=v.site_id, dedup_key=key)
+    elif action in ("approved", "rejected", "published"):
+        who = [u for u in {v.submitted_by, v.created_by} if u and u != ctx.user_id]
+        word = {"approved": "approved", "rejected": "rejected", "published": "published"}[action]
+        extra = f" Reason: {detail.get('note')}" if action == "rejected" and detail.get("note") else ""
+        nt.notify(db, ctx.tenant_id, who, kind=f"roster.{action}", severity="action" if action == "rejected" else "info", title=f"Roster {word} — {week}",
+                  body=f"Version {v.version_no} was {word}.{extra}", link=link, site_id=v.site_id, dedup_key=key)
 
 
 def window(site: Site, week_start: str, days: int) -> tuple[datetime, datetime]:

@@ -192,3 +192,40 @@ def test_csv_export_is_gated_audited_and_formula_safe(demo):
     with demo["sl"]() as s:
         db_module.begin_auth_lookup(s)
         assert s.execute(text("SELECT count(*) FROM security_audit_event WHERE action LIKE 'export.%' AND reason_code LIKE 'rows=%'")).scalar() >= 3
+
+
+def _week_in(weeks: int) -> str:
+    from datetime import date, timedelta
+    d = date.today() + timedelta(weeks=weeks)
+    return (d - timedelta(days=d.weekday())).isoformat()
+
+
+def test_notifications_are_personal_scoped_and_workflow_driven(demo):
+    c = demo["client"]
+    mine = lambda who, **q: c.get("/v1/notifications", headers=H(demo, who), params=q).json()  # noqa: E731
+    # urgent exceptions reach the people who can act on them — and not people who cannot
+    sup = mine("supervisor")
+    assert sup["unread"] > 0 and any(i["kind"].startswith("exception.") and i["severity"] == "urgent" for i in sup["items"])
+    assert not any(i["kind"].startswith("exception.") for i in mine("analyst")["items"])
+    # a roster workflow: submit → approvers are told (not the submitter); approve → the submitter is told
+    week = _week_in(11)
+    b = c.post(f"/v1/sites/{MEL}/rosters/generate", json={"week_start": week}, headers=H(demo, "planner"))
+    assert b.status_code == 201, b.text
+    vid = b.json()["version"]["id"]
+    before = mine("ops_manager")["unread"]
+    assert c.post(f"/v1/rosters/{vid}/submit", headers=H(demo, "planner")).status_code == 200
+    ops = mine("ops_manager")
+    sub = next(i for i in ops["items"] if i["kind"] == "roster.submitted" and week in i["title"])
+    assert ops["unread"] == before + 1 and sub["link"] == "/approvals" and sub["severity"] == "action"
+    assert not any(week in i["title"] for i in mine("planner")["items"])                      # the actor is never notified of their own action
+    assert c.post(f"/v1/rosters/{vid}/approve", json={"note": "ok"}, headers=H(demo, "ops_manager")).status_code == 200
+    ap = next(i for i in mine("planner")["items"] if i["kind"] == "roster.approved" and week in i["title"])
+    assert ap["link"].startswith("/roster?start=" + week)
+    # read state is per user; nobody can touch another user's notice
+    assert c.post(f"/v1/notifications/{ap['id']}/read", headers=H(demo, "ops_manager")).status_code == 404
+    assert c.post(f"/v1/notifications/{ap['id']}/read", headers=H(demo, "planner")).json()["read_at"]
+    assert all(i["id"] != ap["id"] for i in mine("planner", unread="true")["items"])
+    n = c.post("/v1/notifications/read-all", headers=H(demo, "ops_manager")).json()["marked"]
+    assert n >= 1 and mine("ops_manager")["unread"] == 0
+    assert mine("supervisor")["unread"] == sup["unread"]                                      # someone else's read-all did not touch them
+    assert c.get("/v1/notifications").status_code == 401
