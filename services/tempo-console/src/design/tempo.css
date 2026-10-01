@@ -174,3 +174,8 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
 .tp-step.now { background: var(--tp-charcoal); border-color: var(--tp-charcoal); color: #fff; font-weight: 600; }
 .tp-cols2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--tp-space-3); }
 @media (max-width: 700px) { .tp-cols2 { grid-template-columns: 1fr; } }
+
+/* roster drag-and-drop */
+.tp-shift[draggable="true"] { cursor: grab; }
+.tp-shift.dragging { opacity: .45; }
+.tp-board td.tp-drop { outline: 2px dashed var(--tp-green); outline-offset: -3px; background: var(--tp-green-bg); }

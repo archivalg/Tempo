@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { getDemand, type Demand } from '../api/ops'
 import { useSite } from '../components/AppShell'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { exportCsv } from '../api/ops'
+import { DemandOverrides } from '../components/DemandOverrides'
 import { Banner, ExportButton, Empty, FreshnessBanner, PageHead, Skeleton, SourcePills, Status } from '../components/ui'
 import { fmtNum, fmtTime, localDate } from '../lib/format'
 
@@ -17,14 +18,16 @@ export default function DemandPage() {
   const [d, setD] = useState<Demand | null>(null)
   const [act, setAct] = useState('')
   const [err, setErr] = useState<string | null>(null)
-  useEffect(() => { setD(null); if (site) getDemand(site.site_id, start).then(setD).catch((e) => setErr(e.message)) }, [site, start])
+  const load = useCallback(() => { if (site) getDemand(site.site_id, start).then(setD).catch((e) => setErr(e.message)) }, [site, start])
+  useEffect(() => { setD(null); load() }, [load])
 
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(start, i)), [start])
   const rows = (d?.rows ?? []).filter((r) => !act || r.activity === act)
   const byDay = days.map((day) => {
     const rs = rows.filter((r) => r.date === day)
+    const adjusted = rs.some((r) => r.adjusted)
     const sum = (k: 'actual_units' | 'forecast_units' | 'forecast_lower' | 'forecast_upper' | 'required_hours') => (rs.some((r) => r[k] != null) ? rs.reduce((a, r) => a + (r[k] ?? 0), 0) : null)
-    return { day, actual: sum('actual_units'), forecast: sum('forecast_units'), lo: sum('forecast_lower'), hi: sum('forecast_upper'), req: sum('required_hours') }
+    return { day, adjusted, actual: sum('actual_units'), forecast: sum('forecast_units'), lo: sum('forecast_lower'), hi: sum('forecast_upper'), req: sum('required_hours') }
   })
   const max = Math.max(1, ...byDay.flatMap((b) => [b.actual ?? 0, b.hi ?? 0])) * 1.1
   const W = 760, H = 240, PL = 52, PB = 28, PT = 10, bw = (W - PL - 10) / 7
@@ -61,7 +64,7 @@ export default function DemandPage() {
           <section className="tp-card"><header><h2>By day</h2></header>
             {!d ? <div className="tp-body"><Skeleton h={160} /></div> : (
               <table className="tp-table tp-num"><thead><tr><th>Day</th><th>Actual units</th><th>Forecast</th><th>90% band</th><th>Error</th><th>Required hours</th></tr></thead><tbody>
-                {byDay.map((b) => (<tr key={b.day}><td>{fmtTime(`${b.day}T12:00:00Z`, 'UTC', { weekday: 'short', day: '2-digit', month: 'short' })}</td><td>{fmtNum(b.actual)}</td><td>{fmtNum(b.forecast)}</td><td>{b.lo != null ? `${fmtNum(b.lo)}–${fmtNum(b.hi)}` : '—'}</td>
+                {byDay.map((b) => (<tr key={b.day}><td>{fmtTime(`${b.day}T12:00:00Z`, 'UTC', { weekday: 'short', day: '2-digit', month: 'short' })}</td><td>{fmtNum(b.actual)}</td><td>{fmtNum(b.forecast)}{b.adjusted && <Status tone="risk" title="A manual adjustment is applied on top of the model">adjusted</Status>}</td><td>{b.lo != null ? `${fmtNum(b.lo)}–${fmtNum(b.hi)}` : '—'}</td>
                   <td>{b.actual && b.forecast ? `${(((b.forecast - b.actual) / b.actual) * 100).toFixed(1)}%` : '—'}</td><td>{fmtNum(b.req, 1)}</td></tr>))}
               </tbody></table>
             )}
@@ -71,6 +74,7 @@ export default function DemandPage() {
           <section className="tp-card"><header><h2>Data readiness</h2></header>
             <ul className="tp-list">{!d ? <li className="tp-body"><Skeleton h={100} /></li> : d.readiness.map((r) => (<li key={r.check} className="tp-item" style={{ gridTemplateColumns: 'auto 1fr', cursor: 'default' }}><Status tone={r.ok ? 'ok' : 'bad'}>{r.ok ? 'Ready' : 'Not ready'}</Status><span><span className="t">{r.check}</span><br /><span className="s">{r.detail}</span></span></li>))}</ul>
           </section>
+          <DemandOverrides site={site.site_id} tz={tz} d={d} days={days} canPlan={can('labour.plan')} onChanged={load} />
           <section className="tp-card"><header><h2>Work standards</h2></header>
             <div className="tp-body">{!d ? <Skeleton h={80} /> : <table className="tp-table tp-num"><thead><tr><th>Activity</th><th>s / unit</th><th>Role → zone</th></tr></thead><tbody>
               {d.standards.map((s) => (<tr key={s.activity}><td>{s.activity}</td><td>{s.seconds_per_unit}</td><td className="tp-muted">{d.zone_map.filter((m) => m.activity === s.activity).map((m) => `${m.role} → ${m.zone}`).join(', ') || '—'}</td></tr>))}

@@ -39,6 +39,10 @@ export default function RosterPlannerPage() {
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [showEvents, setShowEvents] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [over, setOver] = useState<string | null>(null)
+  const [moved, setMoved] = useState<{ label: string; undo: () => void } | null>(null)
+  useEffect(() => setMoved(null), [board?.version.id])
   const set = (k: string, v: string | null) => { const p = new URLSearchParams(params); if (v == null) p.delete(k); else p.set(k, v); setParams(p, { replace: true }) }
   const wantV = params.get('v')
 
@@ -75,6 +79,23 @@ export default function RosterPlannerPage() {
   const adopt = (b: VersionBoard) => { setBoard(b); setVersions(b.versions); set('v', b.version.id) }
   const openNew = (worker: string, day: string) => setEdit({ worker_id: worker, role: workers.find((w) => w.worker_id === worker)?.skills[0] ?? 'picker', zone: zones[0] ?? 'pick_a', start: `${day}T06:00`, end: `${day}T14:00` })
   const openEdit = (s: RosterShift) => setEdit({ shift_id: s.shift_id, worker_id: s.worker_id, role: s.role, zone: s.zone, start: utcToZonedInput(s.start_at, tz), end: utcToZonedInput(s.end_at, tz) })
+
+  /** Drag a shift to another worker and/or day. Same local start time and length; the server re-validates (overlap, rest, availability, certification…) and any conflict is flagged on the board. */
+  async function moveShift(shiftId: string, workerId: string, day: string) {
+    const s = board?.shifts.find((x) => x.shift_id === shiftId)
+    if (!s || !v) return
+    const from = { worker_id: s.worker_id, start_at: s.start_at, end_at: s.end_at }
+    const dur = new Date(s.end_at).getTime() - new Date(s.start_at).getTime()
+    const startUtc = zonedToUtcIso(`${day}T${utcToZonedInput(s.start_at, tz).slice(11)}`, tz)
+    const to = { worker_id: workerId, start_at: startUtc, end_at: new Date(new Date(startUtc).getTime() + dur).toISOString() }
+    if (to.worker_id === from.worker_id && to.start_at === from.start_at) return
+    const body = (t: typeof from) => ({ worker_id: t.worker_id, role: s.role, zone: s.zone, start_at: t.start_at, end_at: t.end_at })
+    const who = workers.find((w) => w.worker_id === workerId)?.label ?? workerId
+    await run('move', () => editShift(v.id, shiftId, body(to)), (b) => {
+      adopt(b)
+      setMoved({ label: `Moved ${s.role} shift to ${who}, ${fmtTime(to.start_at, tz, { weekday: 'short', day: '2-digit' })}. The server re-checked the rules.`, undo: () => { setMoved(null); void run('move', () => editShift(v.id, shiftId, body(from)), adopt) } })
+    })
+  }
 
   async function saveShift() {
     if (!edit || !v) return
@@ -162,8 +183,11 @@ export default function RosterPlannerPage() {
                     <tr key={w.worker_id}>
                       <th className="tp-w" scope="row"><div style={{ fontWeight: 600 }}>{w.label}<span className="tp-emp" title={w.employment_type}>{EMP[w.employment_type] ?? w.employment_type}</span></div><div className="tp-muted" style={{ fontSize: 11 }}>{w.skills.join(' · ')}</div></th>
                       {days.map((d) => (
-                        <td key={d}>{(byWorkerDay.get(`${w.worker_id}|${d}`) ?? []).map((s) => (
-                          <button key={s.shift_id} className={`tp-shift${v && v.state !== 'published' && v.state !== 'reconciled' ? ' draft' : ''}${flagged.has(s.shift_id) ? ' conflict' : ''}`} onClick={() => openEdit(s)}
+                        <td key={d} className={over === `${w.worker_id}|${d}` ? 'tp-drop' : undefined}
+                          onDragOver={editable && dragId ? (e) => { e.preventDefault(); setOver(`${w.worker_id}|${d}`) } : undefined}
+                          onDragLeave={() => setOver((o) => (o === `${w.worker_id}|${d}` ? null : o))}
+                          onDrop={editable ? (e) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain') || dragId; setOver(null); setDragId(null); if (id) void moveShift(id, w.worker_id, d) } : undefined}>{(byWorkerDay.get(`${w.worker_id}|${d}`) ?? []).map((s) => (
+                          <button key={s.shift_id} draggable={editable} onDragStart={(e) => { e.dataTransfer.setData('text/plain', s.shift_id); e.dataTransfer.effectAllowed = 'move'; setDragId(s.shift_id) }} onDragEnd={() => { setDragId(null); setOver(null) }} className={`tp-shift${dragId === s.shift_id ? ' dragging' : ''}${v && v.state !== 'published' && v.state !== 'reconciled' ? ' draft' : ''}${flagged.has(s.shift_id) ? ' conflict' : ''}`} onClick={() => openEdit(s)}
                             aria-label={`${w.label}, ${s.role} in ${s.zone}, ${fmtTime(s.start_at, tz)} to ${fmtTime(s.end_at, tz)}${flagged.has(s.shift_id) ? ', has a hard conflict' : ''}. ${editable ? 'Open to edit.' : 'Open details.'}`}>
                             <b>{fmtTime(s.start_at, tz)}–{fmtTime(s.end_at, tz)}</b> {flagged.has(s.shift_id) && <span aria-hidden="true">✕</span>}<br />{s.role} · {s.zone}
                           </button>))}
@@ -178,7 +202,8 @@ export default function RosterPlannerPage() {
           ) : (
             <DayTimeline board={board} day={days[dayIdx]} tz={tz} rows={shown} flagged={flagged} onPick={openEdit} />
           )}
-          <div className="tp-muted" style={{ fontSize: 12 }}>PT permanent · CA casual · LH labour hire. Editing is by form (keyboard and screen-reader friendly); drag-and-drop is not built yet. Every edit is re-validated by the server.</div>
+          <div role="status" aria-live="polite">{moved && <span className="tp-badge ok"><span aria-hidden="true">✓</span>{moved.label} <button className="tp-btn" onClick={moved.undo}>Undo</button></span>}</div>
+          <div className="tp-muted" style={{ fontSize: 12 }}>PT permanent · CA casual · LH labour hire. Drag a shift to another worker or day, or open it to edit by form (the keyboard and screen-reader route). Every change is re-validated by the server.</div>
         </div>
 
         <aside className="tp-stack" aria-label="Insights">

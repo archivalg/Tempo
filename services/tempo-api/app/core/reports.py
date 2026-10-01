@@ -13,11 +13,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import overrides
 from app.core.exceptions_engine import EARLY_MATCH, LATE_AFTER, NO_SHOW_AFTER
 from app.core.opsview import _aware, _latest_forecast, _rates, _standards, local_day_bounds, site_sources
 from app.models.canonical import ActivityRoleZoneMap, AttendanceSession, DemandBucket, ShiftAssignment, Worker, WorkStandard
 from app.models.directory import Site, WorkerPerson
-from app.models.rosters import AttendanceAdjustment
+from app.models.rosters import AttendanceAdjustment, DemandOverride
 
 REPORT_VERSION = "tempo-metrics-1.0"
 METRIC_DEFS = {
@@ -78,7 +79,7 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
     fc_by_day: dict[str, float] = defaultdict(float)
     for r in fc_rows:
         bs = datetime.fromisoformat(r["bucket_start"]) if isinstance(r["bucket_start"], str) else r["bucket_start"]
-        fc_by_day[bs.astimezone(tz).date().isoformat()] += r["point"]
+        fc_by_day[bs.astimezone(tz).date().isoformat()] += r.get("model_point", r["point"])  # accuracy is measured on the model, before manual overrides
     act_by_day: dict[str, float] = defaultdict(float)
     for b in db.scalars(select(DemandBucket).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id == site.site_id, DemandBucket.bucket_minutes == 60,
                                                    DemandBucket.interval_start >= w_start, DemandBucket.interval_start < w_end)):
@@ -159,7 +160,7 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
             "metric_version": REPORT_VERSION, "definitions": METRIC_DEFS, "attendance_verified": verified, "data_sources": sources, "days": rows, "totals": totals,
             "forecast": {"run_id": fc_run.run_id if fc_run else None, "method": "Holt linear smoothing on daily totals (no seasonal term)"},
             "labels": {"attended": "estimate", "payable": "confirmed", "planned": "plan"},
-            "notes": ["Actual cost is an estimate until timesheets are approved.", "Unrostered hours count in attended hours but have no scheduled counterpart."]}
+            "notes": ["Forecast accuracy is measured on the statistical model, before any manual demand override.", "Actual cost is an estimate until timesheets are approved.", "Unrostered hours count in attended hours but have no scheduled counterpart."]}
 
 
 def timesheets(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, now: datetime, *, can_see_names: bool) -> dict:
@@ -216,7 +217,7 @@ def demand(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, n
         for a in activities:
             f, u = fc.get((d, a)), act.get((d, a))
             req = (f["point"] * std[a] / 3600) if (f and a in std) else None
-            rows.append({"date": d, "activity": a, "actual_units": None if u is None else round(u), "forecast_units": None if not f else round(f["point"]),
+            rows.append({"date": d, "activity": a, "actual_units": None if u is None else round(u), "forecast_units": None if not f else round(f["point"]), "model_units": None if not f else round(f.get("model_point", f["point"])), "adjusted": bool(f and f.get("override_ids")),
                          "forecast_lower": None if not f else round(f["lower"]), "forecast_upper": None if not f else round(f["upper"]),
                          "seconds_per_unit": std.get(a), "required_hours": None if req is None else round(req, 1)})
     hist_days = db.scalar(select(DemandBucket.interval_start).where(DemandBucket.tenant_id == tenant_id, DemandBucket.site_id == site.site_id, DemandBucket.bucket_minutes == 1440)
@@ -240,4 +241,6 @@ def demand(db: Session, tenant_id: str, site: Site, start_iso: str, days: int, n
             "forecast": {"run_id": fc_run.run_id if fc_run else None, "created_at": fc_run.created_at if fc_run else None, "snapshot_id": fc_run.snapshot_id if fc_run else None,
                          "method": "Holt linear smoothing on daily totals (no seasonal term)", "backtest_mape": (fc_run.result or {}).get("backtest_mape") if fc_run else None,
                          "confidence": (fc_run.explanation or {}).get("confidence") if fc_run else None},
-            "overrides": [], "overrides_note": "Manual demand adjustments (reason, origin, expiry) are not implemented yet."}
+            "overrides": [overrides.serialise(o, now) for o in db.scalars(select(DemandOverride).where(DemandOverride.tenant_id == tenant_id, DemandOverride.site_id == site.site_id,
+                                                                                               DemandOverride.end_date >= ds[0], DemandOverride.start_date <= ds[-1]).order_by(DemandOverride.created_at.desc()))],
+            "overrides_note": "Manual adjustments sit on top of the statistical forecast: each needs a reason and an expiry, the model's own number is kept, and accuracy is measured on the model."}

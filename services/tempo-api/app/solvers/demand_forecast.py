@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -154,6 +154,15 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
             )
         model_totals[activity] = activity_total
 
+    applied_overrides: list[str] = []
+    override_note = None
+    if len(site_ids) == 1:
+        from zoneinfo import ZoneInfo
+        from app.core import overrides as ov
+        forecasts, applied_overrides = ov.apply(forecasts, ov.active_for(db, tenant_id, site_ids[0], datetime.now(timezone.utc)), ZoneInfo(window.timezone))
+    elif len(site_ids) > 1:
+        override_note = "manual demand overrides are applied to single-site forecasts only; none were applied to this multi-site run"
+
     avg_mape = sum(mapes) / len(mapes) if mapes else None
     most_recent = max(r.interval_start for r in rows)
     if most_recent.tzinfo is None:
@@ -172,11 +181,14 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
         )
     if avg_mape is None:
         missing_evidence.append("insufficient history to backtest forecast error")
+    if override_note:
+        missing_evidence.append(override_note)
 
     return SolverOutcome(
         result={
             "forecast": forecasts,
             "backtest_mape": round(avg_mape, 4) if avg_mape is not None else None,
+            "overrides_applied": applied_overrides,
             "kpis": {"activities_forecast": len(by_activity), "horizon_buckets": horizon_buckets},
         },
         baseline={"method": "naive_last_observed", "total_by_activity": naive_totals},
@@ -193,7 +205,8 @@ def forecast_demand(db: Session, tenant_id: str, site_ids: list[str], request: R
             constraint_coverage=1.0,
             solution_quality=1.0 if activities_with_trend == len(by_activity) else 0.7,
         ),
-        primary_drivers=[f"Fitted Holt linear trend over {len(rows)} historical buckets across {len(by_activity)} activities"],
+        primary_drivers=[f"Fitted Holt linear trend over {len(rows)} historical buckets across {len(by_activity)} activities"]
+        + ([f"{len(applied_overrides)} manual demand override(s) applied on top of the model"] if applied_overrides else []),
         missing_evidence=missing_evidence,
         assumptions=[f"forecast method fixed to Holt linear smoothing (alpha={ALPHA}, beta={BETA})"],
         feasibility="feasible",

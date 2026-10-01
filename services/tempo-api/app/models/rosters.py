@@ -84,3 +84,31 @@ class AttendanceAdjustment(Base):
     decided_by: Mapped[str | None] = mapped_column(String, nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     decision_note: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class DemandOverride(Base):
+    """A manual, reasoned, expiring adjustment to the forecast for one site and a run of local dates.
+
+    The statistical forecast is never edited: the override is applied when a forecast run is produced and the run keeps
+    the model's own number (`model_point`) next to the adjusted one, so accuracy is always measured on the model.
+    """
+
+    __tablename__ = "demand_override"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: _id("dov"))
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String, index=True)
+    activity: Mapped[str | None] = mapped_column(String, nullable=True)  # None = every activity
+    start_date: Mapped[str] = mapped_column(String)  # site-local, inclusive
+    end_date: Mapped[str] = mapped_column(String)
+    mode: Mapped[str] = mapped_column(String)  # multiply | set_units (daily total per activity)
+    value: Mapped[float] = mapped_column()
+    reason: Mapped[str] = mapped_column(String)
+    origin: Mapped[str] = mapped_column(String, default="manual")
+    state: Mapped[str] = mapped_column(String, default="active")  # active | revoked
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    revoked_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String, nullable=True)
