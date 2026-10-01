@@ -26,7 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import auth
-from app.db import begin_auth_lookup, bind_tenant
+from app.db import begin_auth_lookup, bind_sites, bind_tenant
 from app.errors import AuthForbidden, AuthInvalid
 from app.models.attendance import WorkerCredential
 from app.models.canonical import Worker
@@ -130,6 +130,7 @@ def authenticate_device(db: Session, token: str, correlation_id: str) -> KioskCo
         raise AuthForbidden("device has no site binding")
     tenant_id, sites = device.tenant_id, list(device.site_ids)
     bind_tenant(db, tenant_id)
+    bind_sites(db, sites)  # the device can only ever see its own sites' rows
     device.last_seen_at = _now()
     return KioskContext(device.device_id, tenant_id, sites, correlation_id)
 

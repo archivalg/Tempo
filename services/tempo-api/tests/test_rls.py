@@ -115,3 +115,47 @@ def test_identity_tables_invisible_without_auth_phase(client, app_engine):
     with app_engine.connect() as c:
         assert c.execute(text("SELECT count(*) FROM tempo_user")).scalar() == 0
         assert c.execute(text("SELECT count(*) FROM user_session")).scalar() == 0
+
+
+SITE_TABLES_WITH_SITE_ID = ["roster_version", "exception_case", "demand_override", "roster_handoff", "zone", "data_source_status"]
+
+
+def test_every_site_keyed_table_is_site_scoped_or_deliberately_excluded(owner_engine):
+    """A new site_id table must either get the site policy or be added to this list on purpose (with a reason)."""
+    deliberately_excluded = {"user_site_grant", "tenant_scope", "optimisation_run_site"}  # see migration c9d0e1f2a3b4
+    with owner_engine.connect() as c:
+        tables = [r[0] for r in c.execute(text("SELECT table_name FROM information_schema.columns WHERE table_schema='public' AND column_name='site_id'"))]
+        for t in tables:
+            if t in deliberately_excluded:
+                continue
+            q = c.execute(text("SELECT qual FROM pg_policies WHERE tablename=:t AND policyname='tempo_tenant_isolation'"), {"t": t}).scalar()
+            assert q and "app.site_scope" in q, f"{t}: site_id table without the site-scope policy"
+
+
+def test_site_scope_hides_other_sites_inside_one_tenant_and_empty_means_nothing(client):
+    from app.models.directory import Site
+    with client.session_local() as s:
+        db_module.bind_tenant(s, "ten_a")
+        for sid in ("s1", "s2", "s3"):
+            s.add(Site(tenant_id="ten_a", site_id=sid, name=sid, timezone="UTC", operating_mode="standalone"))
+        s.commit()
+    seen = lambda sites: _sites_seen("ten_a", sites)  # noqa: E731
+    assert seen(None) == ["s1", "s2", "s3"]                  # trusted internal path: tenant-wide
+    assert seen(["s1"]) == ["s1"]
+    assert seen(["s1", "s3"]) == ["s1", "s3"]
+    assert seen([]) == []                                    # no grants is no sites, never "all"
+    assert seen(["nope"]) == []
+    # a write outside the granted sites is rejected by the policy
+    with pytest.raises(DBAPIError):
+        with db_module.tenant_session("ten_a") as s:     # the runtime (non-owner) role, unlike the seeding session above
+            db_module.bind_sites(s, ["s1"])
+            s.add(Site(tenant_id="ten_a", site_id="s9", name="s9", timezone="UTC", operating_mode="standalone"))
+            s.flush()
+    # site scope cannot cross tenants either
+    assert _sites_seen("ten_b", ["s1"]) == []
+
+
+def _sites_seen(tenant, sites):
+    with db_module.tenant_session(tenant) as s:
+        db_module.bind_sites(s, sites)
+        return sorted(s.execute(text("SELECT site_id FROM site")).scalars().all())

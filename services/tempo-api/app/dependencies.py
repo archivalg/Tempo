@@ -16,7 +16,7 @@ from fastapi import Depends, Header, Request
 from sqlalchemy.orm import Session
 
 from app.core import auth
-from app.db import SessionLocal, bind_tenant, begin_auth_lookup
+from app.db import SessionLocal, bind_sites, bind_tenant, begin_auth_lookup
 from app.errors import AuthForbidden, AuthInvalid, ScopeError
 from app.schemas.tenancy import RequestContext
 
@@ -83,6 +83,7 @@ def get_request_context(
         # DP-08 / INT-003: never default to a tenant-wide view.
         raise ScopeError("no site or customer grants: access denied")
     bind_tenant(db, principal.tenant_id)
+    bind_sites(db, list(principal.site_ids))
     return RequestContext(
         tenant_id=principal.tenant_id,
         site_ids=list(principal.site_ids),

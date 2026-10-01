@@ -46,6 +46,8 @@ class Base(DeclarativeBase):
 
 _TENANT_KEY = "tempo.tenant_id"
 _AUTH_KEY = "tempo.auth_lookup"
+_SITES_KEY = "tempo.site_scope"
+NO_SITES = "!none"  # a caller with no site grants matches no site-keyed row (never "everything")
 
 
 def _apply_context(session: Session, connection) -> None:
@@ -54,6 +56,9 @@ def _apply_context(session: Session, connection) -> None:
         connection.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": tenant_id})
     if session.info.get(_AUTH_KEY):
         connection.execute(text("SELECT set_config('app.auth_lookup', 'on', true)"))
+    sites = session.info.get(_SITES_KEY)
+    if sites:
+        connection.execute(text("SELECT set_config('app.site_scope', :s, true)"), {"s": sites})
 
 
 @event.listens_for(Session, "after_begin")
@@ -73,6 +78,21 @@ def bind_tenant(session: Session, tenant_id: str) -> None:
     conn = session.connection()
     conn.execute(text("SELECT set_config('app.tenant_id', :t, true)"), {"t": tenant_id})
     conn.execute(text("SELECT set_config('app.auth_lookup', 'off', true)"))
+
+
+def bind_sites(session: Session, site_ids: list[str] | tuple[str, ...] | None) -> None:
+    """Narrow this session to the caller's granted sites for every site-keyed table (defence in depth under the handlers' own checks).
+
+    `None` leaves the session tenant-wide, which only trusted internal paths (workers, CLI, seeding) may use.
+    An empty list means *no* sites, not all of them."""
+    if site_ids is None:
+        session.info.pop(_SITES_KEY, None)
+        return
+    if any("," in x for x in site_ids):
+        raise ValueError("site ids must not contain commas")
+    value = ",".join(sorted(set(site_ids))) or NO_SITES
+    session.info[_SITES_KEY] = value
+    session.connection().execute(text("SELECT set_config('app.site_scope', :s, true)"), {"s": value})
 
 
 def begin_auth_lookup(session: Session) -> None:
