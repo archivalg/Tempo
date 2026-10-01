@@ -116,3 +116,10 @@ export const listHandoffs = (site: string, versionId: string) => apiRequest<Hand
 export const downloadHandoff = (id: string) => downloadFile(`/handoffs/${id}/file.csv`)
 export const confirmHandoff = (id: string, reference: string, note: string) => apiRequest<Handoff>(`/handoffs/${id}/confirm`, { method: 'POST', body: { reference, note } })
 export const submitHandoff = (id: string) => apiRequest<Handoff>(`/handoffs/${id}/submit`, { method: 'POST', idempotencyKey: newIdempotencyKey() })
+
+export interface AuditItem { event_id: string; at: string; actor_type: string; actor_id: string; actor_name: string | null; action: string; decision: string; reason_code: string | null; ref: string | null; correlation_id: string }
+export interface AuditPage { items: AuditItem[]; next_before: string | null; actions: string[] }
+export const getAudit = (q: { action?: string; decision?: string; before?: string }) => {
+  const p = new URLSearchParams(); if (q.action) p.set('action', q.action); if (q.decision) p.set('decision', q.decision); if (q.before) p.set('before', q.before)
+  return apiRequest<AuditPage>(`/admin/audit${p.size ? `?${p}` : ''}`)
+}

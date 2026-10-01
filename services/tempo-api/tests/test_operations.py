@@ -313,3 +313,26 @@ def test_overlay_publish_creates_a_handoff_that_is_never_claimed_vendor_confirme
     vid4 = _publish_week(demo, SYD, week)   # same week as vid2 (vendor_confirmed, closed) and vid3's week differs; vid2 stays confirmed
     st = {h["version_id"]: h["state"] for h in c.get(f"/v1/sites/{SYD}/handoffs", headers=ops).json()}
     assert st[vid2] == "vendor_confirmed" and st[vid4] == "pending"
+
+
+def test_tenant_audit_log_is_admin_only_scoped_filterable_and_self_recording(demo):
+    c = demo["client"]
+    for _ in range(7):                                                                           # make sure there is something to page through
+        assert c.get(f"/v1/sites/{MEL}/exports/demand.csv", headers=H(demo, "ops_manager")).status_code == 200
+    assert c.get("/v1/admin/audit", headers=H(demo, "ops_manager")).status_code == 403        # approving rosters is not administering users
+    assert c.get("/v1/admin/audit", headers=H(demo, "analyst")).status_code == 403
+    r = c.get("/v1/admin/audit", headers=H(demo, "tenant_admin"), params={"limit": 5})
+    assert r.status_code == 200
+    d = r.json()
+    assert len(d["items"]) == 5 and d["next_before"] and "roster" not in d["items"][0].get("secret", "")
+    assert all(set(i) >= {"at", "actor_id", "action", "decision", "correlation_id"} for i in d["items"])
+    assert d["items"] == sorted(d["items"], key=lambda i: i["at"], reverse=True)
+    page2 = c.get("/v1/admin/audit", headers=H(demo, "tenant_admin"), params={"limit": 5, "before": d["next_before"]}).json()
+    assert {i["event_id"] for i in page2["items"]}.isdisjoint({i["event_id"] for i in d["items"]})
+    only = c.get("/v1/admin/audit", headers=H(demo, "tenant_admin"), params={"action": "export."}).json()
+    assert only["items"] and all(i["action"].startswith("export.") for i in only["items"])
+    assert any(a.startswith("export.") for a in only["actions"])
+    seen = c.get("/v1/admin/audit", headers=H(demo, "tenant_admin"), params={"action": "audit.view"}).json()
+    assert seen["items"], "viewing the audit log is itself audited"
+    named = [i for i in d["items"] + page2["items"] if i["actor_type"] == "user" and i["actor_name"]]
+    assert named, "user actors are shown by name when they belong to this tenant"

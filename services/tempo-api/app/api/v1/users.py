@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -18,7 +20,7 @@ from app.db import auth_phase
 from app.dependencies import get_db, get_request_context
 from app.errors import AuthForbidden, RunNotFound, ScopeError
 from app.models.identity import (
-    TempoUser, TenantMembership, UserCustomerGrant, UserRoleAssignment, UserSiteGrant,
+    SecurityAuditEvent, TempoUser, TenantMembership, UserCustomerGrant, UserRoleAssignment, UserSiteGrant,
 )
 from app.schemas.tenancy import RequestContext
 
@@ -171,3 +173,34 @@ router.post("/users/{user_id}/reinstate")(_lifecycle("active", "user.reinstate")
 router.post("/users/{user_id}/reset-password")(_lifecycle(None, "user.reset_password"))
 router.post("/users/{user_id}/reset-mfa")(_lifecycle(None, "user.reset_mfa"))
 router.post("/users/{user_id}/unlock")(_lifecycle(None, "user.unlock"))
+
+
+@router.get("/audit")
+def audit_log(action: str | None = None, actor: str | None = None, decision: str | None = None, before: datetime | None = None,
+              limit: int = Query(default=50, ge=1, le=200), ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
+    """The tenant's own security audit trail (who did what, allowed or denied). Read-only; secrets are never stored in it.
+    Newest first; pass the last row's `created_at` as `before` for the next page. Viewing it is itself recorded."""
+    _require(ctx)
+    q = select(SecurityAuditEvent).where(SecurityAuditEvent.tenant_id == ctx.tenant_id)
+    if action:
+        q = q.where(SecurityAuditEvent.action.startswith(action))
+    if actor:
+        q = q.where(SecurityAuditEvent.actor_id == actor)
+    if decision:
+        q = q.where(SecurityAuditEvent.decision == decision)
+    if before:
+        q = q.where(SecurityAuditEvent.created_at < before)
+    rows = list(db.scalars(q.order_by(SecurityAuditEvent.created_at.desc(), SecurityAuditEvent.event_id).limit(limit + 1)))
+    page, more = rows[:limit], len(rows) > limit
+    names: dict[str, str] = {}
+    ids = {r.actor_id for r in page if r.actor_type == "user"}
+    if ids:
+        with auth_phase(db, ctx.tenant_id):
+            members = set(db.scalars(select(TenantMembership.user_id).where(TenantMembership.tenant_id == ctx.tenant_id, TenantMembership.user_id.in_(ids))))
+            for u in db.scalars(select(TempoUser).where(TempoUser.user_id.in_(members or {""}))):
+                names[u.user_id] = u.display_name or u.username or u.email or u.user_id
+    actions = sorted(set(db.scalars(select(SecurityAuditEvent.action).where(SecurityAuditEvent.tenant_id == ctx.tenant_id).distinct().limit(200))))
+    auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="audit.view", decision="allowed", correlation_id=ctx.correlation_id)
+    return {"items": [{"event_id": r.event_id, "at": r.created_at, "actor_type": r.actor_type, "actor_id": r.actor_id, "actor_name": names.get(r.actor_id), "action": r.action,
+                       "decision": r.decision, "reason_code": r.reason_code, "ref": r.session_or_grant_ref, "correlation_id": r.correlation_id} for r in page],
+            "next_before": page[-1].created_at if more else None, "actions": actions}

@@ -99,6 +99,7 @@ test.describe.serial('password sign-in', () => {
     await shot(page, 'login-06-mfa-required')
     await page.goto('/account')
     await page.getByRole('button', { name: 'Set up authenticator' }).click()
+    await expect(page.getByRole('img', { name: /QR code to add Tempo/ })).toBeVisible()
     const secret = (await page.getByLabel('Setup key').innerText()).replace(/\s+/g, '')
     await shot(page, 'login-07-mfa-setup')
     await page.getByLabel(/Enter the 6-digit code/).fill(totp(secret))

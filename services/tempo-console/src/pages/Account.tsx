@@ -1,3 +1,4 @@
+import { QrCode } from '../components/QrCode'
 import { useState, type FormEvent } from 'react'
 import { ApiError } from '../api/client'
 import { changePassword, mfaConfirm, mfaEnroll } from '../api/session'
@@ -39,7 +40,8 @@ export default function AccountPage() {
               </>
             ) : (
               <>
-                <p style={{ margin: 0 }}>In your app choose “add account → enter a setup key”, then type this key:</p>
+                <p style={{ margin: 0 }}>Scan this code with your authenticator app, or choose “enter a setup key” and type the key below it.</p>
+                <QrCode value={enrol.otpauth_uri} label="QR code to add Tempo to your authenticator app" />
                 <code style={{ fontSize: 18, letterSpacing: 2, wordBreak: 'break-all' }} aria-label="Setup key">{enrol.secret.match(/.{1,4}/g)?.join(' ')}</code>
                 <p className="tp-muted" style={{ fontSize: 12.5, margin: 0 }}>Account: {access?.email}. Time-based, 6 digits. This key is shown only now.</p>
                 <label className="tp-field">Enter the 6-digit code to confirm<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" maxLength={8} autoComplete="one-time-code" /></label>

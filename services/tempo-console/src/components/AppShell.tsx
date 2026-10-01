@@ -24,6 +24,7 @@ const NAV: { to: string; label: string; perm: string; end?: boolean; group?: str
   { to: '/providers', label: 'Team & Skills', perm: 'labour.read', group: 'Manage' },
   { to: '/onboarding', label: 'Data & Connections', perm: 'labour.configure' },
   { to: '/admin', label: 'Administration', perm: 'labour.configure' },
+  { to: '/audit', label: 'Audit log', perm: 'labour.configure' },
 ]
 
 export function AppShell() {
