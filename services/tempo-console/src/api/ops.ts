@@ -149,6 +149,12 @@ export const getGeofence = (site: string) => apiRequest<Geofence>(`/sites/${site
 export const putGeofence = (site: string, body: { latitude: number; longitude: number; radius_meters: number }) => apiRequest<Geofence>(`/sites/${site}/geofence`, { method: 'PUT', body })
 
 // ---- planning rules (M3) ----
-export interface PlanningRules { min_rest_hours: number; max_weekly_hours: number; hours_per_worker_per_day: number; max_overtime_hours_per_worker_per_day: number; max_consecutive_days: number; policy_version: string; is_default: boolean; defaults: Record<string, number>; saved_at: string | null }
+export interface ShiftDef { code: string; start_hour: number; end_hour: number; share: number | null }
+export interface PlanningRules { shift_calendar: ShiftDef[]; shift_calendar_is_default: boolean; default_shift_calendar: ShiftDef[]; min_rest_hours: number; max_weekly_hours: number; hours_per_worker_per_day: number; max_overtime_hours_per_worker_per_day: number; max_consecutive_days: number; policy_version: string; is_default: boolean; defaults: Record<string, number>; saved_at: string | null }
 export const getPlanningRules = () => apiRequest<PlanningRules>('/planning-rules')
-export const putPlanningRules = (body: Omit<PlanningRules, 'policy_version' | 'is_default' | 'defaults' | 'saved_at'>) => apiRequest<PlanningRules>('/planning-rules', { method: 'PUT', body })
+export const putPlanningRules = (body: Omit<PlanningRules, 'policy_version' | 'is_default' | 'defaults' | 'saved_at' | 'shift_calendar_is_default' | 'default_shift_calendar'>) => apiRequest<PlanningRules>('/planning-rules', { method: 'PUT', body })
+
+export interface AvailabilityEntry { id: string; worker_id: string; label: string; start_at: string; end_at: string; status: 'unavailable' | 'leave' | 'rdo'; source: string; editable: boolean }
+export const getAvailability = (site: string, start: string, days = 14) => apiRequest<AvailabilityEntry[]>(`/sites/${site}/availability?start=${start}&days=${days}`)
+export const addAvailability = (site: string, body: { worker_id: string; start_at: string; end_at: string; status: string }) => apiRequest(`/sites/${site}/availability`, { method: 'POST', body })
+export const removeAvailability = (id: string) => apiRequest(`/availability/${id}`, { method: 'DELETE' })

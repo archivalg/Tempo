@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { getVariance, type Variance } from '../api/ops'
 import { useSite } from '../components/AppShell'
@@ -54,7 +55,7 @@ export default function ReportsPage() {
               const n1 = (x: number) => (nd ? '—' : fmtNum(x, 1))
               const m = (x: number | undefined) => (nd ? '—' : fmtMoney(x))
               return (
-              <tr key={r.date}><td>{fmtTime(`${r.date}T12:00:00Z`, 'UTC', { weekday: 'short', day: '2-digit', month: 'short' })}{r.status !== 'complete' && <span className="tp-muted"> · {r.status === 'upcoming' ? 'upcoming' : 'in progress'}</span>}</td>
+              <tr key={r.date}><td><Link to={`/attendance?view=today&date=${r.date}`} title="See who was late, absent or missing a clock-out that day">{fmtTime(`${r.date}T12:00:00Z`, 'UTC', { weekday: 'short', day: '2-digit', month: 'short' })}</Link>{r.status !== 'complete' && <span className="tp-muted"> · {r.status === 'upcoming' ? 'upcoming' : 'in progress'}</span>}</td>
                 <td>{n1(r.scheduled_hours)}</td><td>{n1(r.attended_hours)}</td><td>{n1(r.payable_hours)}</td>
                 <td>{nd ? '—' : `${r.variance_hours > 0 ? '+' : ''}${fmtNum(r.variance_hours, 1)}`}</td><td>{r.adherence_pct != null ? `${r.adherence_pct}%` : '—'}</td><td>{r.late ?? '—'}</td><td>{r.no_shows ?? '—'}</td><td>{n1(r.overtime_hours)}</td>
                 <td>{fmtNum(r.forecast_units)}</td><td>{fmtNum(r.actual_units)}</td><td>{r.forecast_ape_pct != null ? `${r.forecast_ape_pct}%` : '—'}</td>

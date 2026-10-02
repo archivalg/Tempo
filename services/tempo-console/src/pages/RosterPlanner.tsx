@@ -7,6 +7,7 @@ import {
 import { ApiError } from '../api/client'
 import { useSite } from '../components/AppShell'
 import { HandoffCard } from '../components/HandoffCard'
+import { AvailabilityPanel } from '../components/AvailabilityPanel'
 import { PlanningRules } from '../components/PlanningRules'
 import { Banner, Drawer, Empty, PageHead, RosterSteps, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
@@ -41,6 +42,7 @@ export default function RosterPlannerPage() {
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [showEvents, setShowEvents] = useState(false)
   const [showRules, setShowRules] = useState(false)
+  const [showAvail, setShowAvail] = useState(false)
   const [loading, setLoading] = useState(true)
   const [dragId, setDragId] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
@@ -112,6 +114,7 @@ export default function RosterPlannerPage() {
   return (
     <>
       <PageHead title="Roster Planner" sub={<>{site.name} · week of {days[0]} · times in {tz}</>}>
+        <button className="tp-btn" onClick={() => setShowAvail(true)}>Availability &amp; leave</button>
         <button className="tp-btn" onClick={() => setShowRules(true)}>Planning rules</button>
         <div className="tp-seg" role="group" aria-label="Range"><button aria-pressed={mode === 'week'} onClick={() => setMode('week')}>Week</button><button aria-pressed={mode === 'day'} onClick={() => setMode('day')}>Day</button></div>
         <div className="tp-row" role="group" aria-label="Date navigator">
@@ -301,6 +304,7 @@ export default function RosterPlannerPage() {
         </Drawer>
       )}
 
+      {showAvail && board && <Drawer title="Availability & leave" onClose={() => setShowAvail(false)}><AvailabilityPanel siteId={site.site_id} tz={tz} start={days[0]} workers={board.workers.map((w) => ({ worker_id: w.worker_id, label: w.label }))} canEdit={can('labour.plan')} /></Drawer>}
       {showRules && <Drawer title="Planning rules" onClose={() => setShowRules(false)}><PlanningRules canEdit={can('labour.configure')} /></Drawer>}
       {showEvents && v && (
         <Drawer title={`History — v${v.version_no}`} onClose={() => setShowEvents(false)}>

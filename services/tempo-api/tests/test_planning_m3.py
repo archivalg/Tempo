@@ -140,3 +140,48 @@ def test_planning_rules_are_versioned_audited_and_drive_validation(client):
     over = {w for w, h in per.items() if h > 45}
     flagged = {c["worker_id"] for c in b["conflicts"] if c["kind"] == "max_hours"}
     assert flagged == over
+
+
+def test_shift_calendar_is_configured_validated_and_used_by_the_generator(client):
+    _seed(client)
+    admin = context_header(roles=["tenant_admin"], user_id="usr_adm")
+    base = {"min_rest_hours": 10, "max_weekly_hours": 50, "hours_per_worker_per_day": 8, "max_overtime_hours_per_worker_per_day": 2, "max_consecutive_days": 6}
+    assert client.get("/v1/planning-rules", headers=planner()).json()["shift_calendar_is_default"] is True
+    bad = [{"code": "a", "start_hour": 6, "end_hour": 14, "share": 0.7}, {"code": "b", "start_hour": 14, "end_hour": 22, "share": 0.7}]
+    assert client.put("/v1/planning-rules", json={**base, "shift_calendar": bad}, headers=admin).status_code == 422          # shares must sum to 1
+    assert client.put("/v1/planning-rules", json={**base, "shift_calendar": [{"code": "x", "start_hour": 6, "end_hour": 6}]}, headers=admin).status_code == 422
+    assert client.put("/v1/planning-rules", json={**base, "shift_calendar": [{"code": "a", "start_hour": 6, "end_hour": 14}, {"code": "a", "start_hour": 14, "end_hour": 22}]}, headers=admin).status_code == 422
+    cal = [{"code": "early", "start_hour": 5, "end_hour": 13}, {"code": "late", "start_hour": 13, "end_hour": 21}, {"code": "night", "start_hour": 21, "end_hour": 5}]
+    ok = client.put("/v1/planning-rules", json={**base, "shift_calendar": cal}, headers=admin)
+    assert ok.status_code == 200 and [x["code"] for x in ok.json()["shift_calendar"]] == ["early", "late", "night"]
+    b = gen(client)
+    starts = {datetime.fromisoformat(s["start_at"].replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=10))).hour for s in b["shifts"]}
+    assert starts <= {5, 13, 21} and starts
+    # saving rules without a calendar keeps the one already saved
+    assert client.put("/v1/planning-rules", json=base, headers=admin).json()["shift_calendar"][0]["code"] == "early"
+
+
+def test_availability_entries_block_rosters_and_only_own_entries_can_be_removed(client):
+    _seed(client)
+    b = gen(client)
+    s0 = b["shifts"][0]
+    st = datetime.fromisoformat(s0["start_at"].replace("Z", "+00:00"))
+    body = {"worker_id": s0["worker_id"], "start_at": (st - timedelta(hours=1)).isoformat(), "end_at": (st + timedelta(hours=3)).isoformat(), "status": "leave"}
+    assert client.post(f"/v1/sites/{SITE}/availability", json=body, headers=context_header(roles=["analyst"], user_id="usr_an")).status_code == 403
+    r = client.post(f"/v1/sites/{SITE}/availability", json=body, headers=planner())
+    assert r.status_code == 201, r.text
+    assert client.post(f"/v1/sites/{SITE}/availability", json=body, headers=planner()).status_code == 422            # overlapping entry of the same kind
+    assert client.post(f"/v1/sites/{SITE}/availability", json={**body, "worker_id": "nobody"}, headers=planner()).status_code == 400
+    week = st.date().isoformat()
+    listed = client.get(f"/v1/sites/{SITE}/availability", params={"start": week, "days": 7}, headers=planner()).json()
+    assert [x["id"] for x in listed] == [r.json()["id"]] and listed[0]["editable"] is True
+    v = b["version"]["id"]
+    assert "availability" in {c["kind"] for c in client.get(f"/v1/rosters/{v}", headers=planner()).json()["conflicts"]}
+    assert client.delete(f"/v1/availability/{r.json()['id']}", headers=planner()).status_code == 200
+    assert "availability" not in {c["kind"] for c in client.get(f"/v1/rosters/{v}", headers=planner()).json()["conflicts"]}
+    with client.session_local() as s:
+        a = Availability(tenant_id="ten_test", worker_id=s0["worker_id"], interval_start=st, interval_end=st + timedelta(hours=2), status="leave", source_system="deputy")
+        s.add(a)
+        s.commit()
+        aid = a.id
+    assert client.delete(f"/v1/availability/{aid}", headers=planner()).status_code == 422

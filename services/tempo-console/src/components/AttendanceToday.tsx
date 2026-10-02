@@ -11,8 +11,8 @@ const FLAG: Record<string, { label: string; tone: 'ok' | 'risk' | 'bad' | 'neutr
 const addDays = (date: string, n: number) => { const d = new Date(`${date}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10) }
 
 /** The supervisor's daily list: who is late or absent, who is still in, what is missing, what nobody rostered. Computed live from shifts, punches and the site rules. */
-export function AttendanceToday({ siteId, tz, onOpenTimesheets }: { siteId: string; tz: string; onOpenTimesheets: () => void }) {
-  const [day, setDay] = useState(() => localDate(new Date(), tz))
+export function AttendanceToday({ siteId, tz, initialDay, onOpenTimesheets }: { siteId: string; tz: string; initialDay?: string; onOpenTimesheets: () => void }) {
+  const [day, setDay] = useState(() => initialDay ?? localDate(new Date(), tz))
   const [data, setData] = useState<DailyData | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [only, setOnly] = useState<string>('exceptions')

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   approveMany, approveSession, decideAdjustment, exportCsv, exportPayroll, getSessionHistory, getTimesheets, reopenSession, requestAdjustment, requestMissingSession,
   type SessionHistory, type Timesheet, type TimesheetData,
@@ -21,7 +22,8 @@ export default function AttendancePage() {
   const { site } = useSite()
   const { can, access } = useTempoContext()
   const tz = site?.timezone ?? 'UTC'
-  const [view, setView] = useState<View>('today')
+  const [qs] = useSearchParams()
+  const [view, setView] = useState<View>(() => (['today', 'timesheets', 'rules', 'badges'] as const).find((v) => v === qs.get('view')) ?? 'today')
   const [start, setStart] = useState(() => mondayOf(localDate(new Date(), tz)))
   const [data, setData] = useState<TimesheetData | null>(null)
   const [filter, setFilter] = useState<'all' | 'pending' | 'unrostered' | 'corrections'>('all')
@@ -67,7 +69,7 @@ export default function AttendancePage() {
       {err && <Banner tone="bad" title="Problem">{err}</Banner>}
       {info && <Banner tone="info" title="Done">{info}</Banner>}
 
-      {view === 'today' && <AttendanceToday siteId={site.site_id} tz={tz} onOpenTimesheets={() => setView('timesheets')} />}
+      {view === 'today' && <AttendanceToday siteId={site.site_id} tz={tz} initialDay={/^\d{4}-\d{2}-\d{2}$/.test(qs.get('date') ?? '') ? qs.get('date')! : undefined} onOpenTimesheets={() => setView('timesheets')} />}
       {view === 'rules' && <AttendanceRules siteId={site.site_id} canEdit={can('labour.configure')} />}
       {view === 'badges' && can('labour.configure') && <ClockCredentials siteId={site.site_id} />}
 
