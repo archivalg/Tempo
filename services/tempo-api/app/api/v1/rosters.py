@@ -38,6 +38,7 @@ def generate(site_id: str, body: Generate, ctx: RequestContext = Depends(get_req
     """Runs the named-roster solver for the window and stores the result as a new draft version."""
     site = _site(db, ctx, site_id)
     svc.require(ctx, "labour.plan")
+    svc.lock_week(db, ctx, site_id, body.week_start)
     start, end = svc.window(site, body.week_start, body.days)
     workers = [w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.home_site == site_id))]
     # retire loose proposals from earlier un-versioned runs so the new draft is the only proposal
@@ -74,6 +75,7 @@ def copy_published(site_id: str, body: Generate, ctx: RequestContext = Depends(g
     """Manager adjustment starts from what is live: clone the published shifts into a fresh editable draft."""
     site = _site(db, ctx, site_id)
     svc.require(ctx, "labour.plan")
+    svc.lock_week(db, ctx, site_id, body.week_start)
     start, end = svc.window(site, body.week_start, body.days)
     workers = [w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.home_site == site_id))]
     src = list(db.scalars(select(ShiftAssignment).where(ShiftAssignment.tenant_id == ctx.tenant_id, ShiftAssignment.worker_id.in_(workers or [""]),
@@ -168,7 +170,7 @@ def _check_times(site, v: RosterVersion, start: datetime, end: datetime) -> None
 
 def _editable(db: Session, ctx: RequestContext, version_id: str):
     svc.require(ctx, "labour.plan")
-    v = svc.get_version(db, ctx, version_id)
+    v = svc.get_version(db, ctx, version_id, lock=True)
     svc.check_editable(v)
     return v, _site(db, ctx, v.site_id)
 
@@ -242,7 +244,7 @@ def validate(version_id: str, ctx: RequestContext = Depends(get_request_context)
 @router.post("/rosters/{version_id}/submit")
 def submit(version_id: str, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
     svc.require(ctx, "labour.plan")
-    v = svc.get_version(db, ctx, version_id)
+    v = svc.get_version(db, ctx, version_id, lock=True)
     if v.state != "draft":
         raise PolicyConflict(f"only a draft can be submitted (this is {v.state})")
     site = _site(db, ctx, v.site_id)
@@ -264,7 +266,7 @@ class Decision(BaseModel):
 @router.post("/rosters/{version_id}/approve")
 def approve(version_id: str, body: Decision, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
     svc.require(ctx, "labour.approve")
-    v = svc.get_version(db, ctx, version_id)
+    v = svc.get_version(db, ctx, version_id, lock=True)
     if v.state != "pending_approval":
         raise PolicyConflict(f"only a submitted roster can be approved (this is {v.state})")
     if v.submitted_by == ctx.user_id:
@@ -288,7 +290,7 @@ class Rejection(BaseModel):
 @router.post("/rosters/{version_id}/reject")
 def reject(version_id: str, body: Rejection, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
     svc.require(ctx, "labour.approve")
-    v = svc.get_version(db, ctx, version_id)
+    v = svc.get_version(db, ctx, version_id, lock=True)
     if v.state not in ("pending_approval", "approved"):
         raise PolicyConflict(f"nothing to reject (this is {v.state})")
     v.state, v.decision_note = "rejected", body.note
@@ -303,7 +305,7 @@ def publish(version_id: str, ctx: RequestContext = Depends(get_request_context),
     svc.require(ctx, "labour.approve")
     if not idempotency_key:
         raise ScopeError("Idempotency-Key header is required for this operation")
-    v = svc.get_version(db, ctx, version_id)
+    v = svc.get_version(db, ctx, version_id, lock=True)
     if v.state in ("published", "reconciled"):
         return {**svc.serialise(v), "idempotent_replay": True}
     if v.state != "approved":
@@ -320,9 +322,14 @@ def publish(version_id: str, ctx: RequestContext = Depends(get_request_context),
     ws, we = svc.window(site, v.week_start, v.days)
     workers = [w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.home_site == v.site_id))]
     superseded = 0
+    all_versions = {r.id: r.week_start for r in db.scalars(select(RosterVersion).where(RosterVersion.tenant_id == ctx.tenant_id, RosterVersion.site_id == v.site_id))}
     for old in db.scalars(select(ShiftAssignment).where(ShiftAssignment.tenant_id == ctx.tenant_id, ShiftAssignment.worker_id.in_(workers or [""]),
                                                         ShiftAssignment.status == "committed", ShiftAssignment.start_at >= ws - timedelta(hours=12), ShiftAssignment.start_at < we)):
-        if old.source_ref != v.id:
+        if old.source_ref == v.id:
+            continue
+        other_week = old.source_ref in all_versions and all_versions[old.source_ref] != v.week_start
+        # a row belonging to another week's roster (e.g. Sunday night's overnight shift of the previous week) is not ours to retire
+        if not other_week and (old.source_ref in all_versions or svc._aware(old.start_at) >= ws):
             old.status = "superseded"
             superseded += 1
     for prev in db.scalars(select(RosterVersion).where(RosterVersion.tenant_id == ctx.tenant_id, RosterVersion.site_id == v.site_id, RosterVersion.week_start == v.week_start,
@@ -362,7 +369,7 @@ def _reconcile(db: Session, ctx: RequestContext, v: RosterVersion, site) -> dict
 @router.post("/rosters/{version_id}/reconcile")
 def reconcile(version_id: str, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
     svc.require(ctx, "labour.approve")
-    v = svc.get_version(db, ctx, version_id)
+    v = svc.get_version(db, ctx, version_id, lock=True)
     if v.state not in ("published", "unknown", "reconciled"):
         raise PolicyConflict(f"nothing to reconcile (this is {v.state})")
     return _reconcile(db, ctx, v, _site(db, ctx, v.site_id))

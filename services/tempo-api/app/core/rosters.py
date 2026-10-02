@@ -18,7 +18,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.core import opsview
@@ -76,10 +76,19 @@ def payload_hash(shifts: list[ShiftAssignment]) -> str:
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
 
 
-def get_version(db: Session, ctx: RequestContext, version_id: str) -> RosterVersion:
+def lock_week(db: Session, ctx: RequestContext, site_id: str, week_start: str) -> None:
+    """Serialise everything that changes one site's roster for one week (generate, edit, approve, publish) until this request commits,
+    so two people acting at once cannot create duplicate version numbers or two live rosters."""
+    db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"roster:{ctx.tenant_id}:{site_id}:{week_start}"})
+
+
+def get_version(db: Session, ctx: RequestContext, version_id: str, *, lock: bool = False) -> RosterVersion:
     v = db.get(RosterVersion, version_id)
     if v is None or v.tenant_id != ctx.tenant_id or v.site_id not in ctx.site_ids:
         raise RunNotFound("roster version not found or not visible in caller scope")
+    if lock:
+        lock_week(db, ctx, v.site_id, v.week_start)
+        db.refresh(v)  # another request may have changed it while we waited for the lock
     return v
 
 

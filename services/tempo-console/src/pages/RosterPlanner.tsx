@@ -7,6 +7,7 @@ import {
 import { ApiError } from '../api/client'
 import { useSite } from '../components/AppShell'
 import { HandoffCard } from '../components/HandoffCard'
+import { PlanningRules } from '../components/PlanningRules'
 import { Banner, Drawer, Empty, PageHead, RosterSteps, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { fmtMoney, fmtNum, fmtTime, localDate } from '../lib/format'
@@ -39,6 +40,7 @@ export default function RosterPlannerPage() {
   const [edit, setEdit] = useState<Draft | null>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [showEvents, setShowEvents] = useState(false)
+  const [showRules, setShowRules] = useState(false)
   const [loading, setLoading] = useState(true)
   const [dragId, setDragId] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
@@ -110,6 +112,7 @@ export default function RosterPlannerPage() {
   return (
     <>
       <PageHead title="Roster Planner" sub={<>{site.name} · week of {days[0]} · times in {tz}</>}>
+        <button className="tp-btn" onClick={() => setShowRules(true)}>Planning rules</button>
         <div className="tp-seg" role="group" aria-label="Range"><button aria-pressed={mode === 'week'} onClick={() => setMode('week')}>Week</button><button aria-pressed={mode === 'day'} onClick={() => setMode('day')}>Day</button></div>
         <div className="tp-row" role="group" aria-label="Date navigator">
           <button className="tp-btn" onClick={() => { set('start', addDays(start, -7)); set('v', null) }} aria-label="Previous week">←</button>
@@ -298,6 +301,7 @@ export default function RosterPlannerPage() {
         </Drawer>
       )}
 
+      {showRules && <Drawer title="Planning rules" onClose={() => setShowRules(false)}><PlanningRules canEdit={can('labour.configure')} /></Drawer>}
       {showEvents && v && (
         <Drawer title={`History — v${v.version_no}`} onClose={() => setShowEvents(false)}>
           {!events ? <Skeleton h={120} /> : (

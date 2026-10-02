@@ -147,3 +147,8 @@ export const unlockClockCredential = (worker_id: string) => apiRequest(`/workers
 export interface Geofence { site_id: string; configured: boolean; latitude: number | null; longitude: number | null; radius_meters: number | null }
 export const getGeofence = (site: string) => apiRequest<Geofence>(`/sites/${site}/geofence`)
 export const putGeofence = (site: string, body: { latitude: number; longitude: number; radius_meters: number }) => apiRequest<Geofence>(`/sites/${site}/geofence`, { method: 'PUT', body })
+
+// ---- planning rules (M3) ----
+export interface PlanningRules { min_rest_hours: number; max_weekly_hours: number; hours_per_worker_per_day: number; max_overtime_hours_per_worker_per_day: number; max_consecutive_days: number; policy_version: string; is_default: boolean; defaults: Record<string, number>; saved_at: string | null }
+export const getPlanningRules = () => apiRequest<PlanningRules>('/planning-rules')
+export const putPlanningRules = (body: Omit<PlanningRules, 'policy_version' | 'is_default' | 'defaults' | 'saved_at'>) => apiRequest<PlanningRules>('/planning-rules', { method: 'PUT', body })

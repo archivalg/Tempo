@@ -1,0 +1,142 @@
+"""Roadmap M3: competing roster actions cannot make duplicate or stale live rosters; adjacent weeks and overnight shifts stay put; hard rules block."""
+from __future__ import annotations
+
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+from threading import Barrier
+
+from sqlalchemy import select
+
+from app.models.canonical import Availability, ShiftAssignment, Worker
+from app.models.rosters import RosterVersion
+
+from .conftest import context_header
+from .test_roster_workflow import SITE, WEEK, _seed, gen, manager, planner, post
+
+
+def _approved(client, week=WEEK):
+    b = client.post(f"/v1/sites/{SITE}/rosters/generate", json={"week_start": week}, headers=planner())
+    assert b.status_code == 201, b.text
+    v = b.json()["version"]["id"]
+    assert post(client, f"/v1/rosters/{v}/submit", planner()).status_code == 200
+    assert post(client, f"/v1/rosters/{v}/approve", manager(), {"note": "ok"}).status_code == 200
+    return v
+
+
+def test_simultaneous_publishes_of_one_version_publish_it_once(client):
+    _seed(client)
+    v = _approved(client)
+    gate = Barrier(3)
+
+    def go(_):
+        gate.wait()
+        return client.post(f"/v1/rosters/{v}/publish", headers={**manager(), "Idempotency-Key": str(uuid.uuid4())})
+
+    with ThreadPoolExecutor(3) as pool:
+        rs = list(pool.map(go, range(3)))
+    assert all(r.status_code == 200 for r in rs), [r.text for r in rs]
+    assert sorted(bool(r.json().get("idempotent_replay")) for r in rs) == [False, True, True]
+    with client.session_local() as s:
+        live = s.scalars(select(RosterVersion).where(RosterVersion.state.in_(("published", "reconciled")))).all()
+        assert len(live) == 1 and live[0].id == v
+        keys = [(r.worker_id, r.start_at) for r in s.scalars(select(ShiftAssignment).where(ShiftAssignment.status == "committed"))]
+        assert len(keys) == len(set(keys))
+
+
+def test_simultaneous_generation_never_reuses_a_version_number_or_leaves_two_open_drafts(client):
+    _seed(client)
+    hdr = planner()
+    client.get("/v1/rosters/pending", headers=hdr)   # create the test principal once, before the threads race to
+    gate = Barrier(2)
+
+    def go(_):
+        gate.wait()
+        return client.post(f"/v1/sites/{SITE}/rosters/generate", json={"week_start": WEEK}, headers=hdr)
+
+    with ThreadPoolExecutor(2) as pool:
+        rs = list(pool.map(go, range(2)))
+    assert [r.status_code for r in rs] == [201, 201], [r.text[:200] for r in rs]
+    with client.session_local() as s:
+        vs = s.scalars(select(RosterVersion).order_by(RosterVersion.version_no)).all()
+        assert [v.version_no for v in vs] == [1, 2]
+        assert [v.state for v in vs].count("draft") == 1 and [v.state for v in vs].count("superseded") == 1
+        proposed = s.scalars(select(ShiftAssignment).where(ShiftAssignment.status == "proposed")).all()
+        assert {p.source_ref for p in proposed} == {next(v.id for v in vs if v.state == "draft")}
+
+
+def test_a_stale_approval_cannot_publish_over_a_newer_draft(client):
+    _seed(client)
+    old = _approved(client)
+    new = gen(client)["version"]["id"]        # regenerating supersedes the approved one
+    r = client.post(f"/v1/rosters/{old}/publish", headers={**manager(), "Idempotency-Key": str(uuid.uuid4())})
+    assert r.status_code == 422
+    with client.session_local() as s:
+        assert s.scalars(select(RosterVersion).where(RosterVersion.state.in_(("published", "reconciled")))).all() == []
+        assert s.get(RosterVersion, new).state == "draft"
+
+
+def test_publishing_next_week_keeps_the_previous_weeks_sunday_night_shift(client):
+    _seed(client)
+    a = _approved(client)
+    assert client.post(f"/v1/rosters/{a}/publish", headers={**manager(), "Idempotency-Key": str(uuid.uuid4())}).status_code == 200
+    next_week = (datetime.fromisoformat(WEEK) + timedelta(days=7)).date().isoformat()
+    with client.session_local() as s:
+        w = s.scalar(select(Worker))
+        site_tz_offset = timedelta(hours=10)  # Melbourne, standard time in early/mid September
+        sunday_night = datetime.fromisoformat(next_week).replace(tzinfo=timezone(site_tz_offset)) - timedelta(hours=2)   # 22:00 on the last day of week A
+        night = ShiftAssignment(tenant_id="ten_test", worker_id=w.worker_id, role="picker", zone="z", start_at=sunday_night, end_at=sunday_night + timedelta(hours=8),
+                                status="committed", source_ref=a)
+        s.add(night)
+        s.commit()
+        night_id = night.shift_id
+    b = _approved(client, next_week)
+    assert client.post(f"/v1/rosters/{b}/publish", headers={**manager(), "Idempotency-Key": str(uuid.uuid4())}).status_code == 200
+    with client.session_local() as s:
+        assert s.get(ShiftAssignment, night_id).status == "committed"             # still last week's live shift
+        assert s.get(RosterVersion, a).state == "reconciled"                       # and last week's roster is still live
+        assert s.get(RosterVersion, b).state == "reconciled"
+
+
+def test_hard_rules_block_submission_rest_availability_and_max_hours(client):
+    _seed(client)
+    b = gen(client)
+    v, s0 = b["version"]["id"], min(b["shifts"], key=lambda x: x["start_at"])   # earliest shift: room inside the window for the follow-on
+    start = datetime.fromisoformat(s0["end_at"].replace("Z", "+00:00"))
+    # a second shift that begins 2 hours after the first ends: less than the 10 h rest rule
+    r = client.post(f"/v1/rosters/{v}/shifts", headers=planner(), json={"worker_id": s0["worker_id"], "role": s0["role"], "zone": s0["zone"],
+                                                                      "start_at": (start + timedelta(hours=2)).isoformat(), "end_at": (start + timedelta(hours=8)).isoformat()})
+    assert r.status_code == 201, r.text
+    assert "rest" in {c["kind"] for c in r.json()["conflicts"]}
+    assert post(client, f"/v1/rosters/{v}/submit", planner()).status_code == 422
+    # leave over the first shift is a hard conflict too
+    with client.session_local() as s:
+        s.add(Availability(tenant_id="ten_test", worker_id=s0["worker_id"], interval_start=datetime.fromisoformat(s0["start_at"].replace("Z", "+00:00")) - timedelta(hours=1),
+                           interval_end=start + timedelta(hours=1), status="leave"))
+        s.commit()
+    kinds = {c["kind"] for c in client.get(f"/v1/rosters/{v}", headers=planner()).json()["conflicts"]}
+    assert {"rest", "availability"} <= kinds
+
+
+def test_planning_rules_are_versioned_audited_and_drive_validation(client):
+    _seed(client)
+    admin = context_header(roles=["tenant_admin"], user_id="usr_adm")
+    d = client.get("/v1/planning-rules", headers=planner()).json()
+    assert d["is_default"] is True and d["min_rest_hours"] == 10 and d["max_weekly_hours"] == 50
+    body = {"min_rest_hours": 12, "max_weekly_hours": 40, "hours_per_worker_per_day": 8, "max_overtime_hours_per_worker_per_day": 2, "max_consecutive_days": 6}
+    assert client.put("/v1/planning-rules", json=body, headers=planner()).status_code == 403
+    assert client.put("/v1/planning-rules", json={**body, "min_rest_hours": 2}, headers=admin).status_code == 422
+    r = client.put("/v1/planning-rules", json=body, headers=admin)
+    assert r.status_code == 200 and r.json()["is_default"] is False and r.json()["max_weekly_hours"] == 40
+    assert client.put("/v1/planning-rules", json={**body, "max_weekly_hours": 45}, headers=admin).status_code == 200   # a second version; the first is kept
+    from app.models.canonical import OptimisationPolicy
+    with client.session_local() as s:
+        assert len(s.scalars(select(OptimisationPolicy)).all()) == 2
+    # validation now uses the saved weekly limit: a generated week carrying more than 45 h for anyone is flagged
+    b = gen(client)
+    per: dict[str, float] = {}
+    for sh in b["shifts"]:
+        per[sh["worker_id"]] = per.get(sh["worker_id"], 0) + (datetime.fromisoformat(sh["end_at"].replace("Z", "+00:00")) - datetime.fromisoformat(sh["start_at"].replace("Z", "+00:00"))).total_seconds() / 3600
+    over = {w for w, h in per.items() if h > 45}
+    flagged = {c["worker_id"] for c in b["conflicts"] if c["kind"] == "max_hours"}
+    assert flagged == over

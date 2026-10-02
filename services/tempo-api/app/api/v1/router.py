@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.dependencies import commit_before_response
 
-from app.api.v1 import auth, demand, devices, handoffs, imports as imports_api, service_clients, notifications, operations, platform, reports, rosters, timeclock, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
+from app.api.v1 import auth, demand, devices, handoffs, imports as imports_api, service_clients, notifications, operations, platform, planning_rules, reports, rosters, timeclock, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
 
 router = APIRouter(dependencies=[Depends(commit_before_response, scope="function")])
 router.include_router(auth.router)
@@ -26,5 +26,6 @@ router.include_router(actions.router)
 router.include_router(onboarding.router)
 router.include_router(monitoring.router)
 router.include_router(attendance.router)
+router.include_router(planning_rules.router)
 router.include_router(providers.router)
 router.include_router(ingestion.router)

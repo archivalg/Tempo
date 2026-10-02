@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions_engine import STATUS_OPEN, source_is_fresh
+from app.core.policy import resolve_policy
 from app.models.canonical import (
     ActivityRoleZoneMap, AttendanceSession, DemandBucket, LabourCostRule, ShiftAssignment, Worker, WorkStandard,
 )
@@ -413,8 +414,6 @@ def exception_view(e: ExceptionCase, now: datetime, can_see_names: bool, db: Ses
             "owner_user_id": e.owner_user_id, "resolution": e.resolution, "evidence": e.evidence}
 
 
-HARD_REST_HOURS = 10
-MAX_WEEK_HOURS = 50
 
 
 def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, days: int, now: datetime, *, can_see_rates: bool, can_see_names: bool,
@@ -453,6 +452,8 @@ def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, 
                                                    Availability.status.in_(("unavailable", "leave", "rdo")))):
         unavailable[a.worker_id].append((_aware(a.interval_start), _aware(a.interval_end), a.status))
     rates = _rates(db, tenant_id)
+    rules = resolve_policy(db, tenant_id).constraints
+    rest_hours, max_week = float(rules["min_rest_hours"]), float(rules["max_weekly_hours"])
 
     by_worker: dict[str, list] = defaultdict(list)
     for sh, w in rows_view:
@@ -475,8 +476,8 @@ def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, 
                 prev = lst[i - 1]
                 if s < _aware(prev.end_at):
                     flag(sh, "overlap", "Overlaps another shift for the same worker")
-                elif (s - _aware(prev.end_at)).total_seconds() / 3600 < HARD_REST_HOURS:
-                    flag(sh, "rest", f"Less than {HARD_REST_HOURS}h rest since previous shift")
+                elif (s - _aware(prev.end_at)).total_seconds() / 3600 < rest_hours:
+                    flag(sh, "rest", f"Less than {rest_hours:g}h rest since previous shift")
             for (us, ue, st) in unavailable.get(wid, []):
                 if s < ue and e > us:
                     flag(sh, "availability", f"Worker is {st.replace('_', ' ')} during this shift")
@@ -484,9 +485,9 @@ def roster_week(db: Session, tenant_id: str, site: Site, start_iso: str | None, 
                 flag(sh, "certification", f"Worker holds no '{sh.role}' skill/certification")
             if w is None or w.home_site != site.site_id:
                 flag(sh, "site_eligibility", "Worker is not eligible at this site")
-        if week_hours > MAX_WEEK_HOURS:
+        if week_hours > max_week:
             conflicts.append({"kind": "max_hours", "severity": "hard", "shift_id": lst[-1].shift_id, "worker_id": wid if can_see_names else None,
-                              "detail": f"{week_hours:.0f}h scheduled exceeds the {MAX_WEEK_HOURS}h limit"})
+                              "detail": f"{week_hours:.0f}h scheduled exceeds the {max_week:g}h limit"})
             shift_flags[lst[-1].shift_id].append("max_hours")
 
     def cost_of(sh, w):
