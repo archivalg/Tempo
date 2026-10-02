@@ -197,27 +197,31 @@ def test_policy_can_be_read_by_anyone_in_scope_and_set_only_by_a_configurer(clie
 
 # ---------------------------------------------------------------- supervisor daily list
 def test_daily_list_surfaces_each_exception(client, kit):
-    now = datetime.now(UTC)
+    """Uses yesterday (site-local) so the result does not depend on the time of day the suite runs."""
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo("Australia/Melbourne")
+    day = (datetime.now(tz).date() - timedelta(days=1))
+    at = lambda h, m=0: datetime(day.year, day.month, day.day, h, m, tzinfo=tz).astimezone(UTC)  # noqa: E731
     with client.session_local() as s:
         for wid in ("wrk_c", "wrk_d", "wrk_e"):
             s.add(Worker(worker_id=wid, tenant_id="ten_test", employment_type="casual", home_site=SITE, status="active"))
         s.flush()
-        mk = lambda w, off: ShiftAssignment(tenant_id="ten_test", worker_id=w, role="picker", zone="z", start_at=now - timedelta(hours=off), end_at=now - timedelta(hours=off) + timedelta(hours=8), status="committed")  # noqa: E731
-        late_sh, ns_sh = mk("wrk_a", 3), mk("wrk_b", 2)
+        late_sh = ShiftAssignment(tenant_id="ten_test", worker_id="wrk_a", role="picker", zone="z", start_at=at(6), end_at=at(14), status="committed")
+        ns_sh = ShiftAssignment(tenant_id="ten_test", worker_id="wrk_b", role="picker", zone="z", start_at=at(6), end_at=at(14), status="committed")
         s.add_all([late_sh, ns_sh])
         s.flush()
-        late_id, ns_id = late_sh.shift_id, ns_sh.shift_id
+        late_id = late_sh.shift_id
         s.commit()
-    with client.session_local() as s:  # wrk_a clocks in 40 minutes late; wrk_c is unrostered and has been in 15h; wrk_d has an excessive closed day
-        a = AttendanceSession(tenant_id="ten_test", worker_id="wrk_a", start_at=now - timedelta(hours=3) + timedelta(minutes=40), approval="pending", source_system="tempo_native", site_id=SITE, state="working", rostered_shift_id=late_id)
-        c = AttendanceSession(tenant_id="ten_test", worker_id="wrk_c", start_at=now - timedelta(hours=15), approval="pending", source_system="tempo_native", site_id=SITE, state="working")
-        d = AttendanceSession(tenant_id="ten_test", worker_id="wrk_d", start_at=now - timedelta(hours=13), end_at=now - timedelta(minutes=10), approval="pending", source_system="tempo_native", site_id=SITE, state="closed")
-        s.add_all([a, c, d])
+    with client.session_local() as s:   # wrk_a clocks in 40 minutes late; wrk_c is unrostered and never clocked out; wrk_d has a 13 hour unrostered day
+        s.add_all([
+            AttendanceSession(tenant_id="ten_test", worker_id="wrk_a", start_at=at(6, 40), end_at=at(14, 1), approval="pending", source_system="tempo_native", site_id=SITE, state="closed", rostered_shift_id=late_id),
+            AttendanceSession(tenant_id="ten_test", worker_id="wrk_c", start_at=at(3), approval="pending", source_system="tempo_native", site_id=SITE, state="working"),
+            AttendanceSession(tenant_id="ten_test", worker_id="wrk_d", start_at=at(2), end_at=at(15), approval="pending", source_system="tempo_native", site_id=SITE, state="closed")])
         s.commit()
-    r = client.get(f"/v1/sites/{SITE}/attendance/daily", headers=supervisor())
+    r = client.get(f"/v1/sites/{SITE}/attendance/daily", params={"date": day.isoformat()}, headers=supervisor())
     assert r.status_code == 200, r.text
     rows = {x["worker_id"]: x for x in r.json()["rows"]}
-    assert "late" in rows["wrk_a"]["flags"] and rows["wrk_a"]["minutes_late"] == 40 and "open" in rows["wrk_a"]["flags"]
+    assert rows["wrk_a"]["flags"] == ["late"] and rows["wrk_a"]["minutes_late"] == 40
     assert rows["wrk_b"]["flags"] == ["no_show"] and rows["wrk_b"]["state"] == "no_show"
     assert {"unrostered", "missing_clock_out"} <= set(rows["wrk_c"]["flags"])
     assert "excessive_hours" in rows["wrk_d"]["flags"] and "unrostered" in rows["wrk_d"]["flags"]
@@ -225,7 +229,7 @@ def test_daily_list_surfaces_each_exception(client, kit):
     assert counts["no_show"] == 1 and counts["late"] == 1 and counts["unrostered"] == 2
     # names only with labour.worker_names; the supervisor role has it, an analyst does not
     assert rows["wrk_b"]["label"] == "Bo Bandicoot"
-    plain = client.get(f"/v1/sites/{SITE}/attendance/daily", headers=context_header(roles=["analyst"], user_id="usr_an")).json()["rows"]
+    plain = client.get(f"/v1/sites/{SITE}/attendance/daily", params={"date": day.isoformat()}, headers=context_header(roles=["analyst"], user_id="usr_an")).json()["rows"]
     assert all("Bandicoot" not in x["label"] for x in plain)
 
 
