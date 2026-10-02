@@ -22,6 +22,8 @@ class Lookups:
     activities: set[str]                          # activities that have a work standard
     customers: set[str]
     workers_by_ref: dict[str, str] = field(default_factory=dict)  # source_ref → worker_id (existing, for "update" vs "create")
+    existing_sites: dict[str, str] = field(default_factory=dict)  # every site of the tenant → its time zone name (to refuse timezone changes)
+    worker_site: dict[str, str] = field(default_factory=dict)     # source_ref → home site of that worker
     activity_units: dict[tuple[str, str], str] = field(default_factory=dict)  # (site, activity) → unit already used
 
 
@@ -88,6 +90,12 @@ def validate_row(contract: Contract, row: dict, lk: Lookups) -> tuple[dict | Non
         except ImportProblem as e:
             if not any(m["field"] == name and m["code"] == "required" for m in msgs):
                 msgs.append(_msg("error", name, "invalid", str(e)))
+    if contract.entity == "availability" and "start_at" in out and "end_at" in out:
+        a, b = datetime.fromisoformat(out["start_at"]), datetime.fromisoformat(out["end_at"])
+        if b <= a:
+            msgs.append(_msg("error", "to", "invalid", "to must be after from"))
+        elif (b - a).days > 60:
+            msgs.append(_msg("error", "to", "invalid", "an entry can cover at most 60 days; split longer leave into several rows"))
     if any(m["level"] == "error" for m in msgs):
         return None, msgs
     return out, msgs
@@ -106,6 +114,69 @@ def _workers(row, lk):
     yield "status", lambda: {"status": _enum(_g(row, "status").lower() or "active", ("active", "inactive"), "status", {"yes": "active", "true": "active", "no": "inactive", "false": "inactive", "terminated": "inactive"})}
     yield "skills", lambda: {"skills": sorted({s.strip().lower() for s in _g(row, "skills").replace(",", ";").split(";") if s.strip()})}
     yield "employee_no", lambda: {"employee_no": _g(row, "employee_no") or None}
+
+
+def _sites(row, lk):
+    def tz():
+        name = _need(_g(row, "timezone"), "timezone")
+        try:
+            ZoneInfo(name)
+        except Exception:  # noqa: BLE001
+            raise ImportProblem(f"'{name}' is not a time zone name. Use a name like Australia/Melbourne.") from None
+        sid = _g(row, "site_id")
+        if sid in lk.existing_sites and lk.existing_sites[sid] != name:
+            raise ImportProblem(f"site '{sid}' already uses {lk.existing_sites[sid]}; a site's time zone cannot be changed by upload because it would move its history")
+        return {"timezone": name}
+
+    def sid():
+        v = _need(_g(row, "site_id"), "site_id")
+        if not __import__("re").fullmatch(r"[A-Za-z0-9_-]{1,40}", v):
+            raise ImportProblem("site_id may use letters, numbers, underscore and hyphen only (up to 40)")
+        return {"site_id": v}
+
+    yield "site_id", sid
+    yield "name", lambda: {"name": _need(_g(row, "name"), "name")[:200]}
+    yield "timezone", tz
+    yield "operating_mode", lambda: {"operating_mode": _enum(_g(row, "operating_mode").lower() or "standalone", ("standalone", "overlay"), "operating_mode")}
+
+
+def _customers(row, lk):
+    yield "customer_id", lambda: {"customer_id": _need(_g(row, "customer_id"), "customer_id")[:80]}
+    yield "name", lambda: {"name": _need(_g(row, "name"), "name")[:200]}
+    yield "status", lambda: {"status": _enum(_g(row, "status").lower() or "active", ("active", "inactive"), "status")}
+
+
+def _availability(row, lk):
+    state: dict = {}
+
+    def ref():
+        r = _need(_g(row, "worker_ref"), "worker_ref")
+        if r not in lk.worker_site:
+            raise ImportProblem(f"worker_ref '{r}' is not a person from your staff upload. Upload staff first.")
+        state["tz"] = lk.sites.get(lk.worker_site[r])
+        if state["tz"] is None:
+            raise ImportProblem("that person's site is not one you may use")
+        return {"worker_ref": r}
+
+    def when(name):
+        def f():
+            if "tz" not in state:
+                raise ImportProblem(f"cannot read {name} until worker_ref is valid")
+            return {("start_at" if name == "from" else "end_at"): parse_moment(_g(row, name), state["tz"]).isoformat()}
+        return f
+
+    yield "worker_ref", ref
+    yield "kind", lambda: {"kind": _enum(_g(row, "kind").lower().replace(" ", "_"), ("unavailable", "leave", "rdo"), "kind", {"annual_leave": "leave", "holiday": "leave", "day_off": "rdo", "rostered_day_off": "rdo", "unavail": "unavailable"})}
+    yield "from", when("from")
+    yield "to", when("to")
+
+
+def _rates(row, lk):
+    yield "employment_type", lambda: {"employment_type": _enum(_g(row, "employment_type").lower().replace(" ", "_").replace("-", "_"), ("permanent", "casual", "labour_hire"), "employment_type", {"full_time": "permanent", "part_time": "permanent", "contractor": "labour_hire", "agency": "labour_hire", "temp": "casual"})}
+    yield "role", lambda: {"role": (_g(row, "role").lower() or "general")[:80]}
+    yield "hourly_rate", lambda: {"hourly_rate": _num(_g(row, "hourly_rate"), "hourly_rate", minimum=0.01, maximum=10000)}
+    yield "overtime_multiplier", lambda: {"overtime_multiplier": _num(_g(row, "overtime_multiplier"), "overtime_multiplier", minimum=1.0, maximum=5.0) if _g(row, "overtime_multiplier") else None}
+    yield "surcharge", lambda: {"surcharge": _num(_g(row, "surcharge"), "surcharge", minimum=0.0, maximum=10000) if _g(row, "surcharge") else None}
 
 
 def _standards(row, lk):
@@ -210,13 +281,14 @@ def _enum(v: str, choices: tuple[str, ...], name: str, aliases: dict[str, str] |
     return v
 
 
-_VALIDATORS = {("master", "workers"): _workers, ("master", "work_standards"): _standards, ("forecast", None): _forecast, ("transactions", None): _transactions, ("bulk", None): _bulk}
+_VALIDATORS = {("master", "workers"): _workers, ("master", "work_standards"): _standards, ("master", "sites"): _sites, ("master", "customers"): _customers, ("master", "availability"): _availability, ("master", "rates"): _rates, ("forecast", None): _forecast, ("transactions", None): _transactions, ("bulk", None): _bulk}
 
 
 def row_key(data_class: str, entity: str | None, n: dict) -> tuple:
     """Identity of a row inside one file, for duplicate detection."""
     if data_class == "master":
-        return (n["worker_ref"],) if entity == "workers" else (n["activity"],)
+        return {"workers": lambda: (n["worker_ref"],), "work_standards": lambda: (n["activity"],), "sites": lambda: (n["site_id"],), "customers": lambda: (n["customer_id"],),
+                "availability": lambda: (n["worker_ref"], n["kind"], n["start_at"]), "rates": lambda: (n["employment_type"], n["role"])}[entity]()
     if data_class == "transactions":
         return (n["source"], n["event_id"], n.get("revision"), n["action"])
     return (n["site"], n["activity"], n["bucket_start"], n["bucket_minutes"], n.get("customer"))

@@ -59,6 +59,30 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("seconds_per_unit", "number", True, "Standard labour seconds for one unit.", "45", synonyms=("seconds", "sec_per_unit", "time_per_unit", "standard")),
         Field("effective_from", "date", False, "Date the standard starts (defaults to today).", "2026-10-01", synonyms=("start_date", "from")),
     ), notes=("A changed value closes the previous standard on the day the new one starts.",)),
+    Contract("master", "sites", "Sites (master data)", "Create or update your sites. Needs the configure permission because it adds places people can be rostered.", ("site_id",), (
+        Field("site_id", "text", True, "Your stable ID for the site; letters, numbers, underscore or hyphen.", "syd_dc_02", synonyms=("site", "id", "code", "site_code")),
+        Field("name", "text", True, "Display name.", "Sydney DC", synonyms=("site_name", "warehouse")),
+        Field("timezone", "text", True, "IANA time zone name. An existing site's time zone cannot be changed by upload.", "Australia/Sydney", synonyms=("time_zone", "tz")),
+        Field("operating_mode", "enum", False, "standalone (default): Tempo is the roster and attendance system. overlay: another system is.", "standalone", ("standalone", "overlay"), ("mode",)),
+    ), notes=("The person uploading is given access to a new site. Give other people access in Administration.",)),
+    Contract("master", "customers", "Customers (master data)", "The customers whose work your sites handle.", ("customer_id",), (
+        Field("customer_id", "text", True, "Your stable customer ID.", "cust_A", synonyms=("customer", "id", "code", "account")),
+        Field("name", "text", True, "Customer name.", "Acme Retail", synonyms=("customer_name",)),
+        Field("status", "enum", False, "Defaults to active.", "active", ("active", "inactive")),
+    )),
+    Contract("master", "availability", "Availability and leave (master data)", "Times a person cannot be rostered: unavailable, leave or a rostered day off. Rows are matched to people by worker_ref from the staff upload.", ("worker_ref", "kind", "from"), (
+        Field("worker_ref", "text", True, "The worker_ref used in the staff upload.", "E1042", synonyms=("employee_id", "staff_id", "id", "worker_id")),
+        Field("kind", "enum", True, "What kind of entry.", "leave", ("unavailable", "leave", "rdo"), ("type", "status")),
+        Field("from", "datetime", True, "Start. ISO 8601 with offset, or site-local time.", "2026-10-12 00:00", synonyms=("start", "start_at", "from_date")),
+        Field("to", "datetime", True, "End (after the start; at most 60 days).", "2026-10-16 00:00", synonyms=("end", "end_at", "to_date")),
+    ), notes=("Uploading the same entry again changes nothing. Entries created by an upload can be undone as a batch.",)),
+    Contract("master", "rates", "Labour rates (master data)", "Hourly cost per employment type and role, used for planned cost. Without a rate, cost is shown as unavailable, never as zero.", ("employment_type", "role"), (
+        Field("employment_type", "enum", True, "How the person is engaged.", "casual", ("permanent", "casual", "labour_hire"), ("type", "labour_type")),
+        Field("role", "text", False, "Role or skill the rate applies to; blank or general applies to all roles.", "picker", synonyms=("skill", "position")),
+        Field("hourly_rate", "number", True, "Cost per paid hour (AUD), as you want it used for planning.", "42.50", synonyms=("rate", "cost_per_hour", "hourly")),
+        Field("overtime_multiplier", "number", False, "Overtime multiplier, for example 1.5.", "1.5", synonyms=("overtime", "ot_multiplier")),
+        Field("surcharge", "number", False, "Extra per hour, for example an agency margin.", "8", synonyms=("agency_surcharge", "margin")),
+    ), notes=("Rates are indicative planning inputs, not a pay or award calculation.",)),
     Contract("forecast", None, "Forecast workload", "Expected units per activity and period. Customer-supplied forecasts are versioned and shown with their origin.", ("site", "activity", "period_start", "grain"), (
         SITE, ACTIVITY, PERIOD_START, GRAIN,
         Field("units", "number", True, "Expected units in the period.", "26500", synonyms=("forecast", "volume", "quantity", "expected")),
@@ -92,7 +116,7 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
     ), notes=("Replacing a slice needs its range stated; an ambiguous replacement is refused.",)),
 )}
 
-DATA_CLASSES = {"master": ("workers", "work_standards"), "forecast": (None,), "transactions": (None,), "bulk": (None,)}
+DATA_CLASSES = {"master": ("workers", "work_standards", "sites", "customers", "availability", "rates"), "forecast": (None,), "transactions": (None,), "bulk": (None,)}
 
 
 def contract_for(data_class: str, entity: str | None) -> Contract:

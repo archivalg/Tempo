@@ -47,7 +47,9 @@ def lookups(db: Session, ctx: RequestContext) -> V.Lookups:
     acts = {w.activity for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id)) if w.effective_to is None or _aware(w.effective_to) > now}
     customers = {c.customer_id for c in db.scalars(select(Customer).where(Customer.tenant_id == ctx.tenant_id))}
     refs = {w.source_ref: w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
-    return V.Lookups(sites=sites, activities=acts, customers=customers, workers_by_ref=refs)
+    existing = {x.site_id: x.timezone for x in db.scalars(select(Site).where(Site.tenant_id == ctx.tenant_id))}
+    wsite = {w.source_ref: w.home_site for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
+    return V.Lookups(sites=sites, activities=acts, customers=customers, workers_by_ref=refs, existing_sites=existing, worker_site=wsite)
 
 
 # --------------------------------------------------------------------------------------------------------------------- options
@@ -151,6 +153,33 @@ def _good(store: list[ImportRow]) -> list[ImportRow]:
     return [r for r in store if r.status != "error" and r.normalised]
 
 
+def _master_preview(db: Session, ctx: RequestContext, entity: str, good: list[ImportRow], lk: V.Lookups, s: dict) -> None:
+    from app.models.canonical import Availability, LabourCostRule
+    if entity == "sites":
+        if not ctx.has_permission("labour.configure"):
+            s["blocking"].append("Adding or changing sites needs the configure permission (a tenant administrator).")
+        have = lk.existing_sites
+        for r in good:
+            s["updates" if r.normalised["site_id"] in have else "creates"] += 1
+        s["notes"].append("You will be given access to any new site. Give others access in Administration.")
+    elif entity == "customers":
+        have = set(lk.customers)
+        for r in good:
+            s["updates" if r.normalised["customer_id"] in have else "creates"] += 1
+    elif entity == "rates":
+        cur = {(x.labour_type, x.role): x for x in db.scalars(select(LabourCostRule).where(LabourCostRule.tenant_id == ctx.tenant_id))}
+        for r in good:
+            c = cur.get((r.normalised["employment_type"], r.normalised["role"]))
+            s["creates" if c is None else ("unchanged" if abs(float(c.rate) - r.normalised["hourly_rate"]) < 1e-9 else "updates")] += 1
+    else:
+        wid = lk.workers_by_ref
+        have = {(a.worker_id, a.status, _aware(a.interval_start)) for a in db.scalars(select(Availability).where(Availability.tenant_id == ctx.tenant_id, Availability.worker_id.in_(list(wid.values()) or [""])))}
+        for r in good:
+            n = r.normalised
+            key = (wid[n["worker_ref"]], n["kind"], datetime.fromisoformat(n["start_at"]))
+            s["unchanged" if key in have else "creates"] += 1
+
+
 def _preview(db: Session, ctx: RequestContext, batch: ImportBatch, contract: Contract, store: list[ImportRow], opts: dict, lk: V.Lookups) -> dict:
     """What applying would do, plus anything that stops it. Pure reads."""
     s: dict = {"options": opts, "blocking": [], "notes": [], "creates": 0, "updates": 0, "unchanged": 0}
@@ -160,6 +189,8 @@ def _preview(db: Session, ctx: RequestContext, batch: ImportBatch, contract: Con
         for r in good:
             s["updates" if r.normalised["worker_ref"] in lk.workers_by_ref else "creates"] += 1
         s["unknown_skill_note"] = "Skills are added to the person; none are removed."
+    elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates"):
+        _master_preview(db, ctx, batch.entity, good, lk, s)
     elif dc == "master":
         cur = {w.activity: w for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id, WorkStandard.effective_to.is_(None)))}
         for r in good:

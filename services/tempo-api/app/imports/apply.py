@@ -13,7 +13,7 @@ from app.imports import validate as V
 from app.imports.engine import BULK, TXN, _aware, _good, _now, _plan_events, lookups
 from app.imports.parse import ImportProblem, local_day_bounds, parse_local_date
 from app.models.canonical import DemandBucket, SkillCertification, Worker, WorkStandard
-from app.models.directory import Site, WorkerPerson
+from app.models.directory import Customer, Site, WorkerPerson
 from app.models.imports import ActualsPolicy, ImportBatch, ImportRow, SuppliedForecast, WorkloadEvent
 from app.models.rosters import RosterEvent, RosterVersion
 from app.schemas.tenancy import RequestContext
@@ -51,6 +51,8 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
     dc = batch.data_class
     if dc == "master" and batch.entity == "workers":
         result = _apply_workers(db, ctx, good)
+    elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates"):
+        result = {"sites": _apply_sites, "customers": _apply_customers, "availability": _apply_availability, "rates": _apply_rates}[batch.entity](db, ctx, batch, good)
     elif dc == "master":
         result = _apply_standards(db, ctx, good)
     elif dc == "forecast":
@@ -90,6 +92,86 @@ def _apply_workers(db: Session, ctx: RequestContext, good: list[ImportRow]) -> d
                 db.add(SkillCertification(tenant_id=ctx.tenant_id, worker_id=w.worker_id, skill_code=code, valid_from=_now()))
         r.applied = True
     return {"created": created, "updated": updated}
+
+
+def _apply_sites(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.db import bind_sites
+    from app.models.identity import TempoUser, UserSiteGrant
+    if not ctx.has_permission("labour.configure"):
+        raise ImportProblem("adding or changing sites needs the configure permission")
+    granted_user = db.get(TempoUser, ctx.user_id)
+    created = updated = 0
+    db.execute(__import__('sqlalchemy').text("SELECT set_config('app.site_scope', '*', true)"))   # a new site is by definition outside the caller's current site scope; this path is gated by the permission above
+    try:
+        for r in good:
+            n = r.normalised
+            x = db.get(Site, (ctx.tenant_id, n["site_id"]))
+            if x is None:
+                db.add(Site(tenant_id=ctx.tenant_id, site_id=n["site_id"], name=n["name"], timezone=n["timezone"], operating_mode=n["operating_mode"]))
+                if granted_user is not None:
+                    db.flush()
+                    db.add(UserSiteGrant(user_id=ctx.user_id, tenant_id=ctx.tenant_id, site_id=n["site_id"]))
+                created += 1
+            else:
+                x.name, x.operating_mode = n["name"], n["operating_mode"]
+                updated += 1
+            r.applied = True
+        db.flush()
+    finally:
+        bind_sites(db, list(ctx.site_ids) + [r.normalised["site_id"] for r in good if r.applied])
+    return {"created": created, "updated": updated}
+
+
+def _apply_customers(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        c = db.get(Customer, (ctx.tenant_id, n["customer_id"]))
+        if c is None:
+            db.add(Customer(tenant_id=ctx.tenant_id, customer_id=n["customer_id"], name=n["name"], status=n["status"]))
+            created += 1
+        else:
+            c.name, c.status = n["name"], n["status"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_rates(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.canonical import LabourCostRule
+    created = updated = same = 0
+    for r in good:
+        n = r.normalised
+        c = db.scalar(select(LabourCostRule).where(LabourCostRule.tenant_id == ctx.tenant_id, LabourCostRule.labour_type == n["employment_type"], LabourCostRule.role == n["role"]))
+        vals = dict(rate=f"{n['hourly_rate']:.2f}", overtime_multiplier=None if n["overtime_multiplier"] is None else f"{n['overtime_multiplier']:g}", surcharge=None if n["surcharge"] is None else f"{n['surcharge']:.2f}")
+        if c is None:
+            db.add(LabourCostRule(tenant_id=ctx.tenant_id, labour_type=n["employment_type"], role=n["role"], **vals))
+            created += 1
+        elif (c.rate, c.overtime_multiplier, c.surcharge) == (vals["rate"], vals["overtime_multiplier"], vals["surcharge"]):
+            same += 1
+            continue
+        else:
+            for k, v in vals.items():
+                setattr(c, k, v)
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated, "unchanged": same}
+
+
+def _apply_availability(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.canonical import Availability
+    refs = {w.source_ref: w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
+    created = same = 0
+    for r in good:
+        n = r.normalised
+        wid, st = refs[n["worker_ref"]], datetime.fromisoformat(n["start_at"])
+        if db.scalar(select(Availability.id).where(Availability.tenant_id == ctx.tenant_id, Availability.worker_id == wid, Availability.status == n["kind"], Availability.interval_start == st).limit(1)):
+            same += 1
+            continue
+        db.add(Availability(tenant_id=ctx.tenant_id, worker_id=wid, interval_start=st, interval_end=datetime.fromisoformat(n["end_at"]), status=n["kind"], source_system="tempo_import", source_ref=batch.id))
+        created += 1
+        r.applied = True
+    return {"created": created, "unchanged": same}
 
 
 def _apply_standards(db: Session, ctx: RequestContext, good: list[ImportRow]) -> dict:
@@ -292,8 +374,16 @@ def undo_batch(db: Session, ctx: RequestContext, batch: ImportBatch) -> ImportBa
         return batch
     if batch.state != "applied":
         raise ImportProblem(f"only an applied batch can be undone (this one is {batch.state})")
+    if batch.data_class == "master" and batch.entity == "availability":
+        from app.models.canonical import Availability
+        for a in db.scalars(select(Availability).where(Availability.tenant_id == ctx.tenant_id, Availability.source_ref == batch.id, Availability.source_system == "tempo_import")):
+            db.delete(a)
+        batch.state, batch.undone_by, batch.undone_at = "undone", ctx.user_id, _now()
+        auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="import.undo", decision="allowed", session_ref=batch.id, correlation_id=ctx.correlation_id)
+        db.flush()
+        return batch
     if batch.data_class == "master":
-        raise ImportProblem("staff and work-standard imports cannot be undone automatically — correct them by uploading a fixed file")
+        raise ImportProblem("master-data imports other than availability cannot be undone automatically — correct them by uploading a fixed file")
     later = db.scalar(select(ImportBatch.id).where(ImportBatch.tenant_id == ctx.tenant_id, ImportBatch.data_class == batch.data_class, ImportBatch.state == "applied",
                                                    ImportBatch.applied_at > batch.applied_at).limit(1))
     if later:

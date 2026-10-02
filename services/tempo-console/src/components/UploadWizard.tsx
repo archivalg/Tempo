@@ -4,9 +4,10 @@ import { Banner, Status } from './ui'
 import { fmtNum } from '../lib/format'
 
 const key = (c: ContractDef) => `${c.data_class}|${c.entity ?? ''}`
-const ORDER = ['master|workers', 'master|work_standards', 'forecast|', 'bulk|', 'transactions|']
+const ORDER = ['master|sites', 'master|customers', 'master|workers', 'master|availability', 'master|work_standards', 'master|rates', 'forecast|', 'bulk|', 'transactions|']
 const HINT: Record<string, string> = {
-  'master|workers': 'Start here: who works for you.', 'master|work_standards': 'Needed before any workload can name an activity.', 'forecast|': 'What you expect to be processed.',
+  'master|sites': 'Your warehouses. Needs an administrator.', 'master|customers': 'The customers whose work you handle.', 'master|availability': 'Leave, days off and times people cannot work. Upload staff first.',
+  'master|rates': 'Hourly cost per employment type and role, for planned cost.', 'master|workers': 'Start here: who works for you.', 'master|work_standards': 'Needed before any workload can name an activity.', 'forecast|': 'What you expect to be processed.',
   'bulk|': 'Daily or hourly totals of what was processed.', 'transactions|': 'One row per event, when your system can send them.',
 }
 

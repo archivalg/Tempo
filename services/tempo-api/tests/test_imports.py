@@ -77,6 +77,7 @@ def test_every_template_example_row_passes_its_own_validator(client):
         lk = E.lookups(db, RequestContext(tenant_id="ten_test", site_ids=[MEL, SYD], user_id="u", roles=[], purpose="t", correlation_id="c"))
     lk.sites["mel_dc_01"] = lk.sites[MEL]
     lk.customers.add("cust_A")
+    lk.worker_site["E1042"] = MEL
     for key, c in CONTRACTS.items():
         row = next(csv.DictReader(io.StringIO(template_csv(c))))
         n, msgs = V.validate_row(c, row, lk)
@@ -471,3 +472,77 @@ def test_setup_checklist_tells_a_new_customer_what_to_do_next(client):
     client.post("/v1/imports/batches", json={"data_class": "bulk", "apply": True, "rows": bulk(["2026-09-14"])}, headers=h)
     c = client.get("/v1/setup/checklist", headers=h).json()
     assert {s["key"]: s["state"] for s in c["steps"]}["staff"] == "done" and c["next"] == "roster" and c["done"] == 5 and not c["complete"]
+
+
+# ------------------------------------------------------------------------------------------------ sites, customers, availability, rates
+def _run(client, h, entity, header, rows, **kw):
+    b = stage(client, h, "master", csv_text(header, rows), entity=entity, **kw)
+    assert b.status_code in (200, 201), b.text
+    return b.json()
+
+
+def _apply(client, h, b):
+    return client.post(f"/v1/imports/batches/{b['id']}/apply", headers=h)
+
+
+def test_sites_need_configure_get_granted_to_the_uploader_and_cannot_change_timezone(client):
+    seed(client)
+    rows = [["bne_dc_03", "Brisbane DC", "Australia/Brisbane", "standalone"], ["bad", "Bad", "Mars/Olympus", ""]]
+    head = ["site_id", "name", "timezone", "operating_mode"]
+    pl = context_header(roles=["operations_manager"], user_id="usr_ops", site_ids=[MEL, SYD])   # may import, may not configure
+    held = _run(client, pl, "sites", head, rows[:1])
+    assert held["summary"]["blocking"] and _apply(client, pl, held).status_code == 422                               # a planner may not add sites
+    b = _run(client, admin(), "sites", head, rows)
+    assert b["error_rows"] == 1 and "not a time zone name" in json.dumps(b)
+    done = _apply(client, admin(), b)
+    assert done.status_code == 422                                                                                  # partial needs a choice
+    ok = client.post(f"/v1/imports/batches/{b['id']}/apply", json={"accept_partial": True}, headers=admin())
+    assert ok.status_code == 200 and ok.json()["summary"]["applied"] == {"created": 1, "updated": 0}
+    with client.session_local() as s:
+        assert s.get(Site, ("ten_test", "bne_dc_03")).timezone == "Australia/Brisbane"
+    again = _run(client, admin(), "sites", head, [["bne_dc_03", "Brisbane DC", "Australia/Sydney", ""]])
+    assert again["error_rows"] == 1 and "cannot be changed by upload" in json.dumps(again)
+    renamed = _run(client, admin(), "sites", head, [["bne_dc_03", "Brisbane Hub", "Australia/Brisbane", "overlay"]])
+    assert _apply(client, admin(), renamed).json()["summary"]["applied"]["updated"] == 1
+
+
+def test_customers_and_rates_upsert_and_rates_feed_planned_cost_inputs(client):
+    seed(client)
+    h = admin()
+    c = _run(client, h, "customers", ["customer_id", "name", "status"], [["cust_B", "Beta Foods", ""], ["cust_A", "Alpha", "inactive"]])
+    assert _apply(client, h, c).json()["summary"]["applied"] == {"created": 1, "updated": 1}
+    r = _run(client, h, "rates", ["employment_type", "role", "hourly_rate", "overtime_multiplier", "surcharge"],
+             [["casual", "picker", "42.5", "1.5", ""], ["labour hire", "", "55", "", "8"], ["casual", "picker", "-1", "", ""]])
+    assert r["error_rows"] == 1
+    assert client.post(f"/v1/imports/batches/{r['id']}/apply", json={"accept_partial": True}, headers=h).json()["summary"]["applied"]["created"] == 2
+    from app.models.canonical import LabourCostRule
+    with client.session_local() as s:
+        got = {(x.labour_type, x.role): (x.rate, x.overtime_multiplier, x.surcharge) for x in s.scalars(select(LabourCostRule))}
+        assert got == {("casual", "picker"): ("42.50", "1.5", None), ("labour_hire", "general"): ("55.00", None, "8.00")}
+    r2 = _run(client, h, "rates", ["employment_type", "role", "hourly_rate", "overtime_multiplier"], [["casual", "picker", "42.5", "1.5"]])
+    assert r2["summary"]["unchanged"] == 1
+    assert _apply(client, h, r2).json()["summary"]["applied"]["unchanged"] == 1
+
+
+def test_availability_import_matches_people_is_idempotent_blocks_rosters_and_can_be_undone(client):
+    seed(client)
+    h = admin()
+    staff = _run(client, h, "workers", ["worker_ref", "name", "site", "employment_type", "status", "skills", "employee_no"], [["E1", "Sam", MEL, "casual", "active", "picker", ""]])
+    _apply(client, h, staff)
+    head = ["worker_ref", "kind", "from", "to"]
+    rows = [["E1", "leave", "2026-10-12 00:00", "2026-10-16 00:00"], ["E9", "leave", "2026-10-12", "2026-10-13"], ["E1", "rdo", "2026-10-20 00:00", "2026-10-19 00:00"]]
+    b = _run(client, h, "availability", head, rows)
+    msgs = json.dumps(b)
+    assert b["error_rows"] == 2 and "Upload staff first" in msgs and "to must be after from" in msgs
+    assert client.post(f"/v1/imports/batches/{b['id']}/apply", json={"accept_partial": True}, headers=h).json()["summary"]["applied"] == {"created": 1, "unchanged": 0}
+    from app.models.canonical import Availability
+    with client.session_local() as s:
+        a = s.scalars(select(Availability)).one()
+        assert a.status == "leave" and a.interval_start.isoformat().startswith("2026-10-11T13:00") and a.source_system == "tempo_import"   # Melbourne midnight in UTC
+    b2 = _run(client, h, "availability", head, rows[:1])
+    assert b2["summary"]["unchanged"] == 1
+    assert _apply(client, h, b2).json()["summary"]["applied"] == {"created": 0, "unchanged": 1}
+    undo = client.post(f"/v1/imports/batches/{b['id']}/undo", headers=h)
+    assert undo.status_code == 200 and undo.json()["state"] == "undone"
+    with client.session_local() as s:
+        assert s.scalars(select(Availability)).all() == []

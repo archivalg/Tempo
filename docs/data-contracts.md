@@ -37,6 +37,65 @@ Seconds of labour per unit of work, per activity. Needed before forecasts and ac
 
 - A changed value closes the previous standard on the day the new one starts.
 
+## Sites (master data)
+
+Create or update your sites. Needs the configure permission because it adds places people can be rostered.
+
+`data_class`: `master` · `entity`: `sites` · key: `site_id`
+
+| Field | Type | Required | Meaning | Example |
+|---|---|---|---|---|
+| `site_id` | text | yes | Your stable ID for the site; letters, numbers, underscore or hyphen. | `syd_dc_02` |
+| `name` | text | yes | Display name. | `Sydney DC` |
+| `timezone` | text | yes | IANA time zone name. An existing site's time zone cannot be changed by upload. | `Australia/Sydney` |
+| `operating_mode` | enum (standalone/overlay) | no | standalone (default): Tempo is the roster and attendance system. overlay: another system is. | `standalone` |
+
+- The person uploading is given access to a new site. Give other people access in Administration.
+
+## Customers (master data)
+
+The customers whose work your sites handle.
+
+`data_class`: `master` · `entity`: `customers` · key: `customer_id`
+
+| Field | Type | Required | Meaning | Example |
+|---|---|---|---|---|
+| `customer_id` | text | yes | Your stable customer ID. | `cust_A` |
+| `name` | text | yes | Customer name. | `Acme Retail` |
+| `status` | enum (active/inactive) | no | Defaults to active. | `active` |
+
+
+## Availability and leave (master data)
+
+Times a person cannot be rostered: unavailable, leave or a rostered day off. Rows are matched to people by worker_ref from the staff upload.
+
+`data_class`: `master` · `entity`: `availability` · key: `worker_ref`, `kind`, `from`
+
+| Field | Type | Required | Meaning | Example |
+|---|---|---|---|---|
+| `worker_ref` | text | yes | The worker_ref used in the staff upload. | `E1042` |
+| `kind` | enum (unavailable/leave/rdo) | yes | What kind of entry. | `leave` |
+| `from` | datetime | yes | Start. ISO 8601 with offset, or site-local time. | `2026-10-12 00:00` |
+| `to` | datetime | yes | End (after the start; at most 60 days). | `2026-10-16 00:00` |
+
+- Uploading the same entry again changes nothing. Entries created by an upload can be undone as a batch.
+
+## Labour rates (master data)
+
+Hourly cost per employment type and role, used for planned cost. Without a rate, cost is shown as unavailable, never as zero.
+
+`data_class`: `master` · `entity`: `rates` · key: `employment_type`, `role`
+
+| Field | Type | Required | Meaning | Example |
+|---|---|---|---|---|
+| `employment_type` | enum (permanent/casual/labour_hire) | yes | How the person is engaged. | `casual` |
+| `role` | text | no | Role or skill the rate applies to; blank or general applies to all roles. | `picker` |
+| `hourly_rate` | number | yes | Cost per paid hour (AUD), as you want it used for planning. | `42.50` |
+| `overtime_multiplier` | number | no | Overtime multiplier, for example 1.5. | `1.5` |
+| `surcharge` | number | no | Extra per hour, for example an agency margin. | `8` |
+
+- Rates are indicative planning inputs, not a pay or award calculation.
+
 ## Forecast workload
 
 Expected units per activity and period. Customer-supplied forecasts are versioned and shown with their origin.
