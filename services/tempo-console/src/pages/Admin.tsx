@@ -5,6 +5,7 @@ import { useApi } from '../hooks/useApi'
 import { useSite } from '../components/AppShell'
 import { fmtTime } from '../lib/format'
 import { inviteUser, listUsers, userAction } from '../api/session'
+import { PlanAllowance } from '../components/PlanAllowance'
 import { useTempoContext } from '../context/TempoContextProvider'
 
 interface Device { device_id: string; name: string | null; site_ids: string[]; status: string; enrolled_at: string | null; last_seen_at: string | null; enrolment_code: string | null }
@@ -24,9 +25,20 @@ export default function AdminPage() {
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not create the device') }
   }
   async function disable(id: string) { await apiRequest(`/devices/${id}/disable`, { method: 'POST' }); setNonce((n) => n + 1) }
+  const devices = q.data ?? []
+  const activeDevices = devices.filter((d) => d.status === 'active').length
+  const pendingDevices = devices.filter((d) => d.status === 'pending').length
+  const staleDevices = devices.filter((d) => d.status !== 'active' && d.status !== 'pending').length
   return (
     <>
       <PageHead title="Administration" sub="Kiosk devices for the selected site" />
+      <PlanAllowance />
+      <section className="tp-insight-strip" aria-label="Administration overview">
+        <div className="tp-insight"><b>Active kiosks</b><div className="big">{q.data ? activeDevices : '—'}</div><span className="tp-muted">server-enrolled devices for accessible sites</span></div>
+        <div className="tp-insight"><b>Pending enrolment</b><div className="big">{q.data ? pendingDevices : '—'}</div><span className="tp-muted">codes are shown once and expire</span></div>
+        <div className="tp-insight"><b>Disabled or stale</b><div className="big">{q.data ? staleDevices : '—'}</div><span className="tp-muted">review before pilot device testing</span></div>
+        <div className="tp-insight"><b>Site grants</b><div className="big">{sites.length}</div><span className="tp-muted">admin controls stay inside authorised sites</span></div>
+      </section>
       {err && <Banner tone="bad" title="Error">{err}</Banner>}
       {code && <Banner tone="warn" title={`Enrolment code for ${code.device} — shown once`}><code style={{ fontSize: 15 }}>{code.code}</code><div>Enter it on the kiosk at /kiosk within 15 minutes. It cannot be shown again.</div></Banner>}
       <section className="tp-card"><header><h2>Kiosk devices</h2></header>

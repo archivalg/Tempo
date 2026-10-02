@@ -153,3 +153,17 @@ Engineering evidence only. Acceptance needs a warehouse manager completing a wee
 Added after the first slice: **shift definitions** (names, start/end hours, overnight allowed) edited in *Planning rules* and used by the generator (`test_shift_calendar_is_configured_validated_and_used_by_the_generator`); **availability, leave and day-off entry** from the roster board (`/v1/sites/{site}/availability`, audited; entries from other systems are read-only; they are hard conflicts); **report drill-through** (a variance-report day opens that day's attendance list). Browser tests added.
 
 Not done in M3: per-shift headcount shares in the UI, skills/site eligibility editing (skills still come from the staff import), rate and paid/unpaid explanation changes, the measured-performance target (the existing capacity test passes but no target has been agreed), and a manager walk-through. Existing from earlier work and unchanged: variance report (planned, attended, payable, late/no-show, units per labour hour, estimate vs confirmed labels), CSV export, rolling forecast error.
+
+## M6 — plans, manual tenants, allowances, platform overview (2 Oct 2026) — status: **partial, not accepted**
+Covers M6-PLAN (model and enforcement), M6-MANUAL and part of M6-ADMIN. Everything else in M6 is **not built**: Stripe, the self-service onboarding wizard, emails, separate application/API origins, the help library and API reference, the platform sign-in and "open tenant for support" console, and M6-OPS.
+
+| Roadmap item | Evidence | Gap |
+|---|---|---|
+| Versioned plan/entitlement definitions; nothing treated as approved prematurely | `plan_definition` seeded with the four indicative tiers as **draft** (price shown as indicative, feature matrix empty); changes are new draft versions; approval is a separate, audited step needing a different platform admin when there are several. `tests/test_subscriptions.py` | The feature matrix, final prices, taxes, annual terms and workforce allowances per tier are not agreed, so no shipped feature is gated by plan |
+| Active-worker measurement and allowance shown to the customer | Defined in `app/core/subscription.py` and on screen: active workers today, once across sites, agency included, inactive excluded; bands 250 / 500 / 1,000 / 1,000+; warning at 90% and over, never blocking and never charging | Period/site-attribution rules for billing are not decided; the count is a live snapshot, not a billing-period measure |
+| Site count enforced server-side | Adding a site beyond the licensed number is refused with a "contact us" message; tenants with no plan record are *unmanaged* and unlimited, and say so | Only site creation is gated |
+| Platform-created tenant without Stripe | `POST /v1/platform/tenants` accepts a manual subscription (kind: contract, pilot, demo or complimentary; reason, reference, expiry); a database check refuses a manual row carrying Stripe IDs; a request for `stripe` is refused with "not connected"; draft plans only for pilot/demo; every change is an event with before/after | Conversion to Stripe, Stripe-event isolation tests (no Stripe code exists), the shared onboarding wizard |
+| Platform overview/search | `GET /v1/platform/tenant-overview?q=` (lifecycle, plan, billing source, sites and workers in use vs allowance; counts only) | No console page: the platform principal has no sign-in in the console yet, so the existing Platform admin page remains a labelled shell |
+| Customer view | Administration → *Plan & allowance* card; browser test | |
+
+Migration `c5d6e7f8a9b0`.

@@ -64,3 +64,10 @@ test('a report day links to that day\'s attendance list', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Attendance & timesheets' })).toBeVisible()
   await expect(page.getByText('Late means more than')).toBeVisible()
 })
+
+test('administration shows the organisation\'s plan state honestly (the demo tenant has no plan recorded)', async ({ page }) => {
+  await signIn(page, /Demo Tenant Admin/)
+  await page.goto('/admin')
+  await expect(page.getByText('No plan recorded')).toBeVisible()
+  await expect(page.getByText(/no commercial limits are applied/)).toBeVisible()
+})

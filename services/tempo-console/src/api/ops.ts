@@ -158,3 +158,7 @@ export interface AvailabilityEntry { id: string; worker_id: string; label: strin
 export const getAvailability = (site: string, start: string, days = 14) => apiRequest<AvailabilityEntry[]>(`/sites/${site}/availability?start=${start}&days=${days}`)
 export const addAvailability = (site: string, body: { worker_id: string; start_at: string; end_at: string; status: string }) => apiRequest(`/sites/${site}/availability`, { method: 'POST', body })
 export const removeAvailability = (id: string) => apiRequest(`/availability/${id}`, { method: 'DELETE' })
+
+// ---- plan and allowance (M6) ----
+export interface MyPlan { managed: boolean; message?: string; plan?: { key: string; version: number; name: string; approved: boolean }; billing_source?: string; manual_kind?: string | null; status?: string; expires_at?: string | null; licensed_sites?: number; sites_in_use: number; worker_band_label?: string; worker_allowance?: number | null; active_workers: number; allowance_state?: 'ok' | 'near' | 'over'; allowance_message?: string; measurement?: string; history?: { at: string; action: string; reason: string }[] }
+export const getMyPlan = () => apiRequest<MyPlan>('/billing/plan')

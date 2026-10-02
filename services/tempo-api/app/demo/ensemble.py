@@ -90,7 +90,7 @@ def status(db: Session) -> dict | None:
 
 
 # --------------------------------------------------------------------------- reset
-_APPEND_ONLY = {"attendance_punch", "attendance_adjustment", "attendance_revision", "demand_override", "notification", "roster_handoff", "import_batch", "import_row", "workload_event", "supplied_forecast", "security_audit_event", "audit_record", "event_record", "roster_event"}
+_APPEND_ONLY = {"subscription_event", "attendance_punch", "attendance_adjustment", "attendance_revision", "demand_override", "notification", "roster_handoff", "import_batch", "import_row", "workload_event", "supplied_forecast", "security_audit_event", "audit_record", "event_record", "roster_event"}
 
 
 SAFE_RESET_DATABASES = {"tempo_e2e", "tempo_test"}

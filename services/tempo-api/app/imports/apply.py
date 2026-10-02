@@ -101,6 +101,8 @@ def _apply_sites(db: Session, ctx: RequestContext, batch: ImportBatch, good: lis
         raise ImportProblem("adding or changing sites needs the configure permission")
     granted_user = db.get(TempoUser, ctx.user_id)
     created = updated = 0
+    from app.core import subscription as _sub
+    _sub.require_site_capacity(db, ctx.tenant_id, sum(1 for r in good if db.get(Site, (ctx.tenant_id, r.normalised["site_id"])) is None))
     db.execute(__import__('sqlalchemy').text("SELECT set_config('app.site_scope', '*', true)"))   # a new site is by definition outside the caller's current site scope; this path is gated by the permission above
     try:
         for r in good:

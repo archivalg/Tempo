@@ -23,6 +23,8 @@ from app.models.identity import (
     UserRoleAssignment, UserSiteGrant,
 )
 
+from app.api.v1.platform_billing import SubscriptionIn, apply_subscription  # noqa: E402
+
 router = APIRouter(prefix="/platform", tags=["platform"])
 MAX_SUPPORT_GRANT = timedelta(hours=8)
 _SLUG = re.compile(r"^[a-z][a-z0-9_]{2,40}$")
@@ -63,6 +65,7 @@ class TenantCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     first_admin: Identity
     initial_site_ids: list[str] = Field(min_length=1, max_length=50)
+    subscription: "SubscriptionIn | None" = None   # a manual plan/entitlement recorded at creation (no Stripe checkout needed)
 
 
 @router.get("/tenants")
@@ -79,6 +82,8 @@ def create_tenant(body: TenantCreate, request: Request, p: auth.ResolvedPrincipa
         raise ScopeError("tenant_id must be lower-case letters, digits or underscores")
     if db.get(Tenant, body.tenant_id) is not None:
         raise ScopeError("tenant already exists")
+    if body.subscription is not None and body.subscription.licensed_sites < len(set(body.initial_site_ids)):
+        raise ScopeError("licensed_sites cannot be fewer than the initial sites")
     db.add(Tenant(tenant_id=body.tenant_id, name=body.name, created_by=p.user_id))
     db.flush()
     from app.db import bind_tenant  # writes to tenant-owned tables need the tenant context
@@ -88,6 +93,9 @@ def create_tenant(body: TenantCreate, request: Request, p: auth.ResolvedPrincipa
     db.add(UserRoleAssignment(user_id=admin.user_id, tenant_id=body.tenant_id, role="tenant_admin"))
     for site in sorted(set(body.initial_site_ids)):
         db.add(UserSiteGrant(user_id=admin.user_id, tenant_id=body.tenant_id, site_id=site))
+    if body.subscription is not None:
+        apply_subscription(db, body.tenant_id, body.subscription, p.user_id)
+        bind_tenant(db, body.tenant_id)
     db.flush()
     from app.db import begin_auth_lookup
     begin_auth_lookup(db)
@@ -111,6 +119,12 @@ def set_tenant_status(tenant_id: str, status: str, request: Request, p: auth.Res
     if t is None:
         raise RunNotFound("tenant not found")
     t.status = status
+    from app.core import subscription as _sub
+    from app.db import begin_auth_lookup as _bal, bind_tenant as _bt
+    _bt(db, tenant_id)
+    if db.get(_sub.TenantSubscription, tenant_id) is not None:
+        _sub.event(db, tenant_id, p.user_id, f"tenant_{status}", "", {})
+    _bal(db)
     auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, tenant_id=tenant_id, action=f"platform.tenant_{status}",
                decision="allowed", correlation_id=_cid(request))
     return {"tenant_id": tenant_id, "status": status}
