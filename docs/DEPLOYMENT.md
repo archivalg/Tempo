@@ -7,11 +7,11 @@ Update it whenever the deployed stack changes. Last verified: **2 October 2026**
 
 | Item | Value |
 |---|---|
-| Source revision of the running code | `29303db` on `build/tempo-standalone-gate1` (images built 2 Oct 2026 from a clean checkout of that commit, so uncommitted working-tree edits were not deployed). |
+| Source revision of the running code | `0dc0200` on `build/tempo-standalone-gate1` (images built 2 Oct 2026 from a clean checkout of that commit, so uncommitted working-tree edits were not deployed). |
 | Backend | container `tempo_backend`, image `tempo-api:local`, host port **8007** → 8000, runs as non-owner role `tempo_app` |
 | Frontend | container `tempo_frontend`, host port **3007** → 80 |
 | Database | container `tempo_postgres` (postgres:16), host `127.0.0.1:5439`, database `tempo`, roles `tempo_owner` (migrations) / `tempo_app` (runtime, no BYPASSRLS), volume `tempo_tempo_pgdata` |
-| Migration head | **`b4c5d6e7f8a9`** (read from `alembic_version` in database `tempo`) |
+| Migration head | **`c5d6e7f8a9b0`** (read from `alembic_version` in database `tempo`) |
 | Migration job | `tempo_migrate` (one-shot, owner role, `alembic upgrade head`) |
 | Redis | not used (6386 reserved) |
 | Dev identity picker | **OFF** in the deployed stack (`TEMPO_DEV_IDP_ENABLED=false`); password sign-in only |
@@ -40,7 +40,8 @@ The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database 
 
 ## Verification record
 - Smoke test against the public hostname (`scripts/smoke.sh`): readiness, console, anonymous refusal, password sign-in, and read-only calls for overview, demand, rosters, roster, live attendance, timesheets, variance, notifications, data status, setup checklist, data contracts; sign-out. Last run: **passed**, 1 Oct 2026.
-- 2 Oct 2026: M2 (internal T&A, kiosk breaks, site geofence/location) and M3 first slice (roster locking, planning rules) deployed; pre-deploy dump `~/tempo-backups/tempo-pre-m2m3-*.dump`; migrations `f2a3b4c5d6e7`, `a3b4c5d6e7f8`, `b4c5d6e7f8a9` applied cleanly; smoke test passed (now also checks attendance policy, geofence, daily list, planning rules). API suite 358 passed. Not yet run in GitHub CI.
+- 2 Oct 2026 (second deploy, `0dc0200`): M3 shift definitions + availability + drill-through, M1 sites/customers/availability/rates import, M6 plans/manual subscriptions/allowance; migration `c5d6e7f8a9b0`; pre-deploy dump `~/tempo-backups/tempo-pre-m3m1m6-*.dump`; API suite 369 passed (one time-of-day-dependent test fixed); smoke passed incl. billing/plan and availability. Built from a clean checkout again.
+- 2 Oct 2026 (first deploy): M2 (internal T&A, kiosk breaks, site geofence/location) and M3 first slice (roster locking, planning rules) deployed; pre-deploy dump `~/tempo-backups/tempo-pre-m2m3-*.dump`; migrations `f2a3b4c5d6e7`, `a3b4c5d6e7f8`, `b4c5d6e7f8a9` applied cleanly; smoke test passed (now also checks attendance policy, geofence, daily list, planning rules). API suite 358 passed. Not yet run in GitHub CI.
 - API suite (real PostgreSQL, non-owner role): 325 passed on 1 Oct 2026 (run on this host; **not yet run in GitHub CI**).
 - Browser suite (dev stack on `tempo_e2e`): 21 passed on 1 Oct 2026 (**not yet run in GitHub CI**).
 - Backup/restore drill: one manual `pg_dump`/`pg_restore` of `tempo` into a scratch database on 1 Oct 2026; row counts matched. No schedule, off-host copy or timed recovery yet.
