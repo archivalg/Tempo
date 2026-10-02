@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Integer, String
+from sqlalchemy import JSON, DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -73,10 +73,15 @@ class AttendanceAdjustment(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: _id("adj"))
     tenant_id: Mapped[str] = mapped_column(String, index=True)
-    session_id: Mapped[str] = mapped_column(String, index=True)
+    session_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
     site_id: Mapped[str] = mapped_column(String, index=True)
-    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    requested_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     requested_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    kind: Mapped[str] = mapped_column(String, default="amend")  # amend | add_missing
+    worker_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    requested_break_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    original: Mapped[dict] = mapped_column(JSON, default=dict)  # what the session looked like when the correction was requested
+    applied_session_id: Mapped[str | None] = mapped_column(String, nullable=True)
     reason: Mapped[str] = mapped_column(String)
     state: Mapped[str] = mapped_column(String, default="pending")  # pending | approved | rejected
     requested_by: Mapped[str] = mapped_column(String)

@@ -4,14 +4,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 ClockMethod = Literal["pin", "nfc"]
 
 
 class GpsCoordinates(BaseModel):
-    latitude: float
-    longitude: float
+    """The device's position at the tap, or why it could not be had (`error`: denied | unavailable)."""
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    accuracy_m: float | None = Field(default=None, ge=0, le=100000)
+    error: Literal["denied", "unavailable"] | None = None
 
 
 class CredentialEnrollRequest(BaseModel):
@@ -23,6 +26,8 @@ class CredentialEnrollRequest(BaseModel):
     def _at_least_one(self) -> "CredentialEnrollRequest":
         if not self.pin and not self.nfc_tag_id:
             raise ValueError("at least one of pin or nfc_tag_id is required")
+        if self.pin and not (self.pin.isdigit() and 4 <= len(self.pin) <= 8):
+            raise ValueError("a PIN is 4 to 8 digits")
         return self
 
 
@@ -51,6 +56,7 @@ class ClockInRequest(BaseModel):
 
 
 class ClockOutRequest(BaseModel):
+    gps: GpsCoordinates | None = None
     method: ClockMethod
     worker_id: str | None = None
     worker_no: str | None = None
@@ -72,6 +78,8 @@ class ClockInResponse(BaseModel):
     clocked_in_at: datetime
     geofence_status: Literal["passed", "skipped"]
     matched_rostered_shift: bool
+    state: str = "working"
+    duplicate: bool = False  # true when this was a repeat tap: the first punch stands and nothing new was recorded
 
 
 class ClockOutResponse(BaseModel):
@@ -80,6 +88,23 @@ class ClockOutResponse(BaseModel):
     clocked_in_at: datetime
     clocked_out_at: datetime
     duration_minutes: float
+    state: str = "closed"
+    duplicate: bool = False
+    break_minutes: float = 0
+
+
+class PunchRequest(ClockOutRequest):
+    """Break start/end use the same credential shape as clock-out."""
+
+
+class PunchResponse(BaseModel):
+    worker_id: str
+    attendance_session_id: str
+    action: str
+    state: str  # working | on_break | closed — the state AFTER this punch
+    recorded_at: datetime  # the server's acknowledged time; if the kiosk never got this, nothing was recorded
+    duplicate: bool = False
+    break_minutes: float = 0
 
 
 class UpcomingShift(BaseModel):
@@ -125,6 +150,9 @@ class WhoamiResponse(BaseModel):
     employment_type: str
     home_site: str
     has_open_session: bool
+    state: str = "not_clocked_in"  # not_clocked_in | working | on_break
+    allowed_actions: list[str] = []
+    location_mode: str = "off"  # off | record | require — tells the kiosk whether to ask the browser for a position
     upcoming_shifts: list["UpcomingShift"] = []
 
 

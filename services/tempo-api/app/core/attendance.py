@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.errors import AttendanceStateConflict, AuthInvalid, GeofenceViolation
+from app.errors import GeofenceViolation
 from app.models.attendance import SiteGeofence, WorkerCredential
 from app.models.canonical import AttendanceSession, ShiftAssignment, Worker
 
@@ -67,17 +67,9 @@ def check_geofence(db: Session, tenant_id: str, site_id: str, latitude: float, l
     return "passed"
 
 
-def _open_session(db: Session, tenant_id: str, worker_id: str) -> AttendanceSession | None:
-    return db.scalar(
-        select(AttendanceSession)
-        .where(AttendanceSession.tenant_id == tenant_id)
-        .where(AttendanceSession.worker_id == worker_id)
-        .where(AttendanceSession.end_at.is_(None))
-    )
-
-
 def has_open_session(db: Session, tenant_id: str, worker_id: str) -> bool:
-    return _open_session(db, tenant_id, worker_id) is not None
+    from app.core.timeclock import open_session
+    return open_session(db, tenant_id, worker_id) is not None
 
 
 def _matches_a_rostered_shift(db: Session, tenant_id: str, worker_id: str, at: datetime) -> bool:
@@ -122,40 +114,3 @@ def list_site_attendance(db: Session, tenant_id: str, site_id: str, since: datet
         )
         for session in sessions
     ]
-
-
-@dataclass
-class ClockInResult:
-    session: AttendanceSession
-    geofence_status: str
-    matched_rostered_shift: bool
-
-
-def clock_in(
-    db: Session,
-    tenant_id: str,
-    site_id: str,
-    worker: Worker,
-    geofence_status: str = "skipped",
-) -> ClockInResult:
-    if _open_session(db, tenant_id, worker.worker_id) is not None:
-        raise AttendanceStateConflict(f"worker '{worker.worker_id}' already has an open attendance session")
-
-    now = _now()
-    session = AttendanceSession(
-        tenant_id=tenant_id, worker_id=worker.worker_id, start_at=now, end_at=None,
-        approval="pending", source_system=SOURCE_SYSTEM,
-    )
-    db.add(session)
-    db.flush()
-    matched = _matches_a_rostered_shift(db, tenant_id, worker.worker_id, now)
-    return ClockInResult(session=session, geofence_status=geofence_status, matched_rostered_shift=matched)
-
-
-def clock_out(db: Session, tenant_id: str, worker: Worker) -> AttendanceSession:
-    session = _open_session(db, tenant_id, worker.worker_id)
-    if session is None:
-        raise AttendanceStateConflict(f"worker '{worker.worker_id}' has no open attendance session to close")
-    session.end_at = _now()
-    db.flush()
-    return session

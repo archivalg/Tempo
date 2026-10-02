@@ -116,6 +116,16 @@ class AttendanceSession(Base):
     pay_code: Mapped[str | None] = mapped_column(String, nullable=True)
     source_system: Mapped[str] = mapped_column(String)
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Native capture (M2). Original punches are never edited; approved corrections live in attendance_adjustment.
+    site_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # working | on_break | closed. Derived from end_at when a row is written without one, so a finished session can never look open.
+    state: Mapped[str] = mapped_column(String, default=lambda ctx: "closed" if ctx.get_current_parameters().get("end_at") else "working")
+    break_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    device_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    rostered_shift_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    revision: Mapped[int] = mapped_column(default=1)
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ShiftAssignment(Base):

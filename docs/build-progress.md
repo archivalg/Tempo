@@ -120,3 +120,22 @@ Limits to be honest about: synchronous apply only (batches over 20,000 rows are 
 With the installed FastAPI (0.141), the database session's `commit()` ran **after** the response was sent. Consequences: a client could be told "done" before the write was visible to the next request (this is what made one browser test flaky), and a commit that failed would never have reached the caller. Fixed with a function-scoped dependency on the API router that commits before the response (`commit_before_response`). `tests/test_commit_ordering.py` fails without the fix (a separate connection sees nothing when the response starts) and passes with it.
 
 Migration `e1f2a3b4c5d6` adds the ingestion tables (tenant row security; site-scoped where they carry a site; DELETE revoked on evidence tables).
+
+## M2 — internal Time and Attendance and kiosk (2 Oct 2026) — status: **partial, not accepted**
+Engineering evidence only. Acceptance in `docs/roadmap.md` §6 requires real-device/browser tests with the pilot's agreed attendance rules; none of that has happened. How hours are computed: `docs/timekeeping.md`.
+
+| Roadmap item | Evidence | Gap |
+|---|---|---|
+| Badge/PIN enrolment, active status, site eligibility in the UI | Attendance → *Badges & PINs*: roster of the site's workers, set/reset PIN (4–8 digits, clears a lockout), unlock; badge numbers and active status come from the staff import | No UI to edit a badge number or deactivate a worker directly; no cross-site eligibility model |
+| Clock in/out, break start/end, state, confirmation, duplicate prevention | `app/core/timeclock.py` state machine; punches are append-only (DELETE revoked); `tests/test_timeclock.py` (cycle, out-of-order refusal, repeat taps, four simultaneous clock-ins make one session, disabled device) | Real concurrent load on a real device not exercised |
+| Paid/unpaid breaks, rounding, missing-punch handling as explicit site policy; originals kept | Attendance → *Rules*; defaults labelled as defaults; tests of paid breaks and rounding | Missing punches are flagged and corrected by a supervisor; there is deliberately no automatic closing |
+| Match to published shifts incl. overnight; label unrostered | `test_overnight_shift_is_matched_and_hours_span_midnight`; "Not rostered" flag | Matching is "closest shift within 4 h before start", not configurable |
+| Supervisor daily list | Attendance → *Today*: no-show, late, clocked in, missing clock-out, not rostered, long day, correction pending, outside site, no location | |
+| Reasoned corrections, approval, preserved evidence; missing sessions | Existing adjustments extended (break minutes, open-session closure, add-missing session as `correction` punches); requester cannot decide | |
+| Worked / break / payable shown separately; reopening records a revision | Timesheet columns; `attendance_revision`; `test_reopening_an_approved_timesheet_records_a_revision`; browser test | |
+| Approved-timesheet CSV for payroll | `/v1/sites/{site}/exports/payroll-timesheets.csv` + button; only approved; says what it left out; audited | Column layout is Tempo's own — no customer payroll format has been agreed; hours only |
+| Kiosk: full screen, masked confirmation, connectivity, server acknowledgement | Result is shown only after the server stored the punch, with the server's time; a repeat says "already recorded"; offline screen kept (no offline queue) | Not tested on a real tablet; refresh/timezone/network-failure cases not yet exercised in a browser |
+| **Site geofence + location at each punch** (added at the owner's request) | Geofence form; rule off/record/require; position, accuracy, distance and status stored on each punch; `require` refuses and records nothing; browser test with a faked position near and far | Browser location can be wrong or spoofed; it is the kiosk's position, not the worker's; mandatory continuous GPS remains out of scope |
+
+Also: `attendance_session` now carries `site_id` (filled from the worker's home site if absent) with the site row-security policy; a database index allows one open native session per worker. Found while doing it: the demo seed wrote finished sessions as "working" — the model now derives the state from `end_at`.
+Migrations `f2a3b4c5d6e7`, `a3b4c5d6e7f8` (not yet applied to the live database). Test totals: backend suite 346 passed before the location work; `test_timeclock.py` + `test_attendance.py` 37 passed after; browser attendance spec 3 passed, workflow/export specs updated and passing.

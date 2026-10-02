@@ -5,7 +5,8 @@ import { BASE_URL } from '../api/client'
 // tenant and a fixed set of sites). Worker number + PIN says who is standing here; it can never change the device's scope.
 const KEY = 'tempo.kiosk.device'
 type Screen = 'enrol' | 'idle' | 'confirm' | 'done' | 'offline'
-interface Who { worker_id: string; masked_identity: string; has_open_session: boolean; upcoming_shifts: { shift_id: string; role: string; zone: string; start_at: string; end_at: string }[] }
+type Kind = 'clock-in' | 'clock-out' | 'break-start' | 'break-end'
+interface Who { worker_id: string; masked_identity: string; has_open_session: boolean; state: 'not_clocked_in' | 'working' | 'on_break'; allowed_actions: string[]; location_mode?: 'off' | 'record' | 'require'; upcoming_shifts: { shift_id: string; role: string; zone: string; start_at: string; end_at: string }[] }
 
 async function call<T>(path: string, cred: string | null, body: unknown): Promise<{ ok: boolean; status: number; data: T & { detail?: string } }> {
   const r = await fetch(`${BASE_URL}${path}`, { method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json', ...(cred ? { Authorization: `Bearer ${cred}` } : {}) }, body: JSON.stringify(body) })
@@ -57,13 +58,24 @@ export function KioskPage() {
       setWho(r.data); setScreen('confirm')
     } catch { setScreen('offline') } finally { setBusy(false) }
   }
-  async function punch(kind: 'clock-in' | 'clock-out') {
+  // Where this device is at the moment of the tap, when the site asks. The reason is sent too, so a refusal can be explained.
+  const here = (): Promise<{ latitude?: number; longitude?: number; accuracy_m?: number; error?: 'denied' | 'unavailable' } | null> => {
+    if (!who || !who.location_mode || who.location_mode === 'off') return Promise.resolve(null)
+    if (!navigator.geolocation) return Promise.resolve({ error: 'unavailable' })
+    return new Promise((res) => navigator.geolocation.getCurrentPosition(
+      (p) => res({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy_m: p.coords.accuracy }),
+      (e) => res({ error: e.code === 1 ? 'denied' : 'unavailable' }), { enableHighAccuracy: true, timeout: 8000, maximumAge: 15000 }))
+  }
+  const DONE: Record<Kind, string> = { 'clock-in': 'Clocked in', 'clock-out': 'Clocked out', 'break-start': 'Break started', 'break-end': 'Back from break' }
+  async function punch(kind: Kind) {
     setBusy(true); setMsg(null)
     try {
-      const r = await call<{ clocked_in_at?: string; clocked_out_at?: string }>(`/attendance/${kind}`, cred, { method: 'pin', worker_no: worker, pin })
+      const r = await call<{ clocked_in_at?: string; clocked_out_at?: string; recorded_at?: string; duplicate?: boolean }>(`/attendance/${kind}`, cred, { method: 'pin', worker_no: worker, pin, gps: await here() })
       if (!r.ok) { setMsg(r.data.detail ?? 'Could not record that. See a supervisor.'); return }
-      const t = new Date(r.data.clocked_in_at ?? r.data.clocked_out_at ?? Date.now())
-      setMsg(`${kind === 'clock-in' ? 'Clocked in' : 'Clocked out'} at ${t.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })}`)
+      // Shown only after the server has acknowledged the punch, using the server's own time.
+      const t = new Date(r.data.recorded_at ?? r.data.clocked_in_at ?? r.data.clocked_out_at ?? Date.now())
+      const hhmm = t.toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })
+      setMsg(r.data.duplicate ? `Already recorded at ${hhmm} — nothing more was needed` : `${DONE[kind]} at ${hhmm}`)
       setScreen('done'); setPin('')
     } catch { setScreen('offline') } finally { setBusy(false) }
   }
@@ -109,13 +121,16 @@ export function KioskPage() {
         {screen === 'confirm' && who && (
           <div className="tp-card" style={{ padding: 20, color: 'var(--tp-ink)' }}>
             <h1 style={{ marginTop: 0, fontSize: 22 }}>Hello, worker <span className="tp-num">{who.masked_identity}</span></h1>
-            <p style={{ fontSize: 18 }}>{who.has_open_session ? 'You are clocked in.' : 'You are not clocked in.'}</p>
+            {who.location_mode && who.location_mode !== 'off' && <p className="tp-muted" style={{ fontSize: 13 }}>This site checks the kiosk’s location when you clock.</p>}
+            <p style={{ fontSize: 18 }}>{{ not_clocked_in: 'You are not clocked in.', working: 'You are clocked in.', on_break: 'You are on a break.' }[who.state]}</p>
             <h2 style={{ fontSize: 15 }}>Your upcoming shifts</h2>
             {who.upcoming_shifts.length === 0 ? <p className="tp-muted">No upcoming shifts.</p> : <ul style={{ paddingLeft: 18 }}>{who.upcoming_shifts.slice(0, 4).map((s) => (<li key={s.shift_id} className="tp-num">{new Date(s.start_at).toLocaleString('en-AU', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} – {new Date(s.end_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} · {s.role}</li>))}</ul>}
             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)' }}>{msg}</p>}
-            <div className="tp-row">
-              {!who.has_open_session ? <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-in')}>Clock in</button>
-                : <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-out')}>Clock out</button>}
+            <div className="tp-row" style={{ flexWrap: 'wrap' }}>
+              {who.allowed_actions.includes('clock_in') && <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-in')}>{busy ? 'Recording…' : 'Clock in'}</button>}
+              {who.allowed_actions.includes('break_start') && <button className="tp-btn" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('break-start')}>{busy ? 'Recording…' : 'Start break'}</button>}
+              {who.allowed_actions.includes('break_end') && <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('break-end')}>{busy ? 'Recording…' : 'End break'}</button>}
+              {who.allowed_actions.includes('clock_out') && <button className="tp-btn" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-out')}>{busy ? 'Recording…' : 'Clock out'}</button>}
               <button className="tp-btn" style={{ fontSize: 18, padding: 18 }} onClick={reset}>Cancel</button>
             </div>
           </div>

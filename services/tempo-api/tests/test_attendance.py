@@ -53,6 +53,7 @@ def test_enroll_then_clock_in_and_out_with_pin(client):
 
 
 def test_second_clock_in_without_clocking_out_conflicts(client):
+    """An immediate repeat tap is a duplicate (see test_timeclock); a clock-in later than the duplicate window conflicts (test_timeclock too)."""
     _seed_worker(client)
     client.post("/v1/attendance/credentials", json={"worker_id": "wrk_1", "pin": "1234"}, headers=_admin_header())
     body = {"site_id": "site_mel_01", "method": "pin", "worker_id": "wrk_1", "pin": "1234"}
@@ -60,8 +61,7 @@ def test_second_clock_in_without_clocking_out_conflicts(client):
     assert first.status_code == 200
 
     second = client.post("/v1/attendance/clock-in", json=body, headers=_kiosk_header())
-    assert second.status_code == 409
-    assert second.json()["error_code"] == "TEMPO-ATTENDANCE-001"
+    assert second.status_code == 200 and second.json()["duplicate"] is True and second.json()["attendance_session_id"] == first.json()["attendance_session_id"]
 
 
 def test_clock_out_without_open_session_conflicts(client):

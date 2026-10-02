@@ -84,11 +84,11 @@ export const publishRoster = (id: string) => apiRequest<RosterVersion>(`/rosters
 export const listPendingRosters = () => apiRequest<PendingRoster[]>('/rosters/pending')
 
 // ---- attendance / timesheets ----
-export interface Timesheet { session_id: string; worker_id: string | null; worker_label: string; clock_in: string; clock_out: string | null; open: boolean; approval: string; scheduled_start: string | null; scheduled_end: string | null; role: string | null; matched: boolean; punched_hours: number; scheduled_hours: number; payable_hours: number | null; adjustment: { id: string; state: string; requested_start: string; requested_end: string | null; reason: string; requested_by: string; decision_note: string | null } | null }
+export interface Timesheet { session_id: string; worker_id: string | null; worker_label: string; clock_in: string; clock_out: string | null; open: boolean; approval: string; scheduled_start: string | null; scheduled_end: string | null; role: string | null; matched: boolean; punched_hours: number; scheduled_hours: number; payable_hours: number | null; state: string; revision: number; worked_hours: number; break_hours: number; unpaid_break_hours: number; approved_by: string | null; approved_at: string | null; adjustment: { id: string; state: string; requested_start: string; requested_end: string | null; requested_break_minutes?: number | null; reason: string; requested_by: string; decision_note: string | null } | null }
 export interface TimesheetData { range: { start: string; days: number }; as_of: string; sessions: Timesheet[]; summary: { sessions: number; open: number; approved: number; pending: number; unrostered: number; pending_adjustments: number } }
 export const getTimesheets = (site: string, start?: string, days = 7) => apiRequest<TimesheetData>(`/sites/${site}/timesheets?${new URLSearchParams({ ...(start ? { start } : {}), days: String(days) })}`)
 export const approveSession = (id: string) => apiRequest(`/attendance/sessions/${id}/approve`, { method: 'POST' })
-export const requestAdjustment = (id: string, requested_start: string, requested_end: string, reason: string) => apiRequest(`/attendance/sessions/${id}/adjustments`, { method: 'POST', body: { requested_start, requested_end, reason } })
+export const requestAdjustment = (id: string, requested_start: string, requested_end: string, reason: string, requested_break_minutes: number | null = null) => apiRequest(`/attendance/sessions/${id}/adjustments`, { method: 'POST', body: { requested_start, requested_end, reason, requested_break_minutes } })
 export const decideAdjustment = (id: string, approve: boolean, note: string) => apiRequest(`/attendance/adjustments/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { note } })
 
 // ---- variance + demand ----
@@ -99,6 +99,7 @@ export interface DemandRow { date: string; activity: string; actual_units: numbe
 export interface Demand { range: { start: string; days: number }; rows: DemandRow[]; activities: string[]; standards: { activity: string; seconds_per_unit: number; effective_from: string }[]; zone_map: { activity: string; role: string; zone: string; weight: number }[]; readiness: { check: string; ok: boolean; detail: string }[]; data_sources: DataSource[]; forecast: { run_id: string | null; created_at: string | null; snapshot_id: string | null; method: string; backtest_mape: number | null; confidence: Record<string, unknown> | null }; overrides_note: string; overrides: DemandOverride[] }
 export const getDemand = (site: string, start?: string) => apiRequest<Demand>(`/sites/${site}/demand${start ? `?start=${start}` : ''}`)
 
+export const exportPayroll = (site: string, start: string, days = 7) => downloadFile(`/sites/${site}/exports/payroll-timesheets.csv?start=${start}&days=${days}`)
 export const exportCsv = (site: string, kind: 'variance' | 'timesheets' | 'demand', start: string) => downloadFile(`/sites/${site}/exports/${kind}.csv?start=${start}`)
 
 export interface DemandOverride { id: string; site_id: string; activity: string | null; start_date: string; end_date: string; mode: 'multiply' | 'set_units'; value: number; reason: string; origin: string; status: 'pending' | 'active' | 'expired' | 'revoked' | 'rejected'; needs_approval?: boolean; decision_note?: string | null; expires_at: string; created_by: string; created_at: string; revoked_by: string | null; revoked_at: string | null; revoke_reason: string | null }
@@ -124,3 +125,25 @@ export const getAudit = (q: { action?: string; decision?: string; before?: strin
   return apiRequest<AuditPage>(`/admin/audit${p.size ? `?${p}` : ''}`)
 }
 export const decideOverride = (id: string, approve: boolean, note: string) => apiRequest<DemandOverride>(`/demand/overrides/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { note } })
+
+
+// ---- internal time & attendance (M2) ----
+export interface AttendancePolicy { site_id: string; breaks_paid: boolean; rounding_minutes: number; rounding_mode: 'nearest' | 'up' | 'down'; duplicate_window_seconds: number; late_grace_minutes: number; missing_punch_after_hours: number; excessive_hours: number; location_mode: 'off' | 'record' | 'require'; is_default: boolean; updated_by: string | null; updated_at: string | null }
+export type PolicyInput = Omit<AttendancePolicy, 'site_id' | 'is_default' | 'updated_by' | 'updated_at'>
+export const getAttendancePolicy = (site: string) => apiRequest<AttendancePolicy>(`/sites/${site}/attendance-policy`)
+export const putAttendancePolicy = (site: string, body: PolicyInput) => apiRequest<AttendancePolicy>(`/sites/${site}/attendance-policy`, { method: 'PUT', body })
+export interface DailyRow { worker_id: string; label: string; session_id: string | null; state: string; approval: string | null; clock_in: string | null; clock_out: string | null; scheduled_start: string | null; scheduled_end: string | null; role: string | null; worked_hours: number; flags: string[]; pending_correction: boolean; minutes_late: number | null }
+export interface DailyData { site: { site_id: string; name: string; timezone: string }; date: string; as_of: string; policy: AttendancePolicy; rows: DailyRow[]; counts: Record<string, number> }
+export const getDaily = (site: string, date: string) => apiRequest<DailyData>(`/sites/${site}/attendance/daily?date=${date}`)
+export const reopenSession = (id: string, reason: string) => apiRequest<{ revision: number }>(`/attendance/sessions/${id}/reopen`, { method: 'POST', body: { reason } })
+export interface SessionHistory { session_id: string; revision: number; approval: string; punches: { kind: string; at: string; source: string; note: string | null; location_status: string; distance_m: number | null; accuracy_m: number | null }[]; revisions: { revision: number; action: string; actor: string; at: string; reason: string | null; snapshot: Record<string, unknown> }[]; corrections: { id: string; state: string; reason: string; requested_by: string; decided_by: string | null; decision_note: string | null }[] }
+export const getSessionHistory = (id: string) => apiRequest<SessionHistory>(`/attendance/sessions/${id}/history`)
+export const approveMany = (session_ids: string[]) => apiRequest<{ approved: string[]; skipped: { session_id: string; reason: string }[] }>('/attendance/sessions/approve-many', { method: 'POST', body: { session_ids } })
+export const requestMissingSession = (site: string, body: { worker_id: string; start_at: string; end_at: string; break_minutes: number | null; reason: string }) => apiRequest(`/sites/${site}/attendance/missing-session`, { method: 'POST', body })
+export interface ClockCredential { worker_id: string; label: string; badge_no: string | null; status: string; has_pin: boolean; has_nfc: boolean; locked: boolean; failed_attempts: number }
+export const getClockCredentials = (site: string) => apiRequest<ClockCredential[]>(`/sites/${site}/clock-credentials`)
+export const setClockPin = (worker_id: string, pin: string) => apiRequest('/attendance/credentials', { method: 'POST', body: { worker_id, pin } })
+export const unlockClockCredential = (worker_id: string) => apiRequest(`/workers/${worker_id}/clock-credential/unlock`, { method: 'POST' })
+export interface Geofence { site_id: string; configured: boolean; latitude: number | null; longitude: number | null; radius_meters: number | null }
+export const getGeofence = (site: string) => apiRequest<Geofence>(`/sites/${site}/geofence`)
+export const putGeofence = (site: string, body: { latitude: number; longitude: number; radius_meters: number }) => apiRequest<Geofence>(`/sites/${site}/geofence`, { method: 'PUT', body })

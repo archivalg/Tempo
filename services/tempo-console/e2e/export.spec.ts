@@ -18,7 +18,8 @@ test('ops manager downloads the variance, timesheet and demand files; analyst ha
   await signIn(page, /Demo Ops Manager/)
   for (const [path, file] of [['/reports', 'variance'], ['/attendance', 'timesheets'], ['/demand', 'demand']] as const) {
     await page.goto(path)
-    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Export CSV/ }).click()])
+    if (path === '/attendance') await page.getByRole('tab', { name: 'Timesheets' }).click()
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: path === '/attendance' ? /Timesheet report/ : /Export CSV/ }).click()])
     expect(dl.suggestedFilename()).toMatch(new RegExp(`^tempo-${file}-.*\\.csv$`))
     const text = readFileSync(await dl.path()!, 'utf8')
     expect(text.startsWith('# Tempo ')).toBeTruthy()

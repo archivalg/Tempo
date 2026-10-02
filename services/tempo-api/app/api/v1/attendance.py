@@ -20,15 +20,15 @@ from sqlalchemy.orm import Session
 
 from datetime import datetime, timedelta, timezone
 
+from app.core import timeclock
 from app.core.attendance import (
     check_geofence,
-    clock_in,
-    clock_out,
     has_open_session,
     hash_pin,
     list_site_attendance,
     to_aware,
 )
+from app.core import auth
 from app.core.kiosk import KioskContext, verify_worker
 from app.dependencies import get_db, get_kiosk_context, get_request_context
 from app.errors import AuthForbidden, RunNotFound, ScopeError
@@ -41,6 +41,8 @@ from app.schemas.attendance import (
     ClockOutResponse,
     CredentialEnrollRequest,
     CredentialEnrollResponse,
+    PunchRequest,
+    PunchResponse,
     SiteAttendanceEntry,
     SiteGeofenceRequest,
     UpcomingShift,
@@ -87,6 +89,9 @@ def enroll_credential(
         db.add(credential)
     if request.pin:
         credential.pin_hash = hash_pin(request.pin)
+        credential.failed_attempts, credential.locked_until = 0, None  # a reset by authorised staff also clears a lockout
+        auth.audit(db, actor_type="user", actor_id=context.user_id, tenant_id=context.tenant_id, action="credential.pin_set", decision="allowed", session_ref=worker.worker_id,
+                   correlation_id=context.correlation_id)
     if request.nfc_tag_id:
         credential.nfc_tag_id = request.nfc_tag_id
     db.flush()
@@ -104,17 +109,32 @@ def clock_in_endpoint(
     worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
 
     geofence_status = "skipped"
-    if request.gps:
-        geofence_status = check_geofence(db, kiosk.tenant_id, site_id, request.gps.latitude, request.gps.longitude)
+    mode = timeclock.get_policy(db, kiosk.tenant_id, site_id).location_mode
+    if request.gps and mode == "off" and request.gps.latitude is not None and request.gps.longitude is not None:
+        geofence_status = check_geofence(db, kiosk.tenant_id, site_id, request.gps.latitude, request.gps.longitude)  # earlier behaviour: a supplied position is enforced
 
-    result = clock_in(db, kiosk.tenant_id, site_id, worker, geofence_status)
+    result = timeclock.punch(db, kiosk.tenant_id, site_id, kiosk.device_id, worker, "clock_in", fix=_fix(request.gps))
+    if mode != "off":
+        geofence_status = "passed" if result.punch.location_status == "passed" else "skipped"
     return ClockInResponse(
         worker_id=worker.worker_id,
         attendance_session_id=result.session.id,
-        clocked_in_at=result.session.start_at,
-        geofence_status=result.geofence_status,  # type: ignore[arg-type]
-        matched_rostered_shift=result.matched_rostered_shift,
+        clocked_in_at=result.punch.at,
+        geofence_status=geofence_status,  # type: ignore[arg-type]
+        matched_rostered_shift=result.session.rostered_shift_id is not None,
+        state=result.session.state,
+        duplicate=result.duplicate,
     )
+
+
+def _fix(g) -> timeclock.Fix | None:
+    return None if g is None else timeclock.Fix(g.latitude, g.longitude, g.accuracy_m, g.error)
+
+
+def _punch_site(db: Session, kiosk: KioskContext, worker: Worker) -> str:
+    """Break and clock-out belong to the site of the session being closed (a multi-site device never guesses)."""
+    s = timeclock.open_session(db, kiosk.tenant_id, worker.worker_id)
+    return s.site_id if s and s.site_id in kiosk.site_ids else (worker.home_site if worker.home_site in kiosk.site_ids else kiosk.site_ids[0])
 
 
 @router.post("/attendance/clock-out", response_model=ClockOutResponse)
@@ -124,15 +144,32 @@ def clock_out_endpoint(
     db: Session = Depends(get_db),
 ) -> ClockOutResponse:
     worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
-    session = clock_out(db, kiosk.tenant_id, worker)
-    duration_minutes = (to_aware(session.end_at) - to_aware(session.start_at)).total_seconds() / 60
+    result = timeclock.punch(db, kiosk.tenant_id, _punch_site(db, kiosk, worker), kiosk.device_id, worker, "clock_out", fix=_fix(request.gps))
+    s = result.session
+    duration_minutes = (to_aware(s.end_at) - to_aware(s.start_at)).total_seconds() / 60
     return ClockOutResponse(
         worker_id=worker.worker_id,
-        attendance_session_id=session.id,
-        clocked_in_at=session.start_at,
-        clocked_out_at=session.end_at,
+        attendance_session_id=s.id,
+        clocked_in_at=s.start_at,
+        clocked_out_at=s.end_at,
         duration_minutes=round(duration_minutes, 2),
+        state=s.state,
+        duplicate=result.duplicate,
+        break_minutes=s.breaks_minutes or 0,
     )
+
+
+def _break(action: str):
+    def handler(request: PunchRequest, kiosk: KioskContext = Depends(get_kiosk_context), db: Session = Depends(get_db)) -> PunchResponse:
+        worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+        r = timeclock.punch(db, kiosk.tenant_id, _punch_site(db, kiosk, worker), kiosk.device_id, worker, action, fix=_fix(request.gps))
+        return PunchResponse(worker_id=worker.worker_id, attendance_session_id=r.session.id, action=action, state=r.session.state, recorded_at=r.punch.at,
+                             duplicate=r.duplicate, break_minutes=r.session.breaks_minutes or 0)
+    return handler
+
+
+router.post("/attendance/break-start", response_model=PunchResponse)(_break("break_start"))
+router.post("/attendance/break-end", response_model=PunchResponse)(_break("break_end"))
 
 
 @router.post("/site-geofences", status_code=201)
@@ -197,6 +234,8 @@ def whoami(
     """
     worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
     now = datetime.now(timezone.utc)
+    open_s = timeclock.open_session(db, kiosk.tenant_id, worker.worker_id)
+    state = open_s.state if open_s else "not_clocked_in"
     rows = db.scalars(
         select(ShiftAssignment)
         .where(ShiftAssignment.tenant_id == kiosk.tenant_id, ShiftAssignment.worker_id == worker.worker_id, ShiftAssignment.end_at >= now)
@@ -207,7 +246,10 @@ def whoami(
         masked_identity=_mask(worker.worker_id),
         employment_type=worker.employment_type,
         home_site=worker.home_site,
-        has_open_session=has_open_session(db, kiosk.tenant_id, worker.worker_id),
+        has_open_session=open_s is not None,
+        state=state,
+        location_mode=timeclock.get_policy(db, kiosk.tenant_id, worker.home_site if worker.home_site in kiosk.site_ids else kiosk.site_ids[0]).location_mode,
+        allowed_actions={"not_clocked_in": ["clock_in"], "working": ["break_start", "clock_out"], "on_break": ["break_end", "clock_out"]}[state],
         upcoming_shifts=[UpcomingShift(shift_id=r.shift_id, role=r.role, zone=r.zone, start_at=r.start_at, end_at=r.end_at, status=r.status) for r in rows],
     )
 

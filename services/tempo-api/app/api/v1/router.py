@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.dependencies import commit_before_response
 
-from app.api.v1 import auth, demand, devices, handoffs, imports as imports_api, service_clients, notifications, operations, platform, reports, rosters, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
+from app.api.v1 import auth, demand, devices, handoffs, imports as imports_api, service_clients, notifications, operations, platform, reports, rosters, timeclock, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
 
 router = APIRouter(dependencies=[Depends(commit_before_response, scope="function")])
 router.include_router(auth.router)
@@ -12,6 +12,7 @@ router.include_router(devices.router)
 router.include_router(platform.router)
 router.include_router(operations.router)
 router.include_router(rosters.router)
+router.include_router(timeclock.router)  # before reports: its exact export path must win over reports' /exports/{kind}.csv
 router.include_router(reports.router)
 router.include_router(demand.router)
 router.include_router(notifications.router)

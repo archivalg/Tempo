@@ -77,3 +77,17 @@ def demand_csv(data: dict, now: datetime) -> tuple[str, int]:
     head = ["date", "activity", "actual_units", "forecast_units", "forecast_lower", "forecast_upper", "seconds_per_unit", "required_hours"]
     rows = [[r["date"], r["activity"], r["actual_units"], r["forecast_units"], r["forecast_lower"], r["forecast_upper"], r["seconds_per_unit"], r["required_hours"]] for r in data["rows"]]
     return to_csv(head, rows, _pre("demand", data, now)), len(rows)
+
+
+def payroll_csv(data: dict, now: datetime) -> tuple[str, int]:
+    """Approved timesheets for a payroll import. Site-local times, decimal hours. This is hours, not pay: awards and loadings are not interpreted."""
+    tz = ZoneInfo(data["site"]["timezone"])
+    pol = data["policy"]
+    head = ["employee_no", "worker_id", "name", "work_date", "start", "end", "worked_hours", "unpaid_break_hours", "payable_hours", "revision", "corrected", "rostered", "approved_by", "approved_at", "session_id"]
+    rows = [[r["employee_no"], r["worker_id"], r["name"], r["start"].astimezone(tz).strftime("%Y-%m-%d"), _local(r["start"], tz), _local(r["end"], tz), r["worked_hours"], r["unpaid_break_hours"],
+             r["payable_hours"], r["revision"], r["corrected"], r["rostered"], r["approved_by"], _local(r["approved_at"], tz), r["session_id"]] for r in data["rows"]]
+    pre = _pre("payroll timesheets", data, now) + [
+        f"Approved timesheets only; {data['not_included']} session(s) in this period are not yet approved and are NOT included.",
+        f"Breaks are {'paid (not deducted)' if pol['breaks_paid'] else 'unpaid (deducted)'}; payable hours rounded to {pol['rounding_minutes'] or 'no'} minute(s) ({pol['rounding_mode']}). Hours only: no award or pay interpretation.",
+        "Times are site-local. Original punches are kept unchanged; 'corrected' marks hours that use an approved correction; 'revision' increases each time an approved timesheet is reopened."]
+    return to_csv(head, rows, pre), len(rows)

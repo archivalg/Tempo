@@ -154,6 +154,7 @@ test.describe.serial('planning cycle', () => {
   test('timesheets: supervisor approves and requests a correction; a second user approves it; variance reflects payable time', async ({ page }) => {
     await signIn(page, 'supervisor')
     await page.goto('/attendance')
+    await page.getByRole('tab', { name: 'Timesheets' }).click()
     await expect(page.getByText('Awaiting approval').first()).toBeVisible()
     await page.getByRole('button', { name: 'Awaiting approval' }).click()
     const before = await page.locator('.tp-kpi').filter({ hasText: 'Approved (payable)' }).locator('.val').innerText()
@@ -173,6 +174,7 @@ test.describe.serial('planning cycle', () => {
 
     await signIn(page, 'ops')
     await page.goto('/attendance')
+    await page.getByRole('tab', { name: 'Timesheets' }).click()
     await page.getByRole('button', { name: 'Corrections' }).click()
     await page.getByRole('button', { name: 'Open' }).first().click()
     await shot(page, 'flow-15-correction-review')

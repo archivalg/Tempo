@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import overrides
+from app.core import overrides, timeclock
 from app.core.exceptions_engine import EARLY_MATCH, LATE_AFTER, NO_SHOW_AFTER
 from app.core.opsview import method_label, _aware, _latest_forecast, _rates, _standards, local_day_bounds, site_sources
 from app.models.canonical import ActivityRoleZoneMap, AttendanceSession, DemandBucket, ShiftAssignment, Worker, WorkStandard
@@ -24,7 +24,7 @@ REPORT_VERSION = "tempo-metrics-1.0"
 METRIC_DEFS = {
     "scheduled_hours": "Σ hours of published (committed) shifts, to date (up to now for today).",
     "attended_hours": "Σ hours between clock-in and clock-out (open sessions run to now). ESTIMATE until approved.",
-    "payable_hours": "Attended hours of APPROVED timesheets, using an approved supervised adjustment where one exists. CONFIRMED.",
+    "payable_hours": "Hours of APPROVED timesheets after unpaid breaks and the site's rounding rule, using an approved supervised correction where one exists. CONFIRMED.",
     "variance_hours": "attended_hours − scheduled_hours (to date).",
     "adherence": "Matched attended shifts ÷ shifts due (started ≥ 20 min ago). Withheld when attendance is not verified live.",
     "planned_cost": "Σ scheduled hours × the matching cost rule's rate.",
@@ -64,6 +64,7 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
     adj = {a.session_id: a for a in db.scalars(select(AttendanceAdjustment).where(AttendanceAdjustment.tenant_id == tenant_id, AttendanceAdjustment.site_id == site.site_id,
                                                                                    AttendanceAdjustment.state == "approved"))}
     rates = _rates(db, tenant_id)
+    policy = timeclock.get_policy(db, tenant_id, site.site_id)
     sources = site_sources(db, tenant_id, site.site_id, now)
     att = next((s for s in sources if s["key"] == "attendance"), None)
     verified = bool(att and att["fresh"] and att["mode"] in ("live", "simulated"))
@@ -133,7 +134,9 @@ def variance(db: Session, tenant_id: str, site: Site, start_iso: str, days: int,
                 est_cost += r * a
             if x.approval == "approved":
                 ps, pe = effective_times(x, adj.get(x.id), now)
-                p = _overlap(ps, pe, d0, upto)
+                hrs = timeclock.hours(x, adj.get(x.id), policy, now)
+                ratio = hrs["payable_minutes"] / hrs["worked_minutes"] if hrs["worked_minutes"] else 1.0  # unpaid breaks and rounding spread across the days a session covers
+                p = _overlap(ps, pe, d0, upto) * ratio
                 payable += p
                 if r is not None:
                     conf_cost += r * p
@@ -183,19 +186,22 @@ def timesheets(db: Session, tenant_id: str, site: Site, start_iso: str, days: in
     adjs = {}
     for a in db.scalars(select(AttendanceAdjustment).where(AttendanceAdjustment.tenant_id == tenant_id, AttendanceAdjustment.site_id == site.site_id).order_by(AttendanceAdjustment.requested_at)):
         adjs[a.session_id] = a
+    policy = timeclock.get_policy(db, tenant_id, site.site_id)
     out = []
     for x in sessions:
         s = _aware(x.start_at)
         sh = next((h for h in shifts if h.worker_id == x.worker_id and _aware(h.start_at) - EARLY_MATCH <= s < _aware(h.end_at)), None)
         a = adjs.get(x.id)
         es, ee = effective_times(x, a, now)
-        out.append({"session_id": x.id, "worker_id": x.worker_id if can_see_names else None, "worker_label": people.get(x.worker_id) or f"Worker …{x.worker_id[-4:]}",
-                    "clock_in": s, "clock_out": _aware(x.end_at) if x.end_at else None, "open": x.end_at is None, "approval": x.approval,
+        hrs = timeclock.hours(x, a, policy, now)
+        out.append({"session_id": x.id, "state": x.state, "revision": x.revision, "worked_hours": round(hrs["worked_minutes"] / 60, 2), "break_hours": round(hrs["break_minutes"] / 60, 2),
+                    "unpaid_break_hours": round(hrs["unpaid_break_minutes"] / 60, 2), "approved_by": x.approved_by, "approved_at": x.approved_at, "worker_id": x.worker_id if can_see_names else None, "worker_label": people.get(x.worker_id) or f"Worker …{x.worker_id[-4:]}",
+                    "clock_in": s, "clock_out": _aware(x.end_at) if x.end_at else None, "open": x.state in timeclock.OPEN_STATES, "approval": x.approval,
                     "scheduled_start": _aware(sh.start_at) if sh else None, "scheduled_end": _aware(sh.end_at) if sh else None, "role": sh.role if sh else None,
-                    "matched": sh is not None, "punched_hours": round(_hours(s, _aware(x.end_at) if x.end_at else now), 2),
+                    "matched": sh is not None, "punched_hours": round(_hours(s, _aware(x.end_at) if x.end_at else (now if x.state in timeclock.OPEN_STATES else ee)), 2),
                     "scheduled_hours": round(_hours(_aware(sh.start_at), _aware(sh.end_at)), 2) if sh else 0.0,
-                    "payable_hours": round(_hours(es, ee), 2) if x.approval == "approved" else None,
-                    "adjustment": None if a is None else {"id": a.id, "state": a.state, "requested_start": a.requested_start, "requested_end": a.requested_end, "reason": a.reason,
+                    "payable_hours": round(hrs["payable_minutes"] / 60, 2) if x.approval == "approved" else None,
+                    "adjustment": None if a is None else {"id": a.id, "state": a.state, "requested_start": a.requested_start, "requested_end": a.requested_end, "requested_break_minutes": a.requested_break_minutes, "reason": a.reason,
                                                             "requested_by": a.requested_by, "decision_note": a.decision_note}})
     return {"site": {"site_id": site.site_id, "name": site.name, "timezone": site.timezone}, "range": {"start": start_iso, "days": days}, "as_of": now, "sessions": out,
             "summary": {"sessions": len(out), "open": sum(1 for r in out if r["open"]), "approved": sum(1 for r in out if r["approval"] == "approved"),

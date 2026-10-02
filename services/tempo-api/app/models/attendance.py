@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -62,3 +62,59 @@ class SiteGeofence(Base):
     latitude: Mapped[float] = mapped_column(Float)
     longitude: Mapped[float] = mapped_column(Float)
     radius_meters: Mapped[float] = mapped_column(Float)
+
+
+class AttendancePunch(Base):
+    """One thing a worker (or a correcting supervisor) did, exactly as received. Append-only: DELETE is revoked."""
+
+    __tablename__ = "attendance_punch"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String, index=True)
+    session_id: Mapped[str] = mapped_column(String, index=True)
+    worker_id: Mapped[str] = mapped_column(String, index=True)
+    kind: Mapped[str] = mapped_column(String)  # clock_in | break_start | break_end | clock_out
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    device_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    source: Mapped[str] = mapped_column(String, default="kiosk")
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Where the DEVICE was when the tap happened (a kiosk is shared, so this is the kiosk's position, not the worker's)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    location_status: Mapped[str] = mapped_column(String, default="not_requested")  # not_requested | passed | outside | no_fence | unavailable | denied
+
+
+class AttendancePolicy(Base):
+    """Explicit per-site rules. Defaults are conservative and visible in the UI, never silently assumed."""
+
+    __tablename__ = "attendance_policy"
+    tenant_id: Mapped[str] = mapped_column(String, primary_key=True)
+    site_id: Mapped[str] = mapped_column(String, primary_key=True)
+    breaks_paid: Mapped[bool] = mapped_column(default=False)
+    rounding_minutes: Mapped[int] = mapped_column(default=0)
+    rounding_mode: Mapped[str] = mapped_column(String, default="nearest")
+    duplicate_window_seconds: Mapped[int] = mapped_column(default=30)
+    late_grace_minutes: Mapped[int] = mapped_column(default=5)
+    missing_punch_after_hours: Mapped[float] = mapped_column(Float, default=14)
+    excessive_hours: Mapped[float] = mapped_column(Float, default=12)
+    location_mode: Mapped[str] = mapped_column(String, default="off")  # off | record | require
+    updated_by: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class AttendanceRevision(Base):
+    """Every approval, reopening and adjustment of a timesheet, with a snapshot of what it looked like."""
+
+    __tablename__ = "attendance_revision"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String, index=True)
+    session_id: Mapped[str] = mapped_column(String, index=True)
+    revision: Mapped[int] = mapped_column()
+    action: Mapped[str] = mapped_column(String)  # approved | reopened | adjusted
+    actor: Mapped[str] = mapped_column(String)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
