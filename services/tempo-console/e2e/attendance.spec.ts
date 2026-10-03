@@ -206,6 +206,7 @@ test.describe.serial('internal time and attendance', () => {
     const row = page.locator('tbody tr').filter({ hasText: 'Active' }).first()
     const who = (await row.locator('td').first().innerText()).trim()
     const mine = () => page.locator('tbody tr').filter({ hasText: who })
+    const original = (await mine().locator('td').nth(1).innerText()).replace(/\s*(Change|Set)\s*$/, '').trim()   // restored at the end: other specs rely on the seeded badge numbers
     await mine().getByRole('button', { name: /^(Change|Set)$/ }).click()
     const badge = String(900000 + Math.floor(Math.random() * 99999))
     await page.getByLabel(/New badge number/).fill(badge)
@@ -223,5 +224,11 @@ test.describe.serial('internal time and attendance', () => {
     await expect(mine()).toContainText('inactive')
     await mine().getByRole('button', { name: 'Reactivate' }).click()
     await expect(mine()).toContainText('Active')
+    if (/^\d+$/.test(original)) {
+      await mine().getByRole('button', { name: 'Change' }).click()
+      await page.getByLabel(/New badge number/).fill(original)
+      await page.getByRole('button', { name: 'Save', exact: true }).click()
+      await expect(mine()).toContainText(original)
+    }
   })
 })
