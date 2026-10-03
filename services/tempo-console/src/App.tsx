@@ -18,6 +18,7 @@ import LiveOperationsPage from './pages/LiveOperations'
 import { NewActionPage } from './pages/NewAction'
 import { NewRunPage } from './pages/NewRun'
 import { OnboardingPage } from './pages/Onboarding'
+import HelpLibrary from './pages/HelpLibrary'
 import OverviewPage from './pages/Overview'
 import SetupWizard from './pages/SetupWizard'
 import PlatformConsole from './pages/PlatformConsole'
@@ -57,6 +58,8 @@ function App() {
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/setup" element={<SetupWizard />} />
+            <Route path="/help" element={<HelpLibrary />} />
+            <Route path="/help/:id" element={<HelpLibrary />} />
             <Route path="/account" element={<AccountPage />} />
           </Route>
         </Routes>

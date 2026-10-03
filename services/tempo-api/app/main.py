@@ -25,7 +25,9 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.service_name, version="0.1.0-phase0", lifespan=lifespan)
+# The framework's own /docs, /redoc and /openapi.json would publish every internal route (platform, auth, admin). They are off; the supported
+# public API is documented by app/api/v1/public_docs.py from an allow-list.
+app = FastAPI(title=settings.service_name, version="0.1.0-phase0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_exception_handler(TempoError, tempo_error_handler)
 app.add_middleware(
     CORSMiddleware,

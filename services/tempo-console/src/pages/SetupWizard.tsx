@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { getChecklist, getSetupState, putSetupState, setupSite, type Checklist, type SetupState } from '../api/imports'
 import { generateRoster } from '../api/ops'
 import { ApiError } from '../api/client'
+import { HelpLink } from '../components/HelpLink'
 import { UploadWizard } from '../components/UploadWizard'
 import { Banner, PageHead, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
@@ -40,7 +41,7 @@ export default function SetupWizard() {
   const advance = () => go(ORDER[Math.min(i + 1, ORDER.length - 1)])
   return (
     <>
-      <PageHead title="Guided setup" sub="Pick up where you left off — on any device. Steps tick off as your data arrives." />
+      <PageHead title="Guided setup" sub="Pick up where you left off — on any device. Steps tick off as your data arrives."><HelpLink id="first-setup" /></PageHead>
       {err && <Banner tone="bad" title="Problem">{err}</Banner>}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) 1fr', gap: 16 }}>
         <nav aria-label="Setup steps"><ol style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>

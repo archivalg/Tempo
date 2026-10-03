@@ -9,6 +9,7 @@ import { useSite } from '../components/AppShell'
 import { AttendanceRules } from '../components/AttendanceRules'
 import { AttendanceToday } from '../components/AttendanceToday'
 import { ClockCredentials } from '../components/ClockCredentials'
+import { HelpLink } from '../components/HelpLink'
 import { Banner, ExportButton, Drawer, Empty, PageHead, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { fmtTime, localDate } from '../lib/format'
@@ -59,6 +60,7 @@ export default function AttendancePage() {
   return (
     <>
       <PageHead title="Attendance & timesheets" sub={`${site.name} · originals are never overwritten; corrections need a second approver`}>
+        <HelpLink id={view === 'timesheets' ? 'timesheets' : view === 'rules' ? 'location' : view === 'badges' ? 'kiosk-setup' : 'attendance-day'} />
         {view === 'timesheets' && can('labour.export') && <ExportButton run={() => exportCsv(site.site_id, 'timesheets', start)} label="Timesheet report" />}
         {view === 'timesheets' && can('labour.export') && can('labour.attendance.approve') && <ExportButton run={() => exportPayroll(site.site_id, start)} label="Payroll CSV (approved)" />}
         {view === 'timesheets' && <div className="tp-row"><button className="tp-btn" onClick={() => setStart(addDays(start, -7))} aria-label="Previous week">←</button><button className="tp-btn" onClick={() => setStart(mondayOf(localDate(new Date(), tz)))}>This week</button><button className="tp-btn" onClick={() => setStart(addDays(start, 7))} aria-label="Next week">→</button></div>}

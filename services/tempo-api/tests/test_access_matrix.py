@@ -77,7 +77,7 @@ def _send(client, method, path, body, headers):
 
 
 def test_every_non_public_route_rejects_anonymous_callers(client):
-    schema = client.get("/openapi.json").json()["paths"]
+    schema = client.app.openapi()["paths"]
     checked = 0
     for path, ops in schema.items():
         for method in ops:

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getMyPlan, type MyPlan } from '../api/ops'
+import { HelpLink } from './HelpLink'
 import { Banner, Skeleton, Status } from './ui'
 import { fmtTime } from '../lib/format'
 
@@ -15,7 +16,7 @@ export function PlanAllowance() {
   if (!p.managed) return <Banner tone="info" title="No plan recorded">{p.message} {p.active_workers} active worker(s) across {p.sites_in_use} site(s).</Banner>
   const cap = p.worker_allowance
   return (
-    <section className="tp-card" aria-label="Plan and allowance"><header><h2>Plan &amp; allowance</h2></header>
+    <section className="tp-card" aria-label="Plan and allowance"><header><h2>Plan &amp; allowance</h2><HelpLink id="plans" /></header>
       <div className="tp-body tp-stack">
         <dl className="tp-dl">
           <dt>Plan</dt><dd>{p.plan?.name} {p.plan && !p.plan.approved && <Status tone="neutral" title="Prices and inclusions for this plan version have not been approved">Not yet finalised</Status>}</dd>
