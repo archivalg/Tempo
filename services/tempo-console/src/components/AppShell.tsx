@@ -19,6 +19,8 @@ const NAV: { to: string; label: string; perm: string; end?: boolean; group?: str
   { to: '/live', label: 'Live Operations', perm: 'labour.read' },
   { to: '/attendance', label: 'Attendance', perm: 'labour.read' },
   { to: '/approvals', label: 'Approvals', perm: 'labour.read', group: 'Decide' },
+  { to: '/offers', label: 'Shift offers', perm: 'labour.plan' },
+  { to: '/requests', label: 'Leave requests', perm: 'labour.approve' },
   { to: '/reports', label: 'Insights & Reports', perm: 'labour.read' },
   { to: '/runs', label: 'Optimisation Studio', perm: 'labour.read' },
   { to: '/providers', label: 'Team & Skills', perm: 'labour.read', group: 'Manage' },
@@ -43,6 +45,7 @@ export function AppShell() {
   if (status === 'loading') return <div className="tp-app" style={{ padding: 32 }}><Skeleton h={28} w={240} /></div>
   if (status === 'error') return <div className="tp-app" style={{ padding: 32 }}><Banner tone="bad" title="Cannot reach the Tempo API">{error} <button className="tp-btn" onClick={() => void reload()}>Retry</button></Banner></div>
   if (status === 'anonymous' || !access) return <LoginPage />
+  if (!can('labour.read') && can('labour.self')) return <div className="tp-app" style={{ padding: 32, maxWidth: 520 }}><h1>Use the Tempo app</h1><p>Your account is for the Tempo employee app on your phone. Managers use this website.</p><button className="tp-btn" onClick={() => void signOut()}>Sign out</button></div>
   if (access.platform_admin && !access.tenant_id) return <Navigate to="/platform" replace />   // platform operators have no organisation to show
 
   const setSite = (id: string) => { const p = new URLSearchParams(params); p.set('site', id); setParams(p, { replace: true }) }

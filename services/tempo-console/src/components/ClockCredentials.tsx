@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { addSkill, getClockCredentials, patchWorker, removeSkill, setClockPin, unlockClockCredential, type ClockCredential } from '../api/ops'
+import { addSkill, getAppAccess, getClockCredentials, inviteToApp, patchWorker, removeSkill, setClockPin, unlinkFromApp, unlockClockCredential, type AppAccess, type ClockCredential } from '../api/ops'
 import { ApiError } from '../api/client'
 import { Banner, Drawer, Empty, Skeleton, Status } from './ui'
 
@@ -12,7 +12,9 @@ export function ClockCredentials({ siteId }: { siteId: string }) {
   const [skillsFor, setSkillsFor] = useState<string | null>(null)
   const [newSkill, setNewSkill] = useState('')
   const [busy, setBusy] = useState(false)
-  const load = useCallback(() => { getClockCredentials(siteId).then(setRows).catch((e) => setErr(e.message)) }, [siteId])
+  const [access, setAccess] = useState<AppAccess | null>(null)
+  const [invite, setInvite] = useState<{ label: string; link: string; app: string } | null>(null)
+  const load = useCallback(() => { getClockCredentials(siteId).then(setRows).catch((e) => setErr(e.message)); getAppAccess(siteId).then(setAccess).catch(() => undefined) }, [siteId])
   useEffect(() => { setRows(null); load() }, [load])
   async function act(fn: () => Promise<unknown>, keepOpen = false) {
     setBusy(true); setErr(null)
@@ -25,7 +27,7 @@ export function ClockCredentials({ siteId }: { siteId: string }) {
       {!rows ? <div className="tp-body"><Skeleton h={160} /></div> : rows.length === 0 ? <Empty title="No workers at this site">Import staff on the Data page first.</Empty> : (
         <div style={{ overflow: 'auto', maxHeight: 560 }}>
           <table className="tp-table">
-            <thead><tr><th>Worker</th><th>Badge no.</th><th>Status</th><th>PIN</th><th>Skills</th><th /></tr></thead>
+            <thead><tr><th>Worker</th><th>Badge no.</th><th>Status</th><th>PIN</th><th>Skills</th><th>Tempo app</th><th /></tr></thead>
             <tbody>{rows.map((r) => (
               <tr key={r.worker_id}>
                 <td>{r.label}</td>
@@ -37,6 +39,10 @@ export function ClockCredentials({ siteId }: { siteId: string }) {
                 <td>{r.status === 'active' ? <Status tone="ok">Active</Status> : <Status tone="neutral">{r.status}</Status>}</td>
                 <td>{r.locked ? <Status tone="bad">Locked</Status> : r.has_pin ? <Status tone="ok">Set</Status> : <Status tone="risk">Not set</Status>}</td>
                 <td>{r.skills.length ? r.skills.join(', ') : <span className="tp-muted">none</span>} <button className="tp-btn" onClick={() => { setSkillsFor(r.worker_id); setNewSkill('') }} aria-label={`Edit skills for ${r.label}`}>Edit</button></td>
+                <td>{(() => { const a = access?.workers[r.worker_id]; if (!a) return <span className="tp-muted">…</span>
+                  return <span className="tp-row">{a.state === 'active' ? <Status tone="ok">Joined{a.push_devices ? ` · ${a.push_devices} phone${a.push_devices === 1 ? '' : 's'}` : ''}</Status> : a.state === 'invited' ? <Status tone="risk">Invited</Status> : <Status tone="neutral">Not invited</Status>}
+                    {r.status === 'active' && <button className="tp-btn" disabled={busy} onClick={() => void act(async () => { const x = await inviteToApp(r.worker_id); setInvite({ label: r.label, link: `${window.location.origin}${x.invite_path}`, app: x.app_link }) }, true)}>{a.state === 'not_invited' ? 'Invite' : 'New link'}</button>}
+                    {a.state !== 'not_invited' && <button className="tp-btn danger" disabled={busy} onClick={() => { if (window.confirm(`Remove ${r.label}'s access to the Tempo app? Their phone is signed out immediately.`)) void act(() => unlinkFromApp(r.worker_id), true) }}>Remove</button>}</span> })()}</td>
                 <td>{editing?.id === r.worker_id && editing.field === 'pin' ? (
                   <form className="tp-row" onSubmit={(e) => { e.preventDefault(); void act(() => setClockPin(r.worker_id, val)) }}>
                     <input aria-label={`New PIN for ${r.label}`} inputMode="numeric" autoComplete="off" pattern="[0-9]{4,8}" placeholder="4–8 digits" value={val} onChange={(e) => setVal(e.target.value.replace(/\D/g, '').slice(0, 8))} style={{ width: 110 }} />
@@ -51,6 +57,13 @@ export function ClockCredentials({ siteId }: { siteId: string }) {
           </table>
         </div>)}
       <p className="tp-muted tp-body" style={{ fontSize: 12 }}>Workers clock in with their badge number and PIN. Badge numbers must be unique. After repeated wrong PINs the credential locks for a short time; setting a new PIN or unlocking clears it. Making someone inactive keeps their history; they cannot be made inactive while clocked in, and any future shifts they hold will show as conflicts until reassigned.</p>
+      {invite && (
+        <Drawer title={`App invitation — ${invite.label}`} onClose={() => setInvite(null)}>
+          <div className="tp-stack"><Banner tone="info" title="Shown once">Give this to the employee privately. It works once and expires; they choose their own username and password. Tempo does not email it.</Banner>
+            <label className="tp-field">Link to open on their phone<input readOnly value={invite.app} onFocus={(e) => e.currentTarget.select()} /></label>
+            <label className="tp-field">Web link (works in any browser, then open the app)<input readOnly value={invite.link} onFocus={(e) => e.currentTarget.select()} /></label>
+            <button className="tp-btn" onClick={() => void navigator.clipboard?.writeText(invite.app)}>Copy phone link</button></div>
+        </Drawer>)}
       {person && (
         <Drawer title={`Skills — ${person.label}`} onClose={() => setSkillsFor(null)}>
           <div className="tp-stack">

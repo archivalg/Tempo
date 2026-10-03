@@ -33,6 +33,7 @@ const config: ExpoConfig = {
     bundleIdentifier: c.id,
     supportsTablet: true,
     infoPlist: {
+      NSLocationWhenInUseUsageDescription: 'Tempo checks the kiosk tablet’s position when someone clocks, only if their company has turned site location checks on.',
       NSCameraUsageDescription: 'Tempo uses the camera on a kiosk tablet to scan an employee’s QR code for clocking in.',
       ITSAppUsesNonExemptEncryption: false,
     },
@@ -49,6 +50,7 @@ const config: ExpoConfig = {
     'expo-secure-store',
     ['expo-notifications', { color: '#069b57' }],
     ['expo-camera', { cameraPermission: 'Tempo uses the camera on a kiosk tablet to scan an employee’s QR code for clocking in.', recordAudioAndroid: false }],
+    ['expo-location', { locationWhenInUsePermission: 'Tempo checks the kiosk tablet’s position when someone clocks, only if their company has turned site location checks on.' }],
     '@react-native-community/datetimepicker',
   ],
   experiments: { typedRoutes: false },

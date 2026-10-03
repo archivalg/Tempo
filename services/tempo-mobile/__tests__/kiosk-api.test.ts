@@ -1,3 +1,4 @@
+jest.mock('expo-location', () => ({ requestForegroundPermissionsAsync: jest.fn(), getCurrentPositionAsync: jest.fn(), Accuracy: { Balanced: 3 } }))
 jest.mock('expo-secure-store', () => require('../test-support/helpers').secureStoreMock)
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: { version: '0.1.0', extra: { appEnv: 'test', apiUrl: 'https://api.example.test/v1' } } } }))
 jest.mock('react-native', () => ({ Platform: { OS: 'ios' } }))

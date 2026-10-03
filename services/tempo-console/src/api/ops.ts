@@ -16,7 +16,7 @@ export interface Overview {
   attention: ExceptionItem[]; roster_preview: { label: string; date: string; shifts: number; workers: number; state: string; approval: string | null }[]
   recommendations: Recommendation[]
 }
-export interface RosterShift { shift_id: string; worker_id: string; role: string; zone: string; start_at: string; end_at: string; status: string; employment_type: string; break_minutes: number; flags: string[] }
+export interface RosterShift { shift_id: string; worker_id: string; role: string; zone: string; start_at: string; end_at: string; status: string; employment_type: string; break_minutes: number; planned_break_minutes?: number | null; instructions?: string | null; flags: string[] }
 export interface RosterTotals { shifts: number; workers: number; hours: number; agency_share_pct: number | null; cost?: number | null; cost_note?: string | null }
 export interface Roster {
   site: { site_id: string; name: string; timezone: string; operating_mode: string }
@@ -67,7 +67,7 @@ export interface RosterVersion { id: string; site_id: string; week_start: string
 export interface VersionBoard extends Roster { version: RosterVersion; versions: RosterVersion[] }
 export interface PendingRoster extends RosterVersion { site_name: string; age_seconds: number; impact: { this_version: RosterTotals; current_published: RosterTotals; hard_conflicts: number } | null }
 export interface RosterEventItem { at: string; actor: string; action: string; detail: Record<string, unknown> }
-export interface ShiftInput { worker_id: string; role: string; zone: string; start_at: string; end_at: string }
+export interface ShiftInput { worker_id: string; role: string; zone: string; start_at: string; end_at: string; break_minutes?: number | null; instructions?: string | null }
 
 export const listRosterVersions = (site: string, weekStart: string) => apiRequest<RosterVersion[]>(`/sites/${site}/rosters?week_start=${weekStart}`)
 export const getVersionBoard = (id: string) => apiRequest<VersionBoard>(`/rosters/${id}`)
@@ -165,3 +165,28 @@ export const getMyPlan = () => apiRequest<MyPlan>('/billing/plan')
 export const patchWorker = (id: string, body: { badge_no?: string; status?: 'active' | 'inactive' }) => apiRequest(`/workers/${id}`, { method: 'PATCH', body })
 export const addSkill = (id: string, skill_code: string) => apiRequest<{ skills: string[] }>(`/workers/${id}/skills`, { method: 'POST', body: { skill_code } })
 export const removeSkill = (id: string, code: string) => apiRequest<{ skills: string[] }>(`/workers/${id}/skills/${encodeURIComponent(code)}`, { method: 'DELETE' })
+
+// ---- employee app: access, offers, leave, messaging ----
+export interface AppAccess { site_id: string; workers: Record<string, { state: 'not_invited' | 'invited' | 'active'; push_devices: number }> }
+export const getAppAccess = (site: string) => apiRequest<AppAccess>(`/sites/${site}/app-access`)
+export const inviteToApp = (workerId: string, email?: string) => apiRequest<{ invite_path: string; app_link: string; invite_token: string; note: string }>(`/workers/${workerId}/app-invite`, { method: 'POST', body: email ? { email } : {} })
+export const unlinkFromApp = (workerId: string) => apiRequest(`/workers/${workerId}/app-link`, { method: 'DELETE' })
+export interface OfferRow { id: string; site_id: string; role: string; zone: string; start_at: string; end_at: string; start_local: string; end_local: string; break_minutes: number | null; instructions: string | null; expires_at: string | null; status: 'open' | 'pending_confirmation' | 'filled' | 'cancelled' | 'expired'; auto_confirm: boolean; accepted_worker_id: string | null; decision_note: string | null; recipients: { worker_id: string; response: string; responded_at: string | null; note: string | null }[] }
+export interface NewOffer { worker_ids: string[]; role: string; zone: string; start_at: string; end_at: string; break_minutes?: number | null; instructions?: string | null; expires_at?: string | null; auto_confirm: boolean }
+export const listOffers = (site: string, status = 'active') => apiRequest<OfferRow[]>(`/sites/${site}/offers?status=${status}`)
+export const createOffer = (site: string, b: NewOffer) => apiRequest<OfferRow>(`/sites/${site}/offers`, { method: 'POST', body: b })
+export const confirmOffer = (id: string) => apiRequest<OfferRow>(`/offers/${id}/confirm`, { method: 'POST' })
+export const rejectOffer = (id: string, note: string) => apiRequest<OfferRow>(`/offers/${id}/reject`, { method: 'POST', body: { note } })
+export const cancelOffer = (id: string, note: string) => apiRequest<OfferRow>(`/offers/${id}/cancel`, { method: 'POST', body: { note } })
+export const editOffer = (id: string, b: Partial<NewOffer>) => apiRequest<OfferRow>(`/offers/${id}`, { method: 'PATCH', body: b })
+export interface LeaveRow { id: string; worker_id: string; label: string; kind: string; start_date: string; end_date: string; reason: string | null; status: 'pending' | 'approved' | 'rejected' | 'cancelled'; decision_note: string | null; affected_shifts: number }
+export const listLeave = (site: string, status = 'pending') => apiRequest<LeaveRow[]>(`/sites/${site}/leave-requests?status=${status}`)
+export const decideLeave = (id: string, approve: boolean, note: string) => apiRequest<LeaveRow>(`/leave-requests/${id}/${approve ? 'approve' : 'reject'}`, { method: 'POST', body: { note } })
+export interface Messaging { push_enabled: boolean; sms_enabled: boolean; sms_monthly_cap: number; default_reminder_lead_minutes: number; lead_choices: number[]; is_default: boolean; push_provider: string; sms_provider: string; sms_sent_this_month: number; notes: string[] }
+export const getMessaging = () => apiRequest<Messaging>('/messaging-settings')
+export const putMessaging = (b: Pick<Messaging, 'push_enabled' | 'sms_enabled' | 'sms_monthly_cap' | 'default_reminder_lead_minutes'>) => apiRequest<Messaging>('/messaging-settings', { method: 'PUT', body: b })
+export interface Deliveries { window_days: number; jobs: Record<string, number>; deliveries: Record<string, number>; provider_receipts_ok: number; acknowledged_by_device: number; recent: { at: string; status: string; provider: string; error: string | null; receipt: string | null; acknowledged: boolean }[]; meaning: Record<string, string> }
+export const getDeliveries = () => apiRequest<Deliveries>('/messaging/deliveries')
+export const runJobsNow = () => apiRequest<{ processed: number; scheduled: number }>('/messaging/run-jobs', { method: 'POST' })
+export interface OfferableWorker { worker_id: string; label: string; skills: string[] }
+export const listOfferableWorkers = (site: string) => apiRequest<OfferableWorker[]>(`/sites/${site}/offerable-workers`)

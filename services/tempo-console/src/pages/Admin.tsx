@@ -5,6 +5,7 @@ import { useApi } from '../hooks/useApi'
 import { useSite } from '../components/AppShell'
 import { fmtTime } from '../lib/format'
 import { inviteUser, listUsers, userAction } from '../api/session'
+import { MessagingSettings } from '../components/MessagingSettings'
 import { PlanAllowance } from '../components/PlanAllowance'
 import { useTempoContext } from '../context/TempoContextProvider'
 
@@ -33,6 +34,7 @@ export default function AdminPage() {
     <>
       <PageHead title="Administration" sub="Kiosk devices for the selected site" />
       <PlanAllowance />
+      <MessagingSettings />
       <section className="tp-insight-strip" aria-label="Administration overview">
         <div className="tp-insight"><b>Active kiosks</b><div className="big">{q.data ? activeDevices : '—'}</div><span className="tp-muted">server-enrolled devices for accessible sites</span></div>
         <div className="tp-insight"><b>Pending enrolment</b><div className="big">{q.data ? pendingDevices : '—'}</div><span className="tp-muted">codes are shown once and expire</span></div>

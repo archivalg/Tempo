@@ -34,7 +34,7 @@ export async function enablePush(ask: boolean): Promise<PushStatus> {
   if (!EAS_PROJECT_ID) return 'unavailable'   // no Expo project is configured for this build, so there is no push token to register
   try {
     const t = await Notifications.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID })
-    const d = await registerPushDevice({ token: t.data, platform: Platform.OS === 'ios' ? 'ios' : 'android', app_version: APP_VERSION, label: Device.deviceName ?? undefined })
+    const d = await registerPushDevice({ token: t.data, platform: Platform.OS === 'ios' ? 'ios' : 'android', app_version: APP_VERSION, label: Device.modelName ?? undefined })
     await store.savePushDeviceId(d.id)
     return 'granted'
   } catch {

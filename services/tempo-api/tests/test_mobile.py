@@ -116,6 +116,21 @@ def test_unlinking_cuts_off_the_app_immediately(client):
     assert client.post("/v1/mobile/auth/login", json={"username": "emp1", "password": "Correct-Horse-Battery-9!"}).status_code in (401, 403)
 
 
+def test_removed_access_can_be_granted_again_without_duplicates_and_old_sessions_stay_dead(client):
+    seed_people(client)
+    h, tokens = employee_login(client, "wrk_emp")
+    assert client.delete("/v1/workers/wrk_emp/app-link", headers=ADMIN()).status_code == 200
+    again = client.post("/v1/workers/wrk_emp/app-invite", json={}, headers=ADMIN())
+    assert again.status_code == 201, again.text
+    assert client.get("/v1/me/profile", headers=h).status_code in (401, 403)                                        # the old session is not revived
+    assert client.post("/v1/auth/accept-invite", json={"token": again.json()["invite_token"], "password": "Brand-New-Passphrase-3!", "username": "emp1"}).status_code == 200
+    r = client.post("/v1/mobile/auth/login", json={"username": "emp1", "password": "Brand-New-Passphrase-3!"})
+    assert r.status_code == 200
+    client.cookies.clear()
+    assert client.get("/v1/me/profile", headers={"Authorization": f"Bearer {r.json()['access_token']}"}).json()["worker_id"] == "wrk_emp"
+    assert client.post("/v1/mobile/auth/login", json={"username": "emp1", "password": "Correct-Horse-Battery-9!"}).status_code == 401   # the old password no longer works
+
+
 def test_staff_see_published_shifts_only_and_a_roster_change_appears_with_a_notification(client):
     seed_people(client)
     h, _ = employee_login(client, "wrk_emp")
@@ -567,3 +582,12 @@ def test_two_companies_cannot_see_each_others_employees_offers_or_shifts(client)
     assert client.get("/v1/me/offers", headers=hb).json()["offers"] == [] and client.get("/v1/me/shifts", headers=hb).json()["shifts"] == []
     assert client.post(f"/v1/offers/{o['id']}/confirm", headers=adm_b).status_code in (403, 404)
     assert make_offer(client, ["wrk_b"]).status_code == 400                                                                      # cannot offer A's shift to B's worker
+
+
+def test_planners_can_list_who_can_be_offered_a_shift_but_not_manage_accounts(client):
+    seed_people(client)
+    employee_login(client, "wrk_emp")
+    got = client.get(f"/v1/sites/{SITE}/offerable-workers", headers=planner()).json()
+    assert [(x["worker_id"], x["label"], x["skills"]) for x in got] == [("wrk_emp", "Eva Employee", ["picker"])]            # only people who joined the app
+    assert client.get(f"/v1/sites/{SITE}/offerable-workers", headers=context_header(roles=["analyst"], user_id="usr_an")).status_code == 403
+    assert client.post("/v1/workers/wrk_other/app-invite", json={}, headers=planner()).status_code == 403                    # inviting needs configure

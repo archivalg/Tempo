@@ -62,15 +62,22 @@ def invite_employee(worker_id: str, body: AppInvite, ctx: RequestContext = Depen
             email = body.email.strip().lower() if body.email else None
             if email and db.scalar(select(TempoUser.user_id).where(TempoUser.email == email)):
                 raise ScopeError("that email already belongs to an account; use a different address or leave it blank")
-            u = TempoUser(external_subject=f"employee:{ctx.tenant_id}:{worker_id}", email=email, display_name=person.display_name if person else None)
-            db.add(u)
-            db.flush()
+            subject = f"employee:{ctx.tenant_id}:{worker_id}"
+            u = db.scalar(select(TempoUser).where(TempoUser.external_subject == subject))      # a person whose access was removed earlier is re-invited, not duplicated
+            if u is None:
+                u = TempoUser(external_subject=subject, email=email, display_name=person.display_name if person else None)
+                db.add(u)
+                db.flush()
         if u.password_hash is not None:
             token = pl.create_invitation(db, u, ctx.user_id, purpose="reset")
         else:
             token = pl.create_invitation(db, u, ctx.user_id)
     if link is None:
-        db.add(TenantMembership(user_id=u.user_id, tenant_id=ctx.tenant_id, is_default=True, invitation_source=f"user:{ctx.user_id}"))
+        m = db.get(TenantMembership, (u.user_id, ctx.tenant_id))
+        if m is None:
+            db.add(TenantMembership(user_id=u.user_id, tenant_id=ctx.tenant_id, is_default=True, invitation_source=f"user:{ctx.user_id}"))
+        else:
+            m.status = "active"
         db.add(UserRoleAssignment(user_id=u.user_id, tenant_id=ctx.tenant_id, role="employee"))
         db.add(UserSiteGrant(user_id=u.user_id, tenant_id=ctx.tenant_id, site_id=w.home_site))
         db.add(WorkerUserLink(tenant_id=ctx.tenant_id, user_id=u.user_id, worker_id=worker_id, linked_by=ctx.user_id))
@@ -97,6 +104,22 @@ def app_access(site_id: str, ctx: RequestContext = Depends(get_request_context),
         u = users.get(l.user_id) if l else None
         out[w.worker_id] = {"state": "not_invited" if l is None else ("active" if u and u.password_hash else "invited"), "push_devices": devs.get(l.user_id, 0) if l else 0}
     return {"site_id": site.site_id, "workers": out}
+
+
+@router.get("/sites/{site_id}/offerable-workers")
+def offerable_workers(site_id: str, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> list[dict]:
+    """People a planner can offer a shift to: active workers at the site who have joined the app. Names need labour.worker_names."""
+    _need(ctx, "labour.plan")
+    site = _site(db, ctx, site_id)
+    rows = db.execute(select(Worker, WorkerUserLink).join(WorkerUserLink, WorkerUserLink.worker_id == Worker.worker_id).where(Worker.tenant_id == ctx.tenant_id, Worker.home_site == site.site_id,
+                                                                                                                              Worker.status == "active", WorkerUserLink.tenant_id == ctx.tenant_id)).all()
+    ids = [w.worker_id for w, _ in rows] or [""]
+    names = {p.worker_id: p.display_name for p in db.scalars(select(WorkerPerson).where(WorkerPerson.tenant_id == ctx.tenant_id, WorkerPerson.worker_id.in_(ids)))} if ctx.has_permission("labour.worker_names") else {}
+    from app.models.canonical import SkillCertification
+    skills: dict[str, list[str]] = {}
+    for c in db.scalars(select(SkillCertification).where(SkillCertification.tenant_id == ctx.tenant_id, SkillCertification.worker_id.in_(ids))):
+        skills.setdefault(c.worker_id, []).append(c.skill_code)
+    return sorted(({"worker_id": w.worker_id, "label": names.get(w.worker_id) or f"Worker …{w.worker_id[-4:]}", "skills": sorted(skills.get(w.worker_id, []))} for w, _ in rows), key=lambda x: x["label"])
 
 
 @router.delete("/workers/{worker_id}/app-link")

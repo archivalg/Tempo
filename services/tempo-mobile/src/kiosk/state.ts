@@ -10,7 +10,7 @@ export type Identity = { mode: 'pin'; workerNo: string; pin: string } | { mode: 
 
 export type KioskState =
   | { screen: 'identify'; workerNo: string; pin: string; field: 'worker' | 'pin'; error: string | null; busy: boolean }
-  | { screen: 'choose'; identity: Identity; masked: string; actions: KioskAction[]; stateLabel: string; error: string | null; busy: boolean }
+  | { screen: 'choose'; identity: Identity; masked: string; actions: KioskAction[]; stateLabel: string; locationMode: string; error: string | null; busy: boolean }
   | { screen: 'result'; outcome: 'recorded' | 'already_recorded' | 'refused' | 'not_recorded'; action: KioskAction; message: string; at: string | null }
 
 export const IDENTIFY: KioskState = { screen: 'identify', workerNo: '', pin: '', field: 'worker', error: null, busy: false }
@@ -22,7 +22,7 @@ const DONE: Record<KioskAction, string> = { clock_in: 'Clocked in', break_start:
 
 export type Event =
   | { type: 'digit'; d: string } | { type: 'backspace' } | { type: 'clear' } | { type: 'field'; f: 'worker' | 'pin' }
-  | { type: 'busy' } | { type: 'identified'; identity: Identity; masked: string; state: string; actions: string[] }
+  | { type: 'busy' } | { type: 'identified'; identity: Identity; masked: string; state: string; actions: string[]; locationMode?: string }
   | { type: 'identify_failed'; message: string; kind: 'refused' | 'network' }
   | { type: 'punch_result'; action: KioskAction; duplicate: boolean; at: string | null }
   | { type: 'punch_refused'; action: KioskAction; message: string } | { type: 'punch_network_failed'; action: KioskAction }
@@ -45,7 +45,7 @@ export function reduce(s: KioskState, e: Event): KioskState {
         case 'clear': return { ...s, [s.field === 'worker' ? 'workerNo' : 'pin']: '' }
         case 'field': return { ...s, field: e.f }
         case 'busy': return { ...s, busy: true, error: null }
-        case 'identified': return { screen: 'choose', identity: e.identity, masked: e.masked, actions: ORDER.filter((a) => e.actions.includes(a)), stateLabel: STATE_LABEL[e.state] ?? '', error: null, busy: false }
+        case 'identified': return { screen: 'choose', identity: e.identity, masked: e.masked, actions: ORDER.filter((a) => e.actions.includes(a)), stateLabel: STATE_LABEL[e.state] ?? '', locationMode: e.locationMode ?? 'off', error: null, busy: false }
         case 'identify_failed':
           // the PIN is cleared on every failure; a network failure is never reported as a wrong PIN
           return { ...s, pin: '', field: e.kind === 'network' ? s.field : 'pin', busy: false, error: e.message }

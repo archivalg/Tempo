@@ -6,7 +6,7 @@ import { Image, Modal, Pressable, StatusBar, Text, View } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { ApiError } from '../../src/api/client'
 import * as store from '../../src/auth/storage'
-import { authoriseExit, describeFailure, punch, whoami } from '../../src/kiosk/api'
+import { authoriseExit, describeFailure, getFix, punch, whoami } from '../../src/kiosk/api'
 import { ACTION_LABEL, IDENTIFY, RETURN_AFTER_MS, isSuccess, reduce, type Identity, type KioskAction } from '../../src/kiosk/state'
 import { useOnline } from '../../src/net/network'
 import { Banner, Button, Field, Loading } from '../../src/ui/kit'
@@ -41,7 +41,7 @@ export default function Kiosk() {
     dispatch({ type: 'busy' })
     try {
       const w = await whoami(dev, identity)
-      dispatch({ type: 'identified', identity, masked: w.masked_identity, state: w.state, actions: w.allowed_actions })
+      dispatch({ type: 'identified', identity, masked: w.masked_identity, state: w.state, actions: w.allowed_actions, locationMode: w.location_mode })
     } catch (e) {
       const f = describeFailure(e)
       if (f.deviceRevoked) setRevoked(true)
@@ -53,7 +53,7 @@ export default function Kiosk() {
     if (!dev || s.screen !== 'choose') return
     dispatch({ type: 'busy' })
     try {
-      const r = await punch(dev, s.identity, action)
+      const r = await punch(dev, s.identity, action, await getFix(s.locationMode))
       dispatch({ type: 'punch_result', action, duplicate: r.duplicate, at: hhmm(r.recorded_at ?? r.clocked_in_at ?? r.clocked_out_at) })
     } catch (e) {
       const f = describeFailure(e)

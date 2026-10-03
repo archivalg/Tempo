@@ -19,7 +19,9 @@ import { NewActionPage } from './pages/NewAction'
 import { NewRunPage } from './pages/NewRun'
 import { OnboardingPage } from './pages/Onboarding'
 import HelpLibrary from './pages/HelpLibrary'
+import OffersPage from './pages/Offers'
 import OverviewPage from './pages/Overview'
+import RequestsPage from './pages/Requests'
 import SetupWizard from './pages/SetupWizard'
 import PlatformConsole from './pages/PlatformConsole'
 import RosterPlannerPage from './pages/RosterPlanner'
@@ -58,6 +60,8 @@ function App() {
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/setup" element={<SetupWizard />} />
+            <Route path="/offers" element={<OffersPage />} />
+            <Route path="/requests" element={<RequestsPage />} />
             <Route path="/help" element={<HelpLibrary />} />
             <Route path="/help/:id" element={<HelpLibrary />} />
             <Route path="/account" element={<AccountPage />} />

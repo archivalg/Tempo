@@ -20,7 +20,7 @@ const addDays = (date: string, n: number) => { const d = new Date(`${date}T00:00
 const mondayOf = (date: string) => { const d = new Date(`${date}T00:00:00Z`); return addDays(date, -((d.getUTCDay() + 6) % 7)) }
 const errText = (e: unknown) => (e instanceof ApiError ? e.message : e instanceof Error ? e.message : 'Something went wrong')
 
-type Draft = { shift_id?: string; worker_id: string; role: string; zone: string; start: string; end: string }
+type Draft = { shift_id?: string; worker_id: string; role: string; zone: string; start: string; end: string; break_minutes?: string; instructions?: string }
 type Confirm = null | { kind: 'publish' | 'reject' | 'approve' | 'reoptimise' | 'copy'; note: string }
 
 export default function RosterPlannerPage() {
@@ -83,7 +83,7 @@ export default function RosterPlannerPage() {
   }
   const adopt = (b: VersionBoard) => { setBoard(b); setVersions(b.versions); set('v', b.version.id) }
   const openNew = (worker: string, day: string) => setEdit({ worker_id: worker, role: workers.find((w) => w.worker_id === worker)?.skills[0] ?? 'picker', zone: zones[0] ?? 'pick_a', start: `${day}T06:00`, end: `${day}T14:00` })
-  const openEdit = (s: RosterShift) => setEdit({ shift_id: s.shift_id, worker_id: s.worker_id, role: s.role, zone: s.zone, start: utcToZonedInput(s.start_at, tz), end: utcToZonedInput(s.end_at, tz) })
+  const openEdit = (s: RosterShift) => setEdit({ shift_id: s.shift_id, worker_id: s.worker_id, role: s.role, zone: s.zone, start: utcToZonedInput(s.start_at, tz), end: utcToZonedInput(s.end_at, tz), break_minutes: s.planned_break_minutes != null ? String(s.planned_break_minutes) : '', instructions: s.instructions ?? '' })
 
   /** Drag a shift to another worker and/or day. Same local start time and length; the server re-validates (overlap, rest, availability, certification…) and any conflict is flagged on the board. */
   async function moveShift(shiftId: string, workerId: string, day: string) {
@@ -104,7 +104,7 @@ export default function RosterPlannerPage() {
 
   async function saveShift() {
     if (!edit || !v) return
-    const body = { worker_id: edit.worker_id, role: edit.role.trim(), zone: edit.zone.trim(), start_at: zonedToUtcIso(edit.start, tz), end_at: zonedToUtcIso(edit.end, tz) }
+    const body = { worker_id: edit.worker_id, role: edit.role.trim(), zone: edit.zone.trim(), start_at: zonedToUtcIso(edit.start, tz), end_at: zonedToUtcIso(edit.end, tz), break_minutes: edit.break_minutes ? Number(edit.break_minutes) : null, instructions: (edit.instructions ?? '').trim() || null }
     await run('save', () => (edit.shift_id ? editShift(v.id, edit.shift_id, body) : addShift(v.id, body)), (b) => { adopt(b); setEdit(null) })
   }
 
@@ -266,6 +266,10 @@ export default function RosterPlannerPage() {
             <div className="tp-cols2">
               <label className="tp-field">Starts ({tz})<input type="datetime-local" value={edit.start} disabled={!editable} onChange={(e) => setEdit({ ...edit, start: e.target.value })} /></label>
               <label className="tp-field">Ends ({tz})<input type="datetime-local" value={edit.end} disabled={!editable} onChange={(e) => setEdit({ ...edit, end: e.target.value })} /></label>
+            </div>
+            <div className="tp-cols2">
+              <label className="tp-field">Break shown to the employee (minutes)<input type="number" min={0} max={180} value={edit.break_minutes ?? ''} disabled={!editable} onChange={(e) => setEdit({ ...edit, break_minutes: e.target.value })} /></label>
+              <label className="tp-field">Instructions for the employee<input value={edit.instructions ?? ''} maxLength={500} disabled={!editable} onChange={(e) => setEdit({ ...edit, instructions: e.target.value })} placeholder="Optional" /></label>
             </div>
             {edit.shift_id && board!.conflicts.filter((c) => c.shift_id === edit.shift_id).map((c, i) => <Banner key={i} tone="bad" title={CONFLICT_LABEL[c.kind] ?? c.kind}>{c.detail}</Banner>)}
             {editable ? (
