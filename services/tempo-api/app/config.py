@@ -36,8 +36,16 @@ class Settings(BaseSettings):
     password_auth_enabled: bool = True
     require_https: bool = True
     login_max_failures: int = 5
+    login_ip_limit: int = 120        # sign-in attempts per address per 10 minutes; a warehouse shares one address, so this is not tiny (the per-account limit stays at 10)
     login_lock_minutes: int = 15
     invite_ttl_hours: int = 72
+    # Mobile: push provider (disabled | mock | expo) and optional SMS provider (disabled | mock). 'disabled' sends nothing and says so.
+    push_provider: str = "disabled"
+    expo_access_token: str = ""      # optional Expo enhanced-security token; never shipped in the app
+    sms_provider: str = "disabled"
+    jobs_enabled: bool = False       # run the notification job loop inside the API process (single instance, advisory-locked)
+    jobs_interval_seconds: int = 30
+    kiosk_qr_ttl_seconds: int = 90
     # DAT-04: pooling/retry/timeout, applied by app/db.py only for a real
     # (non-SQLite) database — SQLite's default poolclass (NullPool)
     # doesn't accept pool_size/max_overflow at all, so these are inert

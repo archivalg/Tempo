@@ -22,6 +22,8 @@ from app.errors import TempoError, tempo_error_handler
 async def lifespan(_: FastAPI):
     validate_settings(settings)
     init_db()
+    from app.core.jobs import start_background_loop
+    start_background_loop()   # only when TEMPO_JOBS_ENABLED=true
     yield
 
 

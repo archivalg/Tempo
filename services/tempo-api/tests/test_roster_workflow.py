@@ -86,7 +86,7 @@ def test_full_flow_publishes_once_and_reconciles(client):
         keys = [(r.worker_id, r.start_at) for r in rows]
         assert len(keys) == len(set(keys)), "no duplicate assignments"
     actions = [e["action"] for e in client.get(f"/v1/rosters/{v}/events", headers=manager()).json()]
-    assert actions == ["generated", "submitted", "approved", "publishing", "published", "reconciled"]
+    assert actions == ["generated", "submitted", "approved", "publishing", "published", "employees_notified", "reconciled"]
 
 
 def test_edit_after_submission_invalidates_approval(client):

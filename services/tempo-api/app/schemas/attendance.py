@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-ClockMethod = Literal["pin", "nfc"]
+ClockMethod = Literal["pin", "nfc", "qr"]
 
 
 class GpsCoordinates(BaseModel):
@@ -21,6 +21,7 @@ class CredentialEnrollRequest(BaseModel):
     worker_id: str
     pin: str | None = None
     nfc_tag_id: str | None = None
+    qr_token: str | None = None
 
     @model_validator(mode="after")
     def _at_least_one(self) -> "CredentialEnrollRequest":
@@ -44,6 +45,7 @@ class ClockInRequest(BaseModel):
     worker_no: str | None = None  # numeric badge/employee number typed at the kiosk
     pin: str | None = None
     nfc_tag_id: str | None = None
+    qr_token: str | None = None
     gps: GpsCoordinates | None = None
 
     @model_validator(mode="after")
@@ -52,6 +54,8 @@ class ClockInRequest(BaseModel):
             raise ValueError("worker_no (or worker_id) and pin are required when method='pin'")
         if self.method == "nfc" and not self.nfc_tag_id:
             raise ValueError("nfc_tag_id is required when method='nfc'")
+        if self.method == "qr" and not self.qr_token:
+            raise ValueError("qr_token is required when method='qr'")
         return self
 
 
@@ -62,6 +66,7 @@ class ClockOutRequest(BaseModel):
     worker_no: str | None = None
     pin: str | None = None
     nfc_tag_id: str | None = None
+    qr_token: str | None = None
 
     @model_validator(mode="after")
     def _credential_matches_method(self) -> "ClockOutRequest":
@@ -69,6 +74,8 @@ class ClockOutRequest(BaseModel):
             raise ValueError("worker_no (or worker_id) and pin are required when method='pin'")
         if self.method == "nfc" and not self.nfc_tag_id:
             raise ValueError("nfc_tag_id is required when method='nfc'")
+        if self.method == "qr" and not self.qr_token:
+            raise ValueError("qr_token is required when method='qr'")
         return self
 
 
@@ -134,6 +141,7 @@ class WhoamiRequest(BaseModel):
     worker_no: str | None = None
     pin: str | None = None
     nfc_tag_id: str | None = None
+    qr_token: str | None = None
 
     @model_validator(mode="after")
     def _credential_matches_method(self) -> "WhoamiRequest":
@@ -141,6 +149,8 @@ class WhoamiRequest(BaseModel):
             raise ValueError("worker_no (or worker_id) and pin are required when method='pin'")
         if self.method == "nfc" and not self.nfc_tag_id:
             raise ValueError("nfc_tag_id is required when method='nfc'")
+        if self.method == "qr" and not self.qr_token:
+            raise ValueError("qr_token is required when method='qr'")
         return self
 
 

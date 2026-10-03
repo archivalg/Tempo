@@ -156,7 +156,7 @@ def _record_failure(db: Session, ctx: KioskContext, worker_id: str | None, cred:
 
 
 def verify_worker(db: Session, ctx: KioskContext, *, method: str, worker_id: str | None, pin: str | None,
-                  nfc_tag_id: str | None, worker_no: str | None = None) -> Worker:
+                  nfc_tag_id: str | None, worker_no: str | None = None, qr_token: str | None = None) -> Worker:
     """Identify the worker at this kiosk. Failure is deliberately non-specific."""
     generic = AuthInvalid("credential not recognised")
     cred: WorkerCredential | None = None
@@ -164,6 +164,22 @@ def verify_worker(db: Session, ctx: KioskContext, *, method: str, worker_id: str
         # Badge number -> worker, scoped to the device's tenant. Unknown numbers take the same path as a wrong PIN.
         person = db.scalar(select(WorkerPerson).where(WorkerPerson.tenant_id == ctx.tenant_id, WorkerPerson.employee_no == worker_no))
         worker_id = person.worker_id if person else None
+    if method == "qr":
+        # A rotating, single-use code shown in the employee's own app; the kiosk's tenant is the only tenant it can be redeemed in.
+        from app.core import kiosk_qr
+        try:
+            qr_worker = kiosk_qr.redeem(db, ctx.tenant_id, qr_token or "")
+        except AuthInvalid:
+            _record_failure(db, ctx, None, None)
+            db.commit()
+            raise
+        worker = db.get(Worker, qr_worker)
+        if worker is None or worker.tenant_id != ctx.tenant_id or worker.status != "active":
+            raise generic
+        if worker.home_site not in ctx.site_ids and not _has_site_eligibility(db, worker, ctx):
+            raise generic
+        db.commit()   # the code is spent even if the tap then fails
+        return worker
     if method == "pin":
         cred = db.get(WorkerCredential, worker_id) if worker_id else None
         if cred is not None and cred.tenant_id != ctx.tenant_id:

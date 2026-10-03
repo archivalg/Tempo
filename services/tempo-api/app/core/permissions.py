@@ -66,6 +66,8 @@ PERMISSION_CODES: frozenset[str] = frozenset(
         "labour.export",
         # Load master, forecast and workload data (CSV upload or API) and undo a load. Service credentials get only this.
         "labour.data.import",
+        # The employee app: an employee reads and answers things about THEIR OWN worker record only. Carries no labour.read.
+        "labour.self",
     }
 )
 
@@ -84,6 +86,7 @@ ROLE_PERMISSION_MATRIX: dict[str, frozenset[str]] = {
     "hr_authorised": frozenset({"labour.worker_pii", "labour.worker_names"}),
     "integration_restricted": frozenset({"labour.writeback"}),
     "labour_provider": frozenset({"labour.provider.manage"}),
+    "employee": frozenset({"labour.self"}),                   # mobile app users; own-record access only
     "integration_import": frozenset({"labour.data.import"}),   # carried only by service credentials (CSV/API ingestion)
 }
 
@@ -103,6 +106,7 @@ ROLE_PRINCIPAL_TYPE: dict[str, str] = {
     "hr_authorised": "tenant_user",
     "integration_restricted": "tenant_user",
     "labour_provider": "labour_provider_user",
+    "employee": "tenant_user",
     "integration_import": "integration_client",
 }
 

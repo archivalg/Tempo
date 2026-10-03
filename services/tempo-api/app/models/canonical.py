@@ -141,6 +141,8 @@ class ShiftAssignment(Base):
     status: Mapped[str] = mapped_column(String, default="proposed")
     source_system: Mapped[str] = mapped_column(String, default="tempo_native")
     source_ref: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    break_minutes: Mapped[int | None] = mapped_column(nullable=True)    # planned unpaid break shown to the employee
+    instructions: Mapped[str | None] = mapped_column(String, nullable=True)   # what the employee should know for this shift
 
 
 class DemandBucket(Base):

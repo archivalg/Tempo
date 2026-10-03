@@ -189,6 +189,7 @@ class KioskDevice(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     config_version: Mapped[str] = mapped_column(String, default="1")
     name: Mapped[str | None] = mapped_column(String, nullable=True)
+    client_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)   # platform / app version reported at enrolment
     # One-time enrolment: only a digest of the code is stored; consumed on use.
     enrolment_code_digest: Mapped[str | None] = mapped_column(String, nullable=True)
     enrolment_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

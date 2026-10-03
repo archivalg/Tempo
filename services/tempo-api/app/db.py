@@ -120,6 +120,7 @@ def init_db() -> None:
     """Import models so metadata is complete. Schema is created only by Alembic."""
     import app.models.attendance  # noqa: F401
     import app.models.billing  # noqa: F401
+    import app.models.mobile  # noqa: F401
     import app.models.canonical  # noqa: F401
     import app.models.connectors  # noqa: F401
     import app.models.directory  # noqa: F401

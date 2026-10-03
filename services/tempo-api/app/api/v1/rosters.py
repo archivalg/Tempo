@@ -321,6 +321,9 @@ def publish(version_id: str, ctx: RequestContext = Depends(get_request_context),
     svc.event(db, ctx, v, "publishing", {"idempotency_key": idempotency_key})
     ws, we = svc.window(site, v.week_start, v.days)
     workers = [w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.home_site == v.site_id))]
+    from app.core import employee_data as ed
+    before = ed.snapshot(list(db.scalars(select(ShiftAssignment).where(ShiftAssignment.tenant_id == ctx.tenant_id, ShiftAssignment.worker_id.in_(workers or [""]), ShiftAssignment.status == "committed",
+                                                                      ShiftAssignment.start_at >= ws, ShiftAssignment.start_at < we, ShiftAssignment.source_ref != v.id))))
     superseded = 0
     all_versions = {r.id: r.week_start for r in db.scalars(select(RosterVersion).where(RosterVersion.tenant_id == ctx.tenant_id, RosterVersion.site_id == v.site_id))}
     for old in db.scalars(select(ShiftAssignment).where(ShiftAssignment.tenant_id == ctx.tenant_id, ShiftAssignment.worker_id.in_(workers or [""]),
@@ -344,6 +347,9 @@ def publish(version_id: str, ctx: RequestContext = Depends(get_request_context),
     db.flush()
     v.published_at, v.published_by, v.state = datetime.now(timezone.utc), ctx.user_id, "published"
     svc.event(db, ctx, v, "published", {"promoted": promoted, "superseded_previous_rows": superseded})
+    after = ed.snapshot([r for r in shifts if r.status == "committed"])
+    changed = ed.record_publish_changes(db, ctx.tenant_id, site, v.week_start, v.id, before, after)
+    svc.event(db, ctx, v, "employees_notified", changed)
     out = _reconcile(db, ctx, v, site)
     from app.api.v1 import handoffs
     handoffs.create_for_version(db, ctx, v, site)

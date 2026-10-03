@@ -12,6 +12,7 @@ from alembic import context
 # production) must be built and upgraded through these migrations only.
 import app.models.attendance  # noqa: E402,F401
 import app.models.billing  # noqa: E402,F401
+import app.models.mobile  # noqa: E402,F401
 import app.models.canonical  # noqa: E402,F401
 import app.models.connectors  # noqa: E402,F401
 import app.models.directory  # noqa: E402,F401

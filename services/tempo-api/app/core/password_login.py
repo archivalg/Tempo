@@ -129,7 +129,8 @@ def password_login(db: Session, request: Request, identifier: str, password: str
     ip, ident = client_ip(request), normalise(identifier)
     if not settings.password_auth_enabled:
         raise AuthInvalid(GENERIC)
-    if not (throttle.check(f"ip:{ip}", 30) and throttle.check(f"ipu:{ip}:{ident}", 10)):
+    if not (throttle.check(f"ip:{ip}", settings.login_ip_limit) and throttle.check(f"ipu:{ip}:{ident}", 10)):
+        begin_auth_lookup(db)   # the audit row is written outside any tenant: without this the refusal became a server error
         _audit(db, None, ident, "login", "denied", "throttled", cid, ip)
         db.commit()
         raise AuthInvalid(GENERIC)

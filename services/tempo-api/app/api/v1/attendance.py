@@ -106,7 +106,7 @@ def clock_in_endpoint(
     db: Session = Depends(get_db),
 ) -> ClockInResponse:
     site_id = _kiosk_site(kiosk, request.site_id)
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id, qr_token=request.qr_token)
 
     geofence_status = "skipped"
     mode = timeclock.get_policy(db, kiosk.tenant_id, site_id).location_mode
@@ -143,7 +143,7 @@ def clock_out_endpoint(
     kiosk: KioskContext = Depends(get_kiosk_context),
     db: Session = Depends(get_db),
 ) -> ClockOutResponse:
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id, qr_token=request.qr_token)
     result = timeclock.punch(db, kiosk.tenant_id, _punch_site(db, kiosk, worker), kiosk.device_id, worker, "clock_out", fix=_fix(request.gps))
     s = result.session
     duration_minutes = (to_aware(s.end_at) - to_aware(s.start_at)).total_seconds() / 60
@@ -161,7 +161,7 @@ def clock_out_endpoint(
 
 def _break(action: str):
     def handler(request: PunchRequest, kiosk: KioskContext = Depends(get_kiosk_context), db: Session = Depends(get_db)) -> PunchResponse:
-        worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+        worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id, qr_token=request.qr_token)
         r = timeclock.punch(db, kiosk.tenant_id, _punch_site(db, kiosk, worker), kiosk.device_id, worker, action, fix=_fix(request.gps))
         return PunchResponse(worker_id=worker.worker_id, attendance_session_id=r.session.id, action=action, state=r.session.state, recorded_at=r.punch.at,
                              duplicate=r.duplicate, break_minutes=r.session.breaks_minutes or 0)
@@ -232,7 +232,7 @@ def whoami(
     shifts before they choose to clock in/out (a genuine clock-in commits
     an AttendanceSession row; this is read-only).
     """
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id, qr_token=request.qr_token)
     now = datetime.now(timezone.utc)
     open_s = timeclock.open_session(db, kiosk.tenant_id, worker.worker_id)
     state = open_s.state if open_s else "not_clocked_in"

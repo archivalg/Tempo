@@ -170,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     cu.add_argument("--customers", default="", help="comma-separated customer ids")
     cu.add_argument("--password-stdin", action="store_true", required=True)
     cu.add_argument("--operator", required=True)
+    sub.add_parser("run-notification-jobs", help="run one cycle of the notification job loop (reminders, pushes, retries, receipts)")
     sub.add_parser("demo-status", help="show the demo seed manifest")
     args = ap.parse_args(argv)
     if args.cmd == "bootstrap-platform-admin":
@@ -177,6 +178,13 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: pass --confirm-verified-identity after verifying the identity with the IdP", file=sys.stderr)
             return 2
         return bootstrap_platform_admin(subject=args.subject, email=args.email, operator=args.operator)
+    if args.cmd == "run-notification-jobs":
+        import json
+
+        from app.core.jobs import run_cycle
+
+        print(json.dumps(run_cycle()))
+        return 0
     if args.cmd == "create-user":
         return _create_user(args)
     if args.cmd in ("set-password", "unlock-user"):
