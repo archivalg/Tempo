@@ -140,7 +140,7 @@ export interface SessionHistory { session_id: string; revision: number; approval
 export const getSessionHistory = (id: string) => apiRequest<SessionHistory>(`/attendance/sessions/${id}/history`)
 export const approveMany = (session_ids: string[]) => apiRequest<{ approved: string[]; skipped: { session_id: string; reason: string }[] }>('/attendance/sessions/approve-many', { method: 'POST', body: { session_ids } })
 export const requestMissingSession = (site: string, body: { worker_id: string; start_at: string; end_at: string; break_minutes: number | null; reason: string }) => apiRequest(`/sites/${site}/attendance/missing-session`, { method: 'POST', body })
-export interface ClockCredential { worker_id: string; label: string; badge_no: string | null; status: string; has_pin: boolean; has_nfc: boolean; locked: boolean; failed_attempts: number }
+export interface ClockCredential { worker_id: string; label: string; badge_no: string | null; status: string; skills: string[]; has_pin: boolean; has_nfc: boolean; locked: boolean; failed_attempts: number }
 export const getClockCredentials = (site: string) => apiRequest<ClockCredential[]>(`/sites/${site}/clock-credentials`)
 export const setClockPin = (worker_id: string, pin: string) => apiRequest('/attendance/credentials', { method: 'POST', body: { worker_id, pin } })
 export const unlockClockCredential = (worker_id: string) => apiRequest(`/workers/${worker_id}/clock-credential/unlock`, { method: 'POST' })
@@ -162,3 +162,6 @@ export const removeAvailability = (id: string) => apiRequest(`/availability/${id
 // ---- plan and allowance (M6) ----
 export interface MyPlan { managed: boolean; message?: string; plan?: { key: string; version: number; name: string; approved: boolean }; billing_source?: string; manual_kind?: string | null; status?: string; expires_at?: string | null; licensed_sites?: number; sites_in_use: number; worker_band_label?: string; worker_allowance?: number | null; active_workers: number; allowance_state?: 'ok' | 'near' | 'over'; allowance_message?: string; measurement?: string; history?: { at: string; action: string; reason: string }[] }
 export const getMyPlan = () => apiRequest<MyPlan>('/billing/plan')
+export const patchWorker = (id: string, body: { badge_no?: string; status?: 'active' | 'inactive' }) => apiRequest(`/workers/${id}`, { method: 'PATCH', body })
+export const addSkill = (id: string, skill_code: string) => apiRequest<{ skills: string[] }>(`/workers/${id}/skills`, { method: 'POST', body: { skill_code } })
+export const removeSkill = (id: string, code: string) => apiRequest<{ skills: string[] }>(`/workers/${id}/skills/${encodeURIComponent(code)}`, { method: 'DELETE' })

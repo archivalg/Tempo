@@ -259,12 +259,16 @@ def clock_credentials(site_id: str, ctx: RequestContext = Depends(get_request_co
     cred = {c.worker_id: c for c in db.scalars(select(WorkerCredential).where(WorkerCredential.tenant_id == ctx.tenant_id, WorkerCredential.worker_id.in_(ids)))}
     people = {p.worker_id: p for p in db.scalars(select(WorkerPerson).where(WorkerPerson.tenant_id == ctx.tenant_id, WorkerPerson.worker_id.in_(ids)))}
     now = _now()
+    from app.models.canonical import SkillCertification
+    held: dict[str, list[str]] = {}
+    for sc in db.scalars(select(SkillCertification).where(SkillCertification.tenant_id == ctx.tenant_id, SkillCertification.worker_id.in_(ids))):
+        held.setdefault(sc.worker_id, []).append(sc.skill_code)
     out = []
     for w in workers:
         c, p = cred.get(w.worker_id), people.get(w.worker_id)
         locked = bool(c and c.locked_until and timeclock.aware(c.locked_until) > now)
         out.append({"worker_id": w.worker_id, "label": (p.display_name if p and ctx.has_permission("labour.worker_names") else f"Worker …{w.worker_id[-4:]}"), "badge_no": p.employee_no if p else None,
-                    "status": w.status, "has_pin": bool(c and c.pin_hash), "has_nfc": bool(c and c.nfc_tag_id), "locked": locked, "failed_attempts": c.failed_attempts if c else 0})
+                    "status": w.status, "skills": sorted(held.get(w.worker_id, [])), "has_pin": bool(c and c.pin_hash), "has_nfc": bool(c and c.nfc_tag_id), "locked": locked, "failed_attempts": c.failed_attempts if c else 0})
     return out
 
 

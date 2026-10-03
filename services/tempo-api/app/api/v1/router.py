@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.dependencies import commit_before_response
 
-from app.api.v1 import auth, availability as availability_api, demand, devices, handoffs, imports as imports_api, service_clients, notifications, operations, platform, platform_billing, public_docs, support as support_api, billing as billing_api, planning_rules, reports, rosters, timeclock, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
+from app.api.v1 import auth, availability as availability_api, demand, devices, handoffs, imports as imports_api, service_clients, notifications, operations, platform, platform_billing, workers as workers_api, public_docs, support as support_api, billing as billing_api, planning_rules, reports, rosters, timeclock, users, actions, attendance, ingestion, monitoring, onboarding, providers, readiness, runs
 
 router = APIRouter(dependencies=[Depends(commit_before_response, scope="function")])
 router.include_router(auth.router)
@@ -28,6 +28,7 @@ router.include_router(monitoring.router)
 router.include_router(attendance.router)
 router.include_router(planning_rules.router)
 router.include_router(platform_billing.router)
+router.include_router(workers_api.router)
 router.include_router(public_docs.router)
 router.include_router(support_api.router)
 router.include_router(billing_api.router)
