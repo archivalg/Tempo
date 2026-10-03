@@ -462,7 +462,7 @@ def test_setup_checklist_tells_a_new_customer_what_to_do_next(client):
     h = admin()
     c = client.get("/v1/setup/checklist", headers=h).json()
     st = {s["key"]: s["state"] for s in c["steps"]}
-    assert st == {"organisation": "done", "sites": "done", "staff": "todo", "standards": "todo", "workload": "todo", "roster": "todo"} and c["next"] == "staff" and c["done"] == 2
+    assert st == {"organisation": "done", "sites": "done", "staff": "todo", "standards": "todo", "workload": "todo", "rates": "todo", "attendance": "todo", "roster": "todo"} and c["next"] == "staff" and c["done"] == 2
     todo = {s["key"]: s for s in c["steps"]}["staff"]
     assert "template" in todo["detail"] and todo["link"].startswith("/data?tab=upload")
     for name, f, ent in (("staff", csv_text(["worker_ref", "name", "site", "employment_type"], [["E1", "A B", MEL, "casual"]]), "workers"),

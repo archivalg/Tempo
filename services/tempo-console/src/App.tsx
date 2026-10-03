@@ -19,6 +19,7 @@ import { NewActionPage } from './pages/NewAction'
 import { NewRunPage } from './pages/NewRun'
 import { OnboardingPage } from './pages/Onboarding'
 import OverviewPage from './pages/Overview'
+import SetupWizard from './pages/SetupWizard'
 import PlatformConsole from './pages/PlatformConsole'
 import RosterPlannerPage from './pages/RosterPlanner'
 import { RunComparisonsPage } from './pages/RunComparisons'
@@ -55,6 +56,7 @@ function App() {
             <Route path="/admin" element={<AdminPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/data" element={<DataPage />} />
+            <Route path="/setup" element={<SetupWizard />} />
             <Route path="/account" element={<AccountPage />} />
           </Route>
         </Routes>

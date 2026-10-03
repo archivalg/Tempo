@@ -280,6 +280,12 @@ def checklist(ctx: RequestContext = Depends(get_request_context), db: Session = 
     history = count(DemandBucket)
     supplied = count(SuppliedForecast, SuppliedForecast.state == "active")
     rosters = count(RosterVersion)
+    from app.models.billing import TenantSetup
+    from app.models.canonical import LabourCostRule
+    from app.models.identity import KioskDevice
+    setup = db.get(TenantSetup, ctx.tenant_id)
+    rates = count(LabourCostRule)
+    devices = count(KioskDevice, KioskDevice.status == "active")
 
     def step(key, title, done, detail, todo, link, optional=False):
         return {"key": key, "title": title, "state": "done" if done else "todo", "detail": detail if done else todo, "link": link, "optional": optional}
@@ -290,8 +296,98 @@ def checklist(ctx: RequestContext = Depends(get_request_context), db: Session = 
         step("standards", "Work standards", standards > 0, f"{standards} activities have a work standard", "Tell Tempo how long each activity takes per unit. Everything about workload depends on these.", "/data?tab=upload&class=master&entity=work_standards"),
         step("workload", "Workload", history > 0 or supplied > 0, ("Workload history is loaded" if history else "") + (" · " if history and supplied else "") + ("A supplied forecast is loaded" if supplied else ""),
              "Load past workload (totals or individual events), or a forecast of upcoming work, so Tempo can plan.", "/data?tab=upload&class=bulk"),
+        step("rates", "Labour rates", rates > 0, f"{rates} rate(s) set", "Optional: add hourly rates so planned cost can be shown. Without them cost is shown as unavailable, never zero.", "/data?tab=upload&class=master&entity=rates", optional=True),
+        step("attendance", "Attendance", bool(setup and setup.attendance_choice) or devices > 0, ("A kiosk is set up" if devices else {"tempo_kiosk": "You chose Tempo's kiosk", "external": "Attendance comes from another system", "later": "Decide later"}.get(setup.attendance_choice if setup else "", "")),
+             "Choose how people will clock in: Tempo's kiosk, or another system.", "/setup", optional=True),
         step("roster", "First roster", rosters > 0, f"{rosters} roster version(s) created", "Generate a draft roster from the workload, adjust it and publish it.", "/roster"),
     ]
+    skipped = set((setup.skipped if setup else []) or [])
+    for st in steps:
+        if st["state"] == "todo" and st["optional"] and st["key"] in skipped:
+            st["state"], st["detail"] = "skipped", "Skipped for now"
+    required = [s for s in steps if not s["optional"]]
     done = sum(1 for s in steps if s["state"] == "done")
-    nxt = next((s for s in steps if s["state"] == "todo"), None)
-    return {"steps": steps, "done": done, "total": len(steps), "next": nxt["key"] if nxt else None, "complete": done == len(steps)}
+    nxt = next((s for s in steps if s["state"] == "todo" and not s["optional"]), None) or next((s for s in steps if s["state"] == "todo"), None)
+    return {"steps": steps, "done": done, "total": len(steps), "next": nxt["key"] if nxt else None, "complete": all(s["state"] == "done" for s in required)}
+
+
+# ------------------------------------------------------------------------------------------------------------------ resumable wizard
+class SetupState(BaseModel):
+    current_step: str | None = Field(default=None, pattern="^(organisation|sites|staff|standards|workload|rates|attendance|roster)$")
+    attendance_choice: str | None = Field(default=None, pattern="^(tempo_kiosk|external|later)$")
+    skipped: list[str] | None = None
+
+
+def _state_out(row) -> dict:
+    return {"current_step": row.current_step if row else "sites", "attendance_choice": row.attendance_choice if row else None, "skipped": list(row.skipped or []) if row else []}
+
+
+@router.get("/setup/state")
+def get_setup_state(ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
+    from app.models.billing import TenantSetup
+    return _state_out(db.get(TenantSetup, ctx.tenant_id))
+
+
+@router.put("/setup/state")
+def put_setup_state(body: SetupState, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
+    """Remember where this organisation is in setup. Safe to repeat; which steps are done is never stored here, it is read from the data."""
+    from app.models.billing import TenantSetup
+    if not ctx.has_permission(PERM):
+        raise AuthForbidden(f"caller lacks {PERM}")
+    row = db.get(TenantSetup, ctx.tenant_id)
+    if row is None:
+        row = TenantSetup(tenant_id=ctx.tenant_id, skipped=[])
+        db.add(row)
+    optional = {"rates", "attendance"}
+    if body.current_step is not None:
+        row.current_step = body.current_step
+    if body.attendance_choice is not None:
+        row.attendance_choice = body.attendance_choice
+    if body.skipped is not None:
+        row.skipped = sorted(set(body.skipped) & optional)
+    row.updated_by, row.updated_at = ctx.user_id, datetime.now(timezone.utc)
+    db.flush()
+    return _state_out(row)
+
+
+class SiteIn(BaseModel):
+    site_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,40}$")
+    name: str = Field(min_length=1, max_length=200)
+    timezone: str
+    operating_mode: str = Field(default="standalone", pattern="^(standalone|overlay)$")
+
+
+@router.post("/setup/sites", status_code=201)
+def setup_site(body: SiteIn, ctx: RequestContext = Depends(get_request_context), db: Session = Depends(get_db)) -> dict:
+    """Add (or rename) one site during setup. Repeating the request never makes a second site. The same rules as the sites upload apply:
+    needs the configure permission, a time zone cannot be changed once the site exists, the plan's site limit is respected, and the creator is given access."""
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import text as _t
+    from app.core import subscription as _sub
+    from app.db import bind_sites
+    from app.models.identity import TempoUser, UserSiteGrant
+    if not ctx.has_permission("labour.configure"):
+        raise AuthForbidden("caller lacks labour.configure")
+    try:
+        ZoneInfo(body.timezone)
+    except Exception:  # noqa: BLE001
+        raise ScopeError(f"'{body.timezone}' is not a time zone name. Use a name like Australia/Melbourne.") from None
+    db.execute(_t("SELECT set_config('app.site_scope', '*', true)"))
+    try:
+        x = db.get(Site, (ctx.tenant_id, body.site_id))
+        created = x is None
+        if created:
+            _sub.require_site_capacity(db, ctx.tenant_id, 1)
+            db.add(Site(tenant_id=ctx.tenant_id, site_id=body.site_id, name=body.name, timezone=body.timezone, operating_mode=body.operating_mode))
+            db.flush()
+            if db.get(TempoUser, ctx.user_id) is not None and not db.scalar(select(UserSiteGrant.id).where(UserSiteGrant.user_id == ctx.user_id, UserSiteGrant.tenant_id == ctx.tenant_id, UserSiteGrant.site_id == body.site_id)):
+                db.add(UserSiteGrant(user_id=ctx.user_id, tenant_id=ctx.tenant_id, site_id=body.site_id))
+        else:
+            if x.timezone != body.timezone:
+                raise ScopeError(f"site '{body.site_id}' already uses {x.timezone}; a site's time zone cannot be changed because it would move its history")
+            x.name, x.operating_mode = body.name, body.operating_mode
+        db.flush()
+    finally:
+        bind_sites(db, list(ctx.site_ids) + ([body.site_id] if body.site_id not in ctx.site_ids else []))
+    auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="setup.site", decision="allowed", reason_code="created" if created else "updated", session_ref=body.site_id, correlation_id=ctx.correlation_id)
+    return {"site_id": body.site_id, "created": created}

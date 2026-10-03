@@ -16,7 +16,7 @@ export interface DataStatus {
   classes: ClassStatus[]; sites: { site_id: string; name: string; forecast_source: 'generated' | 'supplied' }[]
   authority: { site_id: string; activity: string; authority: string; reason: string }[]; forecast_versions: { site_id: string; version: string; rows: number; first: string; last: string }[]
 }
-export interface Step { key: string; title: string; state: 'done' | 'todo'; detail: string; link: string | null }
+export interface Step { key: string; title: string; state: 'done' | 'todo' | 'skipped'; detail: string; link: string | null; optional?: boolean }
 export interface Checklist { steps: Step[]; done: number; total: number; next: string | null; complete: boolean }
 export interface Credential { id: string; name: string; prefix: string; site_ids: string[] | null; status: string; expires_at: string | null; last_used_at: string | null; secret?: string; note?: string }
 
@@ -38,3 +38,8 @@ export const listCredentials = () => apiRequest<Credential[]>('/admin/api-creden
 export const createCredential = (name: string, siteIds: string[] | null, validDays: number) => apiRequest<Credential>('/admin/api-credentials', { method: 'POST', body: { name, site_ids: siteIds, valid_days: validDays }, idempotencyKey: newIdempotencyKey() })
 export const rotateCredential = (id: string) => apiRequest<Credential>(`/admin/api-credentials/${id}/rotate`, { method: 'POST' })
 export const revokeCredential = (id: string) => apiRequest<Credential>(`/admin/api-credentials/${id}/revoke`, { method: 'POST' })
+
+export interface SetupState { current_step: string; attendance_choice: 'tempo_kiosk' | 'external' | 'later' | null; skipped: string[] }
+export const getSetupState = () => apiRequest<SetupState>('/setup/state')
+export const putSetupState = (body: Partial<{ current_step: string; attendance_choice: string; skipped: string[] }>) => apiRequest<SetupState>('/setup/state', { method: 'PUT', body })
+export const setupSite = (body: { site_id: string; name: string; timezone: string; operating_mode: string }) => apiRequest<{ site_id: string; created: boolean }>('/setup/sites', { method: 'POST', body })

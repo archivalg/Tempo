@@ -11,7 +11,7 @@ const HINT: Record<string, string> = {
   'bulk|': 'Daily or hourly totals of what was processed.', 'transactions|': 'One row per event, when your system can send them.',
 }
 
-export function UploadWizard({ initial }: { initial?: { dc: string; entity: string | null } }) {
+export function UploadWizard({ initial, onApplied }: { initial?: { dc: string; entity: string | null }; onApplied?: () => void }) {
   const [contracts, setContracts] = useState<ContractDef[]>([])
   const [sel, setSel] = useState<ContractDef | null>(null)
   const [file, setFile] = useState<{ name: string; data: ArrayBuffer } | null>(null)
@@ -52,7 +52,7 @@ export function UploadWizard({ initial }: { initial?: { dc: string; entity: stri
     sel.batch_options.forEach((b) => { if (b.type === 'enum' && !o[b.name]) o[b.name] = b.choices?.[0] ?? '' })
     setBatch(await stageCsv(sel.data_class, sel.entity, file.data, mapping, o, file.name, save))
   })
-  const apply = (partial: boolean) => run(async () => { if (batch) setBatch(await applyBatch(batch.id, partial)) })
+  const apply = (partial: boolean) => run(async () => { if (batch) { setBatch(await applyBatch(batch.id, partial)); onApplied?.() } })
   const undo = () => run(async () => { if (batch) setBatch(await undoBatch(batch.id)) })
 
   return (

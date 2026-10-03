@@ -77,3 +77,15 @@ class SubscriptionEvent(Base):
 
 # The indicative catalogue the migration seeds (kept here so tests can restore it after the per-test truncate).
 DEFAULT_PLANS = [("essentials", "Essentials", 1500.0), ("optimise", "Optimise", 3500.0), ("orchestrate", "Orchestrate", 6500.0), ("network", "Network", None)]
+
+
+class TenantSetup(Base):
+    """Where a tenant is in guided setup, so it can be resumed from any device. Which steps are DONE is always read from the real data."""
+
+    __tablename__ = "tenant_setup"
+    tenant_id: Mapped[str] = mapped_column(String, primary_key=True)
+    current_step: Mapped[str] = mapped_column(String, default="sites")
+    attendance_choice: Mapped[str | None] = mapped_column(String, nullable=True)   # tempo_kiosk | external | later
+    skipped: Mapped[list] = mapped_column(JSON, default=list)
+    updated_by: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
