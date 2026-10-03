@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { NavLink, Route, Routes } from 'react-router-dom'
+import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
-  addPlatformAdmin, approvePlan, createGrant, createTenant, endGrant, listGrants, listPlans, newPlanVersion, platformAudit, setSubscription, setTenantStatus, subscriptionHistory, tenantOverview,
-  type AuditRow, type PlanDef, type SubscriptionInput, type SupportGrant, type TenantRow,
+  addPlatformAdmin, approvePlan, createGrant, createTenant, endGrant, getDiagnostics, listGrants, openSupport, listPlans, newPlanVersion, platformAudit, setSubscription, setTenantStatus, subscriptionHistory, tenantOverview,
+  type AuditRow, type Diagnostics, type PlanDef, type SubscriptionInput, type SupportGrant, type TenantRow,
 } from '../api/platform'
 import { ApiError } from '../api/client'
 import { Banner, Drawer, Empty, PageHead, Skeleton, Status } from '../components/ui'
@@ -188,9 +188,9 @@ function Support() {
             <tbody>{data.map((g: SupportGrant) => (
               <tr key={g.grant_id}><td>{g.target_tenant_id}</td><td>{g.reason}</td><td>{g.action_categories.join(', ')}<div className="tp-muted" style={{ fontSize: 12 }}>{g.site_ids.join(', ')}</div></td><td>{when(g.expires_at)}</td>
                 <td>{g.state === 'live' ? <Status tone="risk">Live</Status> : <Status tone="neutral">{g.state}</Status>}</td>
-                <td>{g.state === 'live' && <button className="tp-btn danger" onClick={() => void act(() => endGrant(g.grant_id))}>End now</button>}</td></tr>))}</tbody></table>)}
+                <td>{g.state === 'live' && <span className="tp-row"><Link className="tp-btn primary" to={`/platform/support/${g.grant_id}`} style={{ textDecoration: 'none' }}>Open for support</Link><button className="tp-btn danger" onClick={() => void act(() => endGrant(g.grant_id))}>End now</button></span>}</td></tr>))}</tbody></table>)}
       </section>
-      <p className="tp-muted" style={{ fontSize: 12 }}>Opening a tenant as a support session (with a persistent banner and a read-only diagnostic view) is not built yet; this page records and ends the grants it would rely on.</p>
+      <p className="tp-muted" style={{ fontSize: 12 }}><b>Open for support</b> shows a read-only diagnostic view of the tenant (counts, states and health within the granted sites; no names or personal data). Operational changes and exports are not offered. The session ends when the grant expires or is ended, and the server refuses it from then on.</p>
       {open && <Drawer title="New support grant" onClose={() => setOpen(false)}>
         <form className="tp-stack" onSubmit={(e) => { e.preventDefault(); void act(() => createGrant({ target_tenant_id: f.tenant.trim(), reason: f.reason.trim(), hours: f.hours, action_categories: f.cats.split(',').map((x) => x.trim()).filter(Boolean), site_ids: f.sites.split(',').map((x) => x.trim()).filter(Boolean) })) }}>
           <label className="tp-field">Tenant ID<input value={f.tenant} onChange={(e) => setF({ ...f, tenant: e.target.value })} required /></label>
@@ -200,6 +200,48 @@ function Support() {
           <label className="tp-field">Site IDs (comma separated)<input value={f.sites} onChange={(e) => setF({ ...f, sites: e.target.value })} required /></label>
           <button className="tp-btn primary" disabled={f.reason.trim().length < 10}>Grant</button>
         </form></Drawer>}
+    </>
+  )
+}
+
+function SupportSession() {
+  const { grantId = '' } = useParams()
+  const nav = useNavigate()
+  const [d, setD] = useState<Diagnostics | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [left, setLeft] = useState('')
+  useEffect(() => {
+    setD(null); setErr(null)   // switching grant discards the previous tenant's data
+    openSupport(grantId).then(() => getDiagnostics(grantId)).then(setD).catch((e) => setErr(msg(e)))
+  }, [grantId])
+  useEffect(() => {
+    if (!d) return
+    const tick = () => {
+      const ms = new Date(d.session.expires_at).getTime() - Date.now()
+      if (ms <= 0) { setD(null); setErr('This support session has expired. Nothing more can be read.'); return }
+      setLeft(`${Math.floor(ms / 3600000)}h ${String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0')}m`)
+    }
+    tick(); const t = setInterval(tick, 15000); return () => clearInterval(t)
+  }, [d])
+  const end = async () => { try { await endGrant(grantId) } catch { /* already ended */ } setD(null); nav('/platform/support') }
+  if (err) return <><Banner tone="bad" title="Support session unavailable">{err}</Banner><Link to="/platform/support">Back to support access</Link></>
+  if (!d) return <Skeleton h={200} />
+  return (
+    <>
+      <div role="status" style={{ position: 'sticky', top: 0, zIndex: 5, background: '#7a1f1f', color: '#fff', padding: '10px 14px', borderRadius: 6, marginBottom: 12, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong>SUPPORT SESSION — {d.tenant.name} ({d.tenant.tenant_id})</strong><span>read-only diagnostics · {d.session.site_ids.join(', ')} · ends in {left}</span>
+        <span style={{ flex: 1 }}>“{d.session.reason}”</span><button className="tp-btn" onClick={() => void end()}>End session</button>
+      </div>
+      <div className="tp-kpis">
+        {[['Active workers', d.workers_by_status.active ?? 0], ['Inactive', d.workers_by_status.inactive ?? 0], ['Clocked in now', d.open_attendance_sessions], ['Open exceptions', Object.values(d.open_exceptions_by_kind).reduce((a, b) => a + b, 0)]].map(([l, v]) => <div key={l as string} className="tp-card tp-kpi"><div className="lbl">{l}</div><div className="val">{v as number}</div></div>)}
+      </div>
+      <section className="tp-card"><header><h2>Plan</h2></header><div className="tp-body">{d.plan.managed ? <>{d.plan.plan?.name} · sites {d.plan.sites_in_use}/{d.plan.licensed_sites} · workers {d.plan.active_workers} · allowance {d.plan.allowance_state}</> : <>No plan recorded (unmanaged).</>}</div></section>
+      <section className="tp-card"><header><h2>Sites</h2></header><table className="tp-table"><tbody>{d.sites.map((s) => <tr key={s.site_id}><td>{s.name}<div className="tp-muted" style={{ fontSize: 12 }}>{s.site_id}</div></td><td>{s.timezone}</td><td>{s.operating_mode}</td></tr>)}</tbody></table></section>
+      <section className="tp-card"><header><h2>Rosters</h2></header>{d.rosters.length === 0 ? <div className="tp-body"><Empty title="No rosters" /></div> : <table className="tp-table"><thead><tr><th>Site</th><th>Week</th><th>Version</th><th>State</th><th>Source</th></tr></thead><tbody>{d.rosters.map((r, i) => <tr key={i}><td>{r.site_id}</td><td>{r.week_start}</td><td>v{r.version_no}</td><td>{r.state}</td><td>{r.source}</td></tr>)}</tbody></table>}</section>
+      <section className="tp-card"><header><h2>Recent imports</h2></header>{d.imports.length === 0 ? <div className="tp-body"><Empty title="No imports" /></div> : <table className="tp-table"><thead><tr><th>When</th><th>Data</th><th>Via</th><th>State</th><th>Rows</th><th>Rejected</th></tr></thead><tbody>{d.imports.map((b, i) => <tr key={i}><td>{when(b.at)}</td><td>{b.data_class}{b.entity ? ` / ${b.entity}` : ''}</td><td>{b.channel}</td><td>{b.state}</td><td className="tp-num">{b.rows}</td><td className="tp-num">{b.errors}</td></tr>)}</tbody></table>}</section>
+      <section className="tp-card"><header><h2>Connections</h2></header>{d.connections.length === 0 ? <div className="tp-body"><Empty title="No connections" /></div> : <table className="tp-table"><tbody>{d.connections.map((c, i) => <tr key={i}><td>{c.source_system}</td><td>{c.site_id}</td><td>{c.status}</td></tr>)}</tbody></table>}</section>
+      <section className="tp-card"><header><h2>Recent security events for this tenant</h2></header><div style={{ overflow: 'auto', maxHeight: 360 }}><table className="tp-table"><tbody>{d.recent_security_events.map((e, i) => <tr key={i}><td>{when(e.at)}</td><td>{e.actor_type}</td><td>{e.action}</td><td>{e.decision}</td></tr>)}</tbody></table></div></section>
+      <p className="tp-muted" style={{ fontSize: 12 }}>{d.limits} Every view here is recorded in the audit log under your name and this grant.</p>
     </>
   )
 }
@@ -249,7 +291,7 @@ export default function PlatformConsole() {
         </nav>
         <main id="main" tabIndex={-1}>
           {!access.mfa_verified && <Banner tone="warn" title="Two-step verification required">Platform actions need it. <NavLink to="/platform/account">Set it up or verify now</NavLink>.</Banner>}
-          <Routes><Route index element={<Tenants />} /><Route path="plans" element={<Plans />} /><Route path="support" element={<Support />} /><Route path="audit" element={<Audit />} /><Route path="admins" element={<Admins />} /><Route path="account" element={<AccountPage />} /></Routes>
+          <Routes><Route index element={<Tenants />} /><Route path="plans" element={<Plans />} /><Route path="support" element={<Support />} /><Route path="support/:grantId" element={<SupportSession />} /><Route path="audit" element={<Audit />} /><Route path="admins" element={<Admins />} /><Route path="account" element={<AccountPage />} /></Routes>
         </main>
       </div>
     </div>

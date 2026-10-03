@@ -20,3 +20,18 @@ export const createGrant = (body: { target_tenant_id: string; reason: string; ho
 export const endGrant = (id: string) => apiRequest(`/platform/support-grants/${id}/terminate`, { method: 'POST' })
 export const platformAudit = () => apiRequest<AuditRow[]>('/platform/audit?limit=100')
 export const addPlatformAdmin = (email: string) => apiRequest<{ user_id: string; invite_path: string | null }>('/platform/admins', { method: 'POST', body: { email } })
+
+export interface Diagnostics {
+  session: { grant_id: string; tenant_id: string; reason: string; site_ids: string[]; expires_at: string; mode: string }
+  tenant: { tenant_id: string; name: string; status: string }
+  plan: Record<string, unknown> & { managed: boolean; message?: string; plan?: { name: string }; allowance_state?: string; active_workers: number; sites_in_use: number; licensed_sites?: number }
+  sites: { site_id: string; name: string; timezone: string; operating_mode: string }[]
+  workers_by_status: Record<string, number>; open_attendance_sessions: number; open_exceptions_by_kind: Record<string, number>
+  rosters: { site_id: string; week_start: string; version_no: number; state: string; source: string }[]
+  imports: { data_class: string; entity: string | null; channel: string; state: string; rows: number; errors: number; at: string }[]
+  connections: { source_system: string; site_id: string; status: string }[]
+  recent_security_events: { at: string; actor_type: string; action: string; decision: string; reason: string | null }[]
+  limits: string
+}
+export const openSupport = (grant: string) => apiRequest<Diagnostics['session']>(`/platform/support-grants/${grant}/open`, { method: 'POST' })
+export const getDiagnostics = (grant: string) => apiRequest<Diagnostics>(`/platform/support/${grant}/diagnostics`)
