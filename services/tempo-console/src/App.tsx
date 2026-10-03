@@ -19,6 +19,7 @@ import { NewActionPage } from './pages/NewAction'
 import { NewRunPage } from './pages/NewRun'
 import { OnboardingPage } from './pages/Onboarding'
 import OverviewPage from './pages/Overview'
+import PlatformConsole from './pages/PlatformConsole'
 import RosterPlannerPage from './pages/RosterPlanner'
 import { RunComparisonsPage } from './pages/RunComparisons'
 import { RunDetailPage } from './pages/RunDetail'
@@ -32,6 +33,8 @@ function App() {
           {/* Kiosk is a device surface: no session, no navigation. */}
           <Route path="/kiosk" element={<KioskPage />} />
           <Route path="/invite" element={<InvitePage />} />
+          {/* Platform operators have their own surface: a separate shell, banner and navigation, never the customer shell. */}
+          <Route path="/platform/*" element={<PlatformConsole />} />
           <Route element={<AppShell />}>
             <Route path="/" element={<OverviewPage />} />
             <Route path="/demand" element={<DemandPage />} />

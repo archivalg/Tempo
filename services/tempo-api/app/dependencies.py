@@ -126,9 +126,12 @@ def get_kiosk_context(request: Request, db: Session = Depends(get_db)):
 
 
 def get_platform_principal(request: Request, db: Session = Depends(get_db)) -> auth.ResolvedPrincipal:
-    """Platform routes are a separate principal context: bearer token only (never ambient cookies)."""
-    header = request.headers.get("authorization", "")
-    if not header.lower().startswith("bearer "):
-        raise AuthInvalid("authentication required")
+    """Platform routes are a separate principal context: it requires an active platform admin with MFA and grants no tenant data.
+    A bearer token (scripts, tests) needs no CSRF; the console's session cookie is accepted only with the CSRF double-submit token on
+    anything that changes data, exactly as for tenant routes."""
+    token, via_cookie = _extract_token(request)
     begin_auth_lookup(db)
-    return auth.resolve_platform_principal(db, header[7:].strip())
+    principal = auth.resolve_platform_principal(db, token)
+    if via_cookie:
+        _check_csrf(request, principal.csrf_digest)
+    return principal

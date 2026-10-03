@@ -154,7 +154,9 @@ def add_platform_admin(body: Identity, request: Request, p: auth.ResolvedPrincip
         db.add(PlatformAdmin(user_id=user.user_id, created_by=p.user_id))
     auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, action="platform.admin_add", decision="allowed",
                session_ref=user.user_id, correlation_id=_cid(request))
-    return {"user_id": user.user_id}
+    from app.core import password_login as pl
+    token = pl.create_invitation(db, user, p.user_id) if user.password_hash is None else None
+    return {"user_id": user.user_id, "invite_token": token, "invite_path": f"/invite?token={token}" if token else None}
 
 
 class SupportGrantCreate(BaseModel):
@@ -190,6 +192,18 @@ def create_support_grant(body: SupportGrantCreate, request: Request, p: auth.Res
                decision="allowed", reason_code="sole_admin_self_approval" if approver == p.user_id else "second_approver",
                session_ref=g.grant_id, correlation_id=_cid(request))
     return {"grant_id": g.grant_id, "expires_at": g.expires_at.isoformat()}
+
+
+@router.get("/support-grants")
+def list_support_grants(p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> list[dict]:
+    now = datetime.now(timezone.utc)
+    out = []
+    for g in db.scalars(select(PrivilegedSupportGrant).order_by(PrivilegedSupportGrant.approved_at.desc()).limit(100)):
+        live = g.terminated_at is None and g.expires_at.astimezone(timezone.utc) > now
+        out.append({"grant_id": g.grant_id, "operator_user_id": g.operator_user_id, "target_tenant_id": g.target_tenant_id, "reason": g.reason, "site_ids": g.site_ids,
+                    "action_categories": g.action_categories, "approver_user_id": g.approver_user_id, "approved_at": g.approved_at, "expires_at": g.expires_at,
+                    "terminated_at": g.terminated_at, "state": "live" if live else ("terminated" if g.terminated_at else "expired")})
+    return out
 
 
 @router.post("/support-grants/{grant_id}/terminate")

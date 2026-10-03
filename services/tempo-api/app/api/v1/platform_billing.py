@@ -166,3 +166,15 @@ def tenant_overview(q: str | None = Query(default=None, max_length=80), p: auth.
     from app.db import begin_auth_lookup
     begin_auth_lookup(db)
     return out
+
+
+@router.get("/tenants/{tenant_id}/subscription-history")
+def subscription_history(tenant_id: str, p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> list[dict]:
+    if db.get(Tenant, tenant_id) is None:
+        raise RunNotFound("tenant not found")
+    bind_tenant(db, tenant_id)
+    rows = [{"at": e.at, "actor": e.actor, "action": e.action, "reason": e.reason, "detail": e.detail} for e in db.scalars(
+        select(SubscriptionEvent).where(SubscriptionEvent.tenant_id == tenant_id).order_by(SubscriptionEvent.at.desc()).limit(100))]
+    from app.db import begin_auth_lookup
+    begin_auth_lookup(db)
+    return rows

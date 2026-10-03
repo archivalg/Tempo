@@ -1,0 +1,68 @@
+import { expect, test } from '@playwright/test'
+
+// Platform operator console (roadmap M6-ADMIN/M6-MANUAL) against the local dev stack: a separate surface from the customer shell.
+const API = 'http://127.0.0.1:8017/v1'
+
+test('a platform operator creates a manual tenant, changes its plan, suspends it, and grants and ends support access', async ({ page, request }) => {
+  const id = `e2e_${Date.now().toString(36)}`
+  const login = await page.request.post(`${API}/auth/dev-login`, { data: { subject: 'idp|e2e-platform', email: 'platform@example.test', mfa: true } })
+  expect(login.ok()).toBeTruthy()
+  await page.goto('/platform')
+  await expect(page.getByText(/PLATFORM OPERATOR CONSOLE/)).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Tenants' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Overview' })).toHaveCount(0)               // none of the customer navigation
+  await expect(page.getByRole('cell', { name: /ensemble_solutions/ })).toBeVisible()
+
+  await page.getByRole('button', { name: 'Create tenant' }).click()
+  const dlg = page.getByRole('dialog')
+  await dlg.getByLabel(/^Tenant ID/).fill(id)
+  await dlg.getByLabel('Organisation name').fill('E2E Logistics')
+  await dlg.getByLabel(/first administrator/i).fill(`${id}@example.test`)
+  await dlg.getByLabel(/^Site IDs/).fill('e2e_site_1')
+  await dlg.getByLabel(/^Reason/).fill('E2E pilot arrangement agreed with owner')
+  await dlg.getByRole('button', { name: 'Create tenant with plan' }).click()
+  await expect(dlg.getByText('Tenant created')).toBeVisible()
+  await expect(dlg.locator('code')).toContainText('/invite?token=')
+  await page.keyboard.press('Escape')
+
+  await page.getByLabel('Search tenants').fill(id)
+  const row = page.getByRole('row').filter({ hasText: id })
+  await expect(row).toContainText('manual · pilot')
+  await expect(row).toContainText(/optimise/i)
+  await row.getByRole('button', { name: 'Manage' }).click()
+  await page.getByLabel('Active-worker band').selectOption('500')
+  await page.getByLabel(/^Reason/).fill('Customer grew past 250 workers')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByRole('dialog')).toBeHidden()
+  await expect(row).toContainText('band 500')
+
+  page.once('dialog', (d) => void d.accept())
+  await row.getByRole('button', { name: 'Manage' }).click()
+  await page.getByRole('button', { name: 'Suspend tenant' }).click()
+  await expect(page.getByRole('dialog')).toBeHidden()
+  await expect(row).toContainText('Suspended')
+
+  await page.getByRole('link', { name: 'Support access' }).click()
+  await page.getByRole('button', { name: 'New grant' }).click()
+  await page.getByLabel('Tenant ID').fill(id)
+  await page.getByLabel(/^Reason/).fill('Investigating a roster publication problem')
+  await page.getByLabel(/^Site IDs/).fill('e2e_site_1')
+  await page.getByRole('button', { name: 'Grant', exact: true }).click()
+  await expect(page.getByRole('row').filter({ hasText: id })).toContainText('Live')
+  await page.getByRole('row').filter({ hasText: id }).getByRole('button', { name: 'End now' }).click()
+  await expect(page.getByRole('row').filter({ hasText: id })).toContainText('terminated')
+
+  await page.getByRole('link', { name: 'Plans' }).click()
+  await expect(page.getByText('indicative').first()).toBeVisible()
+  await page.getByRole('link', { name: 'Audit' }).click()
+  await expect(page.getByRole('cell', { name: 'platform.subscription_set' }).first()).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'support.grant_terminate' }).first()).toBeVisible()
+})
+
+test('a customer user is not a platform operator and gets no platform data', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: /Demo Tenant Admin/ }).click()
+  await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
+  await page.goto('/platform')
+  await expect(page.getByText('Not a platform operator')).toBeVisible()
+})

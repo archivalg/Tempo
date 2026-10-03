@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { NavLink, Outlet, useSearchParams } from 'react-router-dom'
+import { NavLink, Outlet, useSearchParams, Navigate } from 'react-router-dom'
 import { listSites, type SiteSummary } from '../api/ops'
 import { NotificationBell } from './NotificationBell'
 import { useTempoContext } from '../context/TempoContextProvider'
@@ -43,6 +43,7 @@ export function AppShell() {
   if (status === 'loading') return <div className="tp-app" style={{ padding: 32 }}><Skeleton h={28} w={240} /></div>
   if (status === 'error') return <div className="tp-app" style={{ padding: 32 }}><Banner tone="bad" title="Cannot reach the Tempo API">{error} <button className="tp-btn" onClick={() => void reload()}>Retry</button></Banner></div>
   if (status === 'anonymous' || !access) return <LoginPage />
+  if (access.platform_admin && !access.tenant_id) return <Navigate to="/platform" replace />   // platform operators have no organisation to show
 
   const setSite = (id: string) => { const p = new URLSearchParams(params); p.set('site', id); setParams(p, { replace: true }) }
   const nav = NAV.filter((n) => can(n.perm))

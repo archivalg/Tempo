@@ -163,3 +163,19 @@ def test_expiry_is_visible_and_platform_overview_is_searchable_counts_only(clien
     assert client.get("/v1/platform/tenant-overview", headers=me).status_code == 403          # tenant users cannot see other tenants
     unmanaged = client.get("/v1/billing/plan", headers=context_header(roles=["analyst"], user_id="usr_an")).json()
     assert unmanaged["managed"] is False and "no commercial limits" in unmanaged["message"]
+
+
+def test_console_cookie_session_reaches_platform_routes_only_with_csrf_and_a_platform_admin(client):
+    _bootstrap(subject="idp|admin", email=None)
+    r = client.post("/v1/auth/dev-login", json={"subject": "idp|admin", "email": "admin@example.test", "mfa": True})
+    assert r.status_code == 200
+    csrf = client.cookies.get("tempo_csrf")
+    assert client.get("/v1/platform/plans").status_code == 200                                    # cookie session, read
+    body = {"plan_key": "optimise", "name": "Optimise", "monthly_price_per_site_aud": 3400}
+    assert client.post("/v1/platform/plans", json=body).status_code == 403                       # change without the CSRF token
+    assert client.post("/v1/platform/plans", json=body, headers={"X-CSRF-Token": csrf}).status_code == 201
+    assert client.get("/v1/platform/support-grants").json() == []
+    client.cookies.clear()
+    # a tenant user's cookie session is not a platform session
+    client.post("/v1/auth/dev-login", json={"subject": "idp|plain", "email": "plain@example.test", "mfa": True})
+    assert client.get("/v1/platform/plans").status_code in (401, 403)
