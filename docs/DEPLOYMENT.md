@@ -7,7 +7,7 @@ Update it whenever the deployed stack changes. Last verified: **2 October 2026**
 
 | Item | Value |
 |---|---|
-| Source revision of the running code | `0dc0200` on `build/tempo-standalone-gate1` (images built 2 Oct 2026 from a clean checkout of that commit, so uncommitted working-tree edits were not deployed). |
+| Source revision of the running code | `d977455` on `build/tempo-standalone-gate1` (images built 2 Oct 2026 from a clean checkout of that commit, so uncommitted working-tree edits were not deployed). |
 | Backend | container `tempo_backend`, image `tempo-api:local`, host port **8007** → 8000, runs as non-owner role `tempo_app` |
 | Frontend | container `tempo_frontend`, host port **3007** → 80 |
 | Database | container `tempo_postgres` (postgres:16), host `127.0.0.1:5439`, database `tempo`, roles `tempo_owner` (migrations) / `tempo_app` (runtime, no BYPASSRLS), volume `tempo_tempo_pgdata` |
@@ -40,6 +40,7 @@ The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database 
 
 ## Verification record
 - Smoke test against the public hostname (`scripts/smoke.sh`): readiness, console, anonymous refusal, password sign-in, and read-only calls for overview, demand, rosters, roster, live attendance, timesheets, variance, notifications, data status, setup checklist, data contracts; sign-out. Last run: **passed**, 1 Oct 2026.
+- 3 Oct 2026 (`d977455`): platform operator console at `/platform`; platform routes accept the console cookie session with CSRF (bearer still works); no migration; pre-deploy dump `~/tempo-backups/tempo-pre-platform-*.dump`; auth/platform/subscription tests 66 passed; smoke passed. First platform admin (`tbarwise@ensemblesolutions.com.au`) created on the live database with a one-time invitation (not yet used at time of writing); the invitation link is in `~/.config/tempo-secrets/platform-admin-invite.txt` (mode 600, expires 72 h after creation).
 - 2 Oct 2026 (second deploy, `0dc0200`): M3 shift definitions + availability + drill-through, M1 sites/customers/availability/rates import, M6 plans/manual subscriptions/allowance; migration `c5d6e7f8a9b0`; pre-deploy dump `~/tempo-backups/tempo-pre-m3m1m6-*.dump`; API suite 369 passed (one time-of-day-dependent test fixed); smoke passed incl. billing/plan and availability. Built from a clean checkout again.
 - 2 Oct 2026 (first deploy): M2 (internal T&A, kiosk breaks, site geofence/location) and M3 first slice (roster locking, planning rules) deployed; pre-deploy dump `~/tempo-backups/tempo-pre-m2m3-*.dump`; migrations `f2a3b4c5d6e7`, `a3b4c5d6e7f8`, `b4c5d6e7f8a9` applied cleanly; smoke test passed (now also checks attendance policy, geofence, daily list, planning rules). API suite 358 passed. Not yet run in GitHub CI.
 - API suite (real PostgreSQL, non-owner role): 325 passed on 1 Oct 2026 (run on this host; **not yet run in GitHub CI**).
