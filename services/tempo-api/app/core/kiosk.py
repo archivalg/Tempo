@@ -156,7 +156,7 @@ def _record_failure(db: Session, ctx: KioskContext, worker_id: str | None, cred:
 
 
 def verify_worker(db: Session, ctx: KioskContext, *, method: str, worker_id: str | None, pin: str | None,
-                  nfc_tag_id: str | None, worker_no: str | None = None, qr_token: str | None = None) -> Worker:
+                  nfc_tag_id: str | None, worker_no: str | None = None, qr_token: str | None = None, consume_qr: bool = True) -> Worker:
     """Identify the worker at this kiosk. Failure is deliberately non-specific."""
     generic = AuthInvalid("credential not recognised")
     cred: WorkerCredential | None = None
@@ -168,7 +168,7 @@ def verify_worker(db: Session, ctx: KioskContext, *, method: str, worker_id: str
         # A rotating, single-use code shown in the employee's own app; the kiosk's tenant is the only tenant it can be redeemed in.
         from app.core import kiosk_qr
         try:
-            qr_worker = kiosk_qr.redeem(db, ctx.tenant_id, qr_token or "")
+            qr_worker = kiosk_qr.redeem(db, ctx.tenant_id, qr_token or "", consume=consume_qr)
         except AuthInvalid:
             _record_failure(db, ctx, None, None)
             db.commit()

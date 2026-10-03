@@ -72,7 +72,9 @@ def version_shifts(db: Session, v: RosterVersion) -> list[ShiftAssignment]:
 
 
 def payload_hash(shifts: list[ShiftAssignment]) -> str:
-    rows = sorted((s.worker_id, s.role, s.zone, _aware(s.start_at).isoformat(), _aware(s.end_at).isoformat()) for s in shifts)
+    # break and instructions are part of what a manager approves, but rows without them hash exactly as before so earlier approvals stay valid
+    rows = sorted((s.worker_id, s.role, s.zone, _aware(s.start_at).isoformat(), _aware(s.end_at).isoformat())
+                  + ((s.break_minutes, s.instructions) if (s.break_minutes is not None or s.instructions) else ()) for s in shifts)
     return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
 
 

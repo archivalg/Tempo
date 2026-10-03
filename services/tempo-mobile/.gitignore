@@ -1,0 +1,16 @@
+node_modules/
+.expo/
+dist/
+web-build/
+# Native projects are generated from app.config.ts (Continuous Native Generation): `npm run prebuild`
+/android/
+/ios/
+*.log
+.env*
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+google-services.json
+GoogleService-Info.plist

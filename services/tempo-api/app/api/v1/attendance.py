@@ -232,7 +232,7 @@ def whoami(
     shifts before they choose to clock in/out (a genuine clock-in commits
     an AttendanceSession row; this is read-only).
     """
-    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id, qr_token=request.qr_token)
+    worker = verify_worker(db, kiosk, method=request.method, worker_id=request.worker_id, worker_no=request.worker_no, pin=request.pin, nfc_tag_id=request.nfc_tag_id, qr_token=request.qr_token, consume_qr=False)
     now = datetime.now(timezone.utc)
     open_s = timeclock.open_session(db, kiosk.tenant_id, worker.worker_id)
     state = open_s.state if open_s else "not_clocked_in"

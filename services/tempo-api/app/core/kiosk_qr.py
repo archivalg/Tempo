@@ -33,8 +33,9 @@ def issue(db: Session, tenant_id: str, worker_id: str) -> dict:
     return {"token": f"{PREFIX}{nonce}.{_sig(nonce, tenant_id, worker_id)}", "expires_at": exp.isoformat(), "ttl_seconds": settings.kiosk_qr_ttl_seconds}
 
 
-def redeem(db: Session, tenant_id: str, token: str) -> str:
-    """Returns the worker id the code was issued to, once. Any problem is the same generic failure."""
+def redeem(db: Session, tenant_id: str, token: str, consume: bool = True) -> str:
+    """Returns the worker id the code was issued to. With consume=True (a real clocking) it is spent; the kiosk's 'who is this?' preview does not spend it.
+    Any problem is the same generic failure."""
     generic = AuthInvalid("credential not recognised")
     if not token.startswith(PREFIX) or "." not in token:
         raise generic
@@ -47,5 +48,6 @@ def redeem(db: Session, tenant_id: str, token: str) -> str:
     exp = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
     if exp <= datetime.now(timezone.utc):
         raise generic
-    row.used_at = datetime.now(timezone.utc)
+    if consume:
+        row.used_at = datetime.now(timezone.utc)
     return row.worker_id

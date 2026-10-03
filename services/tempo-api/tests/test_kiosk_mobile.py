@@ -40,6 +40,9 @@ def test_qr_identification_clocks_a_full_cycle_and_each_code_works_once(client):
     kiosk = enrol_kiosk(client)
     h, _ = employee_login(client, "wrk_emp")
     t = qr(client, h)
+    who = client.post("/v1/attendance/whoami", json={"method": "qr", "qr_token": t}, headers=kiosk)                # the preview does not spend the code
+    assert who.status_code == 200 and who.json()["state"] == "not_clocked_in" and who.json()["allowed_actions"] == ["clock_in"]
+    assert client.post("/v1/attendance/whoami", json={"method": "qr", "qr_token": t}, headers=kiosk).status_code == 200
     first = tap(client, kiosk, "clock-in", t)
     assert first.status_code == 200 and first.json()["state"] == "working"
     assert tap(client, kiosk, "clock-in", t).status_code == 401                                   # the same code cannot be replayed

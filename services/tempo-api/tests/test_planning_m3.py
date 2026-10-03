@@ -185,3 +185,18 @@ def test_availability_entries_block_rosters_and_only_own_entries_can_be_removed(
         s.commit()
         aid = a.id
     assert client.delete(f"/v1/availability/{aid}", headers=planner()).status_code == 422
+
+
+def test_break_and_instructions_are_set_by_the_planner_bind_to_approval_and_reach_the_employee_after_publish(client):
+    _seed(client)
+    b = gen(client)
+    v, s0 = b["version"]["id"], b["shifts"][0]
+    r = client.patch(f"/v1/rosters/{v}/shifts/{s0['shift_id']}", json={"break_minutes": 45, "instructions": "Report to dock 3"}, headers=planner())
+    assert r.status_code == 200
+    got = next(x for x in r.json()["shifts"] if x["shift_id"] == s0["shift_id"])
+    assert got["planned_break_minutes"] == 45 and got["instructions"] == "Report to dock 3"
+    assert client.patch(f"/v1/rosters/{v}/shifts/{s0['shift_id']}", json={"break_minutes": 500}, headers=planner()).status_code == 422
+    post(client, f"/v1/rosters/{v}/submit", planner())
+    post(client, f"/v1/rosters/{v}/approve", manager(), {})
+    client.patch(f"/v1/rosters/{v}/shifts/{s0['shift_id']}", json={"instructions": "Changed after approval"}, headers=planner())      # an instruction edit invalidates the approval like any edit
+    assert post(client, f"/v1/rosters/{v}/publish", manager(), idem=True).status_code == 422

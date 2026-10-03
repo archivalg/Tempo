@@ -1,0 +1,49 @@
+name: mobile
+# Checks for the Tempo mobile app. The `unit` job runs on every change. The two native build jobs are manual
+# (workflow_dispatch) because they need runner minutes; they build UNSIGNED debug/simulator artefacts only and never touch store credentials.
+# NOTE: this workflow has not been run yet (written on a host without GitHub access); treat its first run as the test of it.
+on:
+  pull_request:
+    paths: ["services/tempo-mobile/**", ".github/workflows/mobile.yml"]
+  workflow_dispatch:
+defaults:
+  run:
+    working-directory: services/tempo-mobile
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: services/tempo-mobile/package-lock.json }
+      - run: npm ci --legacy-peer-deps
+      - run: npx tsc --noEmit
+      - run: npx jest --ci
+      - run: APP_ENV=test npx expo export --platform android --output-dir dist-android
+      - run: APP_ENV=test npx expo export --platform ios --output-dir dist-ios
+  android-debug-apk:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: services/tempo-mobile/package-lock.json }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - run: npm ci --legacy-peer-deps
+      - run: APP_ENV=test npx expo prebuild --platform android --no-install
+      - run: cd android && ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with: { name: tempo-test-debug-apk, path: services/tempo-mobile/android/app/build/outputs/apk/debug/*.apk }
+  ios-simulator-build:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: services/tempo-mobile/package-lock.json }
+      - run: npm ci --legacy-peer-deps
+      - run: APP_ENV=test npx expo prebuild --platform ios --no-install
+      - run: cd ios && pod install && xcodebuild -workspace *.xcworkspace -scheme "$(ls *.xcworkspace | sed 's/.xcworkspace//')" -configuration Debug -sdk iphonesimulator -derivedDataPath build CODE_SIGNING_ALLOWED=NO
+      - uses: actions/upload-artifact@v4
+        with: { name: tempo-test-simulator-app, path: services/tempo-mobile/ios/build/Build/Products/Debug-iphonesimulator/*.app }

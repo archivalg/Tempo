@@ -143,6 +143,8 @@ class ShiftIn(BaseModel):
     zone: str = Field(min_length=1, max_length=40)
     start_at: datetime
     end_at: datetime
+    break_minutes: int | None = Field(default=None, ge=0, le=180)       # planned unpaid break the employee will see
+    instructions: str | None = Field(default=None, max_length=500)       # what the employee should know for this shift
 
     @field_validator("start_at", "end_at")
     @classmethod
@@ -158,6 +160,8 @@ class ShiftPatch(BaseModel):
     zone: str | None = None
     start_at: datetime | None = None
     end_at: datetime | None = None
+    break_minutes: int | None = Field(default=None, ge=0, le=180)
+    instructions: str | None = Field(default=None, max_length=500)
 
 
 def _check_times(site, v: RosterVersion, start: datetime, end: datetime) -> None:
@@ -182,7 +186,7 @@ def add_shift(version_id: str, body: ShiftIn, ctx: RequestContext = Depends(get_
     _check_times(site, v, body.start_at, body.end_at)
     svc.invalidate_if_needed(db, ctx, v)
     sh = ShiftAssignment(tenant_id=ctx.tenant_id, worker_id=body.worker_id, role=body.role, zone=body.zone, start_at=body.start_at, end_at=body.end_at,
-                         status="proposed", source_system="tempo_native", source_ref=v.id)
+                         status="proposed", source_system="tempo_native", source_ref=v.id, break_minutes=body.break_minutes, instructions=(body.instructions or None))
     db.add(sh)
     db.flush()
     svc.event(db, ctx, v, "shift_added", {"shift_id": sh.shift_id, "worker_id": body.worker_id, "role": body.role, "zone": body.zone,
@@ -211,6 +215,10 @@ def edit_shift(version_id: str, shift_id: str, body: ShiftPatch, ctx: RequestCon
     svc.invalidate_if_needed(db, ctx, v)
     sh.worker_id, sh.role, sh.zone = body.worker_id or sh.worker_id, body.role or sh.role, body.zone or sh.zone
     sh.start_at, sh.end_at = start, end
+    if "break_minutes" in body.model_fields_set:
+        sh.break_minutes = body.break_minutes
+    if "instructions" in body.model_fields_set:
+        sh.instructions = (body.instructions or None)
     db.flush()
     svc.event(db, ctx, v, "shift_edited", {"shift_id": shift_id, "before": before, "after": {"worker_id": sh.worker_id, "role": sh.role, "zone": sh.zone, "start": start.isoformat(), "end": end.isoformat()}})
     return svc.board(db, ctx, site, v)
