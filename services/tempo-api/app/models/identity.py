@@ -82,6 +82,8 @@ class TempoUser(Base):
     totp_secret_enc: Mapped[str | None] = mapped_column(String, nullable=True)
     totp_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     totp_last_step: Mapped[int] = mapped_column(default=0)
+    # Email-code second factor (an alternative to the authenticator app; only one is active). The code goes to `email`.
+    email_mfa_enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -339,4 +341,18 @@ class UserInvitation(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class EmailOtp(Base):
+    """A one-time email code for two-step sign-in or enrolment. Only a keyed hash of the code is stored; it expires, is single use and allows a few attempts."""
+
+    __tablename__ = "email_otp"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("tempo_user.user_id"), index=True)
+    purpose: Mapped[str] = mapped_column(String)                          # login | enrol
+    code_hash: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(default=0)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -29,7 +29,7 @@ export default function Login() {
           {notice ? <Banner tone="warn" title={notice} /> : null}
           {mfaChallenge ? (
             <>
-              <P>Enter the 6-digit code from your authenticator app.</P>
+              <P>Enter your 6-digit code: from your authenticator app, or the code we just emailed you.</P>
               <Field label="Code" value={code} onChangeText={setCode} keyboardType="number-pad" maxLength={8} autoComplete="one-time-code" />
             </>
           ) : (

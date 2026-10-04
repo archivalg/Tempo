@@ -17,7 +17,7 @@ TENANT_B, SITE_B = "ten_matrix_b", "site_b_01"
 PUBLIC = {  # intentionally unauthenticated (pre-login) — each is separately tested
     ("GET", "/healthz"), ("GET", "/readyz"), ("GET", "/v1/auth/config"), ("GET", "/v1/auth/dev-identities"), ("POST", "/v1/auth/dev-login"), ("GET", "/v1/auth/oidc/login"),
     ("GET", "/v1/auth/oidc/callback"), ("POST", "/v1/auth/login"), ("POST", "/v1/auth/mfa/verify"), ("POST", "/v1/auth/accept-invite"), ("GET", "/v1/auth/invite/{token}"), ("POST", "/v1/auth/refresh"), ("POST", "/v1/kiosk/enrol"),
-    ("POST", "/v1/mobile/auth/login"), ("POST", "/v1/mobile/auth/mfa"), ("POST", "/v1/mobile/auth/refresh"),
+    ("POST", "/v1/mobile/auth/login"), ("POST", "/v1/mobile/auth/mfa"), ("POST", "/v1/mobile/auth/mfa/resend"), ("POST", "/v1/mobile/auth/refresh"), ("POST", "/v1/auth/mfa/email/resend"),
 }
 
 

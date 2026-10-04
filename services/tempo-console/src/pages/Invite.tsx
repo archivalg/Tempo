@@ -36,7 +36,7 @@ export default function InvitePage() {
             <label className="tp-field">Repeat password<input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} autoComplete="new-password" /></label>
             {pw2 && pw !== pw2 && <span role="alert" style={{ color: 'var(--tp-red-ink)' }}>Passwords do not match.</span>}
             <button className="tp-btn primary" disabled={busy || pw.length < info.password_rules.min_length || pw !== pw2}>{busy ? 'Saving…' : 'Set password'}</button>
-            <p className="tp-muted" style={{ fontSize: 12.5, margin: 0 }}>This link works once. Administrators are asked to set up an authenticator app at first sign-in.</p>
+            <p className="tp-muted" style={{ fontSize: 12.5, margin: 0 }}>This link works once. Administrators are asked to set up two-step verification (an authenticator app or an emailed code) at first sign-in.</p>
           </form>
         )}
       </div>

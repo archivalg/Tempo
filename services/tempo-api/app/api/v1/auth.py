@@ -158,7 +158,7 @@ def me_access(principal: auth.ResolvedPrincipal = Depends(get_principal), db: Se
     begin_auth_lookup(db)
     u = db.get(TempoUser, principal.user_id)
     base = {"user_id": principal.user_id, "platform_admin": principal.is_platform_admin, "email": u.email if u else None, "username": u.username if u else None,
-            "mfa_verified": principal.mfa_verified_at is not None, "mfa_enabled": bool(u and u.totp_enabled_at),
+            "mfa_verified": principal.mfa_verified_at is not None, "mfa_enabled": bool(u and pl.mfa_method(u)), "mfa_method": pl.mfa_method(u) if u else None,
             "mfa_required": bool(u and _pl.needs_mfa(db, u) and principal.mfa_verified_at is None),
             "idp": "dev-local" if settings.dev_idp_enabled else "password" if (u and u.password_hash) else "oidc"}
     if principal.tenant_id is None:
@@ -203,7 +203,7 @@ def _session_response(response: Response, issued: auth.IssuedSession, extra: dic
 def password_login(body: PasswordLogin, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     out = pl.password_login(db, request, body.username, body.password, _cid(request))
     if out.kind == "mfa_required":
-        return {"status": "mfa_required", "challenge": out.challenge}
+        return {"status": "mfa_required", "challenge": out.challenge, "method": out.method, "sent": out.sent, "hint": out.hint}
     return _session_response(response, out.issued, {"mfa_enrol_required": out.kind == "mfa_enrol_required"})
 
 
@@ -212,21 +212,64 @@ def mfa_verify(body: MfaVerify, request: Request, response: Response, db: Sessio
     return _session_response(response, pl.mfa_verify(db, request, body.challenge, body.code, _cid(request)))
 
 
+class Code(BaseModel):
+    code: str
+
+
+class Challenge(BaseModel):
+    challenge: str
+
+
+@router.post("/auth/mfa/email/resend")
+def mfa_email_resend(body: Challenge, request: Request, db: Session = Depends(get_db)) -> dict:
+    return pl.mfa_resend(db, request, body.challenge, _cid(request))
+
+
+@router.post("/auth/mfa/email/enroll")
+def mfa_email_enroll(request: Request, principal: auth.ResolvedPrincipal = Depends(get_principal), db: Session = Depends(get_db)) -> dict:
+    """Starts email-code enrolment: emails a code to the account's address. It turns on only after the code is entered."""
+    from app.core import email_otp
+    pl.require_secure_transport(request)
+    begin_auth_lookup(db)
+    user = db.get(TempoUser, principal.user_id)
+    if pl.mfa_method(user):
+        raise AuthInvalid("A second factor is already set up. Ask an administrator to reset it first.")
+    email_otp.require_ready(db, user)
+    sent = email_otp.issue(db, user, "enrol")
+    if not sent:
+        raise AuthInvalid("The code email could not be sent. Check the platform email settings, or use an authenticator app.")
+    return {"sent_to": email_otp.mask(user.email)}
+
+
+@router.post("/auth/mfa/email/confirm")
+def mfa_email_confirm(body: Code, request: Request, principal: auth.ResolvedPrincipal = Depends(get_principal), db: Session = Depends(get_db)) -> dict:
+    from datetime import datetime, timezone
+    from app.core import email_otp
+    from app.models.identity import UserSession
+    pl.require_secure_transport(request)
+    begin_auth_lookup(db)
+    user = db.get(TempoUser, principal.user_id)
+    if pl.mfa_method(user) or not email_otp.verify(db, user, "enrol", body.code):
+        raise AuthInvalid("That code is not valid, or it has expired. Request a new one.")
+    now = datetime.now(timezone.utc)
+    user.email_mfa_enabled_at = now
+    sess = db.get(UserSession, principal.session_id)
+    sess.mfa_verified_at = now
+    auth.audit(db, actor_type="user", actor_id=user.user_id, action="mfa.enrolled", decision="allowed", reason_code="email", correlation_id=_cid(request))
+    return {"status": "mfa_enabled"}
+
+
 @router.post("/auth/mfa/enroll")
 def mfa_enroll(request: Request, principal: auth.ResolvedPrincipal = Depends(get_principal), db: Session = Depends(get_db)) -> dict:
     """Starts TOTP enrolment for the signed-in user. The secret is shown once; it becomes active only after a valid code."""
     pl.require_secure_transport(request)
     begin_auth_lookup(db)
     user = db.get(TempoUser, principal.user_id)
-    if user.totp_enabled_at is not None:
+    if pl.mfa_method(user):
         raise AuthInvalid("A second factor is already set up. Ask an administrator to reset it if you lost your device.")
     secret = passwords.new_totp_secret()
     user.totp_secret_enc = passwords.encrypt_secret(secret, settings.session_signing_key or auth._signing_key())
     return {"secret": secret, "otpauth_uri": passwords.otpauth_uri(secret, user.email or user.username or user.user_id)}
-
-
-class Code(BaseModel):
-    code: str
 
 
 @router.post("/auth/mfa/confirm")

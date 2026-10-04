@@ -8,6 +8,7 @@ export interface Access {
   email?: string | null
   username?: string | null
   mfa_enabled?: boolean
+  mfa_method?: 'totp' | 'email' | null
   mfa_required?: boolean
   tenant_id: string | null
   roles: string[]
@@ -37,9 +38,12 @@ export const devLogin = (subject: string, email: string, mfa: boolean) =>
   apiRequest<{ idp: string }>('/auth/dev-login', { method: 'POST', body: { subject, email, mfa } })
 export const logout = () => apiRequest<{ status: string }>('/auth/logout', { method: 'POST' })
 
-export type LoginResult = { status: 'signed_in'; mfa_enrol_required: boolean } | { status: 'mfa_required'; challenge: string }
+export type LoginResult = { status: 'signed_in'; mfa_enrol_required: boolean } | { status: 'mfa_required'; challenge: string; method?: 'totp' | 'email'; sent?: boolean | null; hint?: string | null }
 export const passwordLogin = (username: string, password: string) => apiRequest<LoginResult>('/auth/login', { method: 'POST', body: { username, password } })
 export const mfaVerify = (challenge: string, code: string) => apiRequest<{ status: string }>('/auth/mfa/verify', { method: 'POST', body: { challenge, code } })
+export const mfaEmailResend = (challenge: string) => apiRequest<{ sent: boolean; hint: string }>('/auth/mfa/email/resend', { method: 'POST', body: { challenge } })
+export const mfaEmailEnroll = () => apiRequest<{ sent_to: string }>('/auth/mfa/email/enroll', { method: 'POST' })
+export const mfaEmailConfirm = (code: string) => apiRequest<{ status: string }>('/auth/mfa/email/confirm', { method: 'POST', body: { code } })
 export const mfaEnroll = () => apiRequest<{ secret: string; otpauth_uri: string }>('/auth/mfa/enroll', { method: 'POST' })
 export const mfaConfirm = (code: string) => apiRequest<{ status: string }>('/auth/mfa/confirm', { method: 'POST', body: { code } })
 export const changePassword = (current_password: string, new_password: string) => apiRequest<{ status: string }>('/auth/password', { method: 'POST', body: { current_password, new_password } })

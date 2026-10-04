@@ -38,6 +38,10 @@ class MobileMfa(BaseModel):
     code: str
 
 
+class MobileMfaResend(BaseModel):
+    challenge: str
+
+
 class MobileRefresh(BaseModel):
     refresh_token: str
 
@@ -56,8 +60,13 @@ def mobile_login(body: MobileLogin, request: Request, db: Session = Depends(get_
     """Same checks as the web sign-in (throttle, lockout, MFA when required). The tokens come back in the body for the app's secure storage; no cookies."""
     out = pl.password_login(db, request, body.username, body.password, _cid(request))
     if out.kind == "mfa_required":
-        return {"status": "mfa_required", "challenge": out.challenge}
+        return {"status": "mfa_required", "challenge": out.challenge, "method": out.method, "sent": out.sent, "hint": out.hint}
     return {**_tokens(out.issued), "mfa_enrol_required": out.kind == "mfa_enrol_required"}
+
+
+@router.post("/mobile/auth/mfa/resend")
+def mobile_mfa_resend(body: MobileMfaResend, request: Request, db: Session = Depends(get_db)) -> dict:
+    return pl.mfa_resend(db, request, body.challenge, _cid(request))
 
 
 @router.post("/mobile/auth/mfa")

@@ -140,7 +140,7 @@ def authorise_exit(body: ExitRequest, request: Request, kctx: kiosk.KioskContext
         else:
             out = pl.password_login(db, request, body.username, body.password, cid)
             if out.kind == "mfa_required":
-                return {"authorised": False, "mfa_required": True, "challenge": out.challenge}
+                return {"authorised": False, "mfa_required": True, "challenge": out.challenge, "method": out.method, "hint": out.hint}
             issued = out.issued
         uid = auth.verify_access_token(issued.access_token)["sub"]
         begin_auth_lookup(db)

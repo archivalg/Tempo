@@ -1,7 +1,7 @@
 import { QrCode } from '../components/QrCode'
 import { useState, type FormEvent } from 'react'
 import { ApiError } from '../api/client'
-import { changePassword, mfaConfirm, mfaEnroll } from '../api/session'
+import { changePassword, mfaConfirm, mfaEmailConfirm, mfaEmailEnroll, mfaEnroll } from '../api/session'
 import { Banner, PageHead, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 
@@ -13,6 +13,7 @@ export default function AccountPage() {
   const [msg, setMsg] = useState<{ tone: 'info' | 'bad'; text: string } | null>(null)
   const [enrol, setEnrol] = useState<{ secret: string; otpauth_uri: string } | null>(null)
   const [code, setCode] = useState('')
+  const [emailSentTo, setEmailSentTo] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const run = async (fn: () => Promise<void>) => { setBusy(true); setMsg(null); try { await fn() } catch (e) { setMsg({ tone: 'bad', text: e instanceof ApiError ? e.message : 'Failed' }) } finally { setBusy(false) } }
 
@@ -21,7 +22,7 @@ export default function AccountPage() {
     <>
       <PageHead title="Account" sub={`${access?.email ?? access?.username ?? ''} · ${access?.tenant_id ?? 'platform'}`} />
       {msg && <Banner tone={msg.tone} title={msg.text} />}
-      {access?.mfa_required && <Banner tone="warn" title="Set up an authenticator app to use your administrator permissions">Until you do, admin actions are unavailable to you.</Banner>}
+      {access?.mfa_required && <Banner tone="warn" title="Set up two-step verification to use your administrator permissions">Until you do, admin actions are unavailable to you.</Banner>}
       <div className="tp-cols2" style={{ alignItems: 'start' }}>
         <section className="tp-card"><header><h2>Change password</h2></header>
           <form className="tp-body tp-stack" onSubmit={savePw}>
@@ -33,10 +34,27 @@ export default function AccountPage() {
         </section>
         <section className="tp-card"><header><h2>Two-step verification</h2>{access?.mfa_enabled ? <Status tone="ok">On</Status> : <Status tone={access?.mfa_required ? 'bad' : 'neutral'}>Off</Status>}</header>
           <div className="tp-body tp-stack">
-            {access?.mfa_enabled ? <p className="tp-muted" style={{ margin: 0 }}>You’ll be asked for a code from your authenticator app each time you sign in. If you lose the device, an administrator can reset it.</p> : !enrol ? (
+            {access?.mfa_enabled ? <p className="tp-muted" style={{ margin: 0 }}>{access.mfa_method === 'email' ? `You’ll be emailed a 6-digit code each time you sign in. If you lose access to that mailbox, an administrator can reset it.` : 'You’ll be asked for a code from your authenticator app each time you sign in. If you lose the device, an administrator can reset it.'}</p> : emailSentTo ? (
               <>
-                <p style={{ margin: 0 }}>Use an authenticator app (Microsoft Authenticator, Google Authenticator, 1Password…) for a second step at sign-in.</p>
-                <button className="tp-btn primary" disabled={busy} onClick={() => void run(async () => setEnrol(await mfaEnroll()))}>Set up authenticator</button>
+                <p style={{ margin: 0 }}>We emailed a 6-digit code to <b>{emailSentTo}</b>. Enter it to turn on email codes.</p>
+                <label className="tp-field">Email code<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" maxLength={8} autoComplete="one-time-code" autoFocus /></label>
+                <div className="tp-row">
+                  <button className="tp-btn primary" disabled={busy || code.trim().length < 6} onClick={() => void run(async () => { await mfaEmailConfirm(code); setEmailSentTo(null); setCode(''); await reload(); setMsg({ tone: 'info', text: 'Two-step verification is on. You’ll be emailed a code at each sign-in.' }) })}>Confirm and turn on</button>
+                  <button className="tp-btn" disabled={busy} onClick={() => void run(async () => setEmailSentTo((await mfaEmailEnroll()).sent_to))}>Send a new code</button>
+                  <button className="tp-btn" disabled={busy} onClick={() => { setEmailSentTo(null); setCode('') }}>Cancel</button>
+                </div>
+              </>
+            ) : !enrol ? (
+              <>
+                <p style={{ margin: 0 }}>Choose how you’ll get your second sign-in step.</p>
+                <div className="tp-stack" style={{ gap: 4 }}>
+                  <button className="tp-btn primary" disabled={busy} onClick={() => void run(async () => setEnrol(await mfaEnroll()))}>Use an authenticator app</button>
+                  <span className="tp-muted" style={{ fontSize: 12.5 }}>Microsoft Authenticator, Google Authenticator, 1Password… The stronger option.</span>
+                </div>
+                <div className="tp-stack" style={{ gap: 4 }}>
+                  <button className="tp-btn" disabled={busy || !access?.email} onClick={() => void run(async () => setEmailSentTo((await mfaEmailEnroll()).sent_to))}>Email me a code</button>
+                  <span className="tp-muted" style={{ fontSize: 12.5 }}>A new 6-digit code is emailed to {access?.email ?? 'your address'} at every sign-in. Only as safe as that mailbox; needs platform email to be working.</span>
+                </div>
               </>
             ) : (
               <>

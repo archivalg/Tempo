@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError, BASE_URL } from '../api/client'
-import { devLogin, getAuthConfig, listDevIdentities, mfaVerify, passwordLogin, type AuthConfig, type DevIdentity } from '../api/session'
+import { devLogin, getAuthConfig, listDevIdentities, mfaEmailResend, mfaVerify, passwordLogin, type AuthConfig, type DevIdentity } from '../api/session'
 import { Banner } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 
@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [user, setUser] = useState('')
   const [pw, setPw] = useState('')
   const [challenge, setChallenge] = useState<string | null>(null)
+  const [emailHint, setEmailHint] = useState<{ hint: string; sent: boolean } | null>(null)
   const [code, setCode] = useState('')
   const methods = cfg?.methods ?? []
 
@@ -32,14 +33,14 @@ export default function LoginPage() {
     const r = await guard(() => passwordLogin(user, pw))
     if (!r) return
     setPw('')
-    if (r.status === 'mfa_required') { setChallenge(r.challenge); return }
+    if (r.status === 'mfa_required') { setChallenge(r.challenge); setEmailHint(r.method === 'email' ? { hint: r.hint ?? '', sent: r.sent !== false } : null); return }
     await reload()
   }
   async function submitCode(e: FormEvent) {
     e.preventDefault()
     if (!challenge) return
     const r = await guard(() => mfaVerify(challenge, code))
-    if (r) { setCode(''); setChallenge(null); await reload() }
+    if (r) { setCode(''); setChallenge(null); setEmailHint(null); await reload() }
   }
 
   return (
@@ -52,9 +53,11 @@ export default function LoginPage() {
 
         {challenge ? (
           <form onSubmit={submitCode} className="tp-stack">
-            <p style={{ margin: 0 }}>Enter the 6-digit code from your authenticator app.</p>
-            <label className="tp-field">Authentication code<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={8} autoFocus style={{ fontSize: 20, letterSpacing: 4 }} /></label>
-            <div className="tp-row"><button className="tp-btn primary" disabled={busy || code.trim().length < 6}>Verify</button><button type="button" className="tp-btn" onClick={() => { setChallenge(null); setCode('') }}>Back</button></div>
+            {emailHint
+              ? <p style={{ margin: 0 }}>{emailHint.sent ? <>We emailed a 6-digit code to <b>{emailHint.hint}</b>. It works once and expires in 10 minutes.</> : <>We could not send the code email just now. Choose “Send a new code”, or ask your administrator.</>}</p>
+              : <p style={{ margin: 0 }}>Enter the 6-digit code from your authenticator app.</p>}
+            <label className="tp-field">{emailHint ? 'Email code' : 'Authentication code'}<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" maxLength={8} autoFocus style={{ fontSize: 20, letterSpacing: 4 }} /></label>
+            <div className="tp-row"><button className="tp-btn primary" disabled={busy || code.trim().length < 6}>Verify</button>{emailHint && <button type="button" className="tp-btn" disabled={busy} onClick={async () => { const r = await guard(() => mfaEmailResend(challenge)); if (r) setEmailHint({ hint: r.hint, sent: r.sent }) }}>Send a new code</button>}<button type="button" className="tp-btn" onClick={() => { setChallenge(null); setEmailHint(null); setCode('') }}>Back</button></div>
           </form>
         ) : methods.includes('password') || cfg?.provider === 'password' ? (
           <form onSubmit={submit} className="tp-stack">

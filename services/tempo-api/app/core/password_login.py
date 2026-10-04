@@ -107,10 +107,17 @@ class LoginOutcome:
     kind: str  # session | mfa_required | mfa_enrol_required
     issued: auth.IssuedSession | None = None
     challenge: str | None = None
+    method: str | None = None        # totp | email
+    sent: bool | None = None         # email method: whether the code email was accepted by the mail server
+    hint: str | None = None          # masked address the code was sent to
 
 
-def _mfa_challenge(user_id: str) -> str:
-    return jwt.encode({"typ": "mfa", "sub": user_id, "exp": int((_now() + timedelta(minutes=5)).timestamp()), "jti": secrets.token_hex(8)}, auth._signing_key(), algorithm="HS256")
+def mfa_method(user: TempoUser) -> str | None:
+    return "totp" if user.totp_enabled_at is not None else "email" if user.email_mfa_enabled_at is not None else None
+
+
+def _mfa_challenge(user_id: str, method: str = "totp") -> str:
+    return jwt.encode({"typ": "mfa", "sub": user_id, "m": method, "exp": int((_now() + timedelta(minutes=5)).timestamp()), "jti": secrets.token_hex(8)}, auth._signing_key(), algorithm="HS256")
 
 
 def _fail(db: Session, user: TempoUser | None, ident: str, reason: str, cid: str, ip: str) -> None:
@@ -147,10 +154,15 @@ def password_login(db: Session, request: Request, identifier: str, password: str
     user.failed_logins, user.locked_until = 0, None
     if rehash:
         user.password_hash = passwords.hash_password(password)
-    if user.totp_enabled_at is not None:
+    method = mfa_method(user)
+    if method is not None:
         _audit(db, user.user_id, ident, "login.password_ok", "allowed", "mfa_required", cid, ip)
         db.commit()
-        return LoginOutcome("mfa_required", challenge=_mfa_challenge(user.user_id))
+        if method == "email":
+            from app.core import email_otp
+            sent = email_otp.issue(db, user, "login")
+            return LoginOutcome("mfa_required", challenge=_mfa_challenge(user.user_id, "email"), method="email", sent=sent, hint=email_otp.mask(user.email))
+        return LoginOutcome("mfa_required", challenge=_mfa_challenge(user.user_id), method="totp")
     issued = auth.create_session(db, user, mfa=False, auth_method="password")
     _audit(db, user.user_id, ident, "login", "allowed", "password_only", cid, ip)
     return LoginOutcome("mfa_enrol_required" if needs_mfa(db, user) else "session", issued=issued)
@@ -169,15 +181,49 @@ def mfa_verify(db: Session, request: Request, challenge: str, code: str, cid: st
         raise AuthInvalid("Too many attempts. Wait a few minutes and start again.")
     begin_auth_lookup(db)
     user = db.get(TempoUser, claims["sub"])
-    secret = passwords.decrypt_secret(user.totp_secret_enc, settings.session_signing_key or auth._signing_key()) if user and user.totp_secret_enc else None
-    step = passwords.verify_totp(secret, code, user.totp_last_step) if secret and user.totp_enabled_at else None
-    if user is None or step is None or user.account_status != "active" or (_aware(user.locked_until) and _aware(user.locked_until) > _now()):
-        _fail(db, user, user.username if user and user.username else "?", "bad_totp", cid, ip)
-        raise AuthInvalid("That code is not valid. Try the next code from your authenticator app.")
-    user.totp_last_step, user.failed_logins = step, 0
-    issued = auth.create_session(db, user, mfa=True, auth_method="password+totp")
-    _audit(db, user.user_id, user.username or "", "login", "allowed", "password+totp", cid, ip)
+    method = mfa_method(user) if user else None
+    step: int | None = None
+    email_ok = False
+    if method == "email":
+        from app.core import email_otp
+        email_ok = email_otp.verify(db, user, "login", code)
+    elif method == "totp":
+        secret = passwords.decrypt_secret(user.totp_secret_enc, settings.session_signing_key or auth._signing_key()) if user.totp_secret_enc else None
+        step = passwords.verify_totp(secret, code, user.totp_last_step) if secret else None
+    good = email_ok if method == "email" else step is not None
+    if user is None or not good or user.account_status != "active" or (_aware(user.locked_until) and _aware(user.locked_until) > _now()):
+        _fail(db, user, user.username if user and user.username else "?", "bad_email_code" if method == "email" else "bad_totp", cid, ip)
+        raise AuthInvalid("That code is not valid, or it has expired. Check the latest email and try again." if method == "email" else "That code is not valid. Try the next code from your authenticator app.")
+    if step is not None:
+        user.totp_last_step = step
+    user.failed_logins = 0
+    tag = "password+email" if method == "email" else "password+totp"
+    issued = auth.create_session(db, user, mfa=True, auth_method=tag)
+    _audit(db, user.user_id, user.username or "", "login", "allowed", tag, cid, ip)
     return issued
+
+
+def mfa_resend(db: Session, request: Request, challenge: str, cid: str) -> dict:
+    """Sends a fresh email code for a pending sign-in (the previous code stops working)."""
+    require_secure_transport(request)
+    ip = client_ip(request)
+    try:
+        claims = jwt.decode(challenge, auth._signing_key(), algorithms=["HS256"])
+        if claims.get("typ") != "mfa":
+            raise jwt.PyJWTError()
+    except jwt.PyJWTError:
+        raise AuthInvalid("Your sign-in expired. Start again.") from None
+    if not throttle.check(f"mfa_resend:{ip}:{claims['sub']}", 6):
+        raise AuthInvalid("Too many attempts. Wait a few minutes and start again.")
+    begin_auth_lookup(db)
+    user = db.get(TempoUser, claims["sub"])
+    if user is None or user.account_status != "active" or mfa_method(user) != "email":
+        raise AuthInvalid("Your sign-in expired. Start again.")
+    from app.core import email_otp
+    sent = email_otp.issue(db, user, "login")
+    _audit(db, user.user_id, user.username or "", "login.email_code_resent", "allowed", "sent" if sent else "not_sent", cid, ip)
+    db.commit()
+    return {"sent": sent, "hint": email_otp.mask(user.email)}
 
 
 # ---- invitations -----------------------------------------------------------

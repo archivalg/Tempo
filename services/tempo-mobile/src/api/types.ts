@@ -20,6 +20,6 @@ export interface NotificationPrefs {
   reminder_lead_minutes: number; lead_choices: number[]; sms_opt_in: boolean; sms_number: string | null; sms_available: boolean; company_push_enabled: boolean
 }
 export interface InboxItem { id: string; kind: string; title: string; body: string; deep_link: string | null; created_at: string; read: boolean }
-export interface LoginResult { status: 'signed_in' | 'mfa_required'; access_token?: string; refresh_token?: string; expires_at?: string; refresh_expires_at?: string; challenge?: string }
+export interface LoginResult { status: 'signed_in' | 'mfa_required'; access_token?: string; refresh_token?: string; expires_at?: string; refresh_expires_at?: string; challenge?: string; method?: 'totp' | 'email'; hint?: string | null }
 export interface WhoAmI { worker_id: string; masked_identity: string; state: 'not_clocked_in' | 'working' | 'on_break'; allowed_actions: string[]; location_mode: string }
 export interface PunchResult { state: string; duplicate: boolean; recorded_at?: string; clocked_in_at?: string; clocked_out_at?: string }

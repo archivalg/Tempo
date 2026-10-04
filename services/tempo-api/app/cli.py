@@ -158,6 +158,9 @@ def main(argv: list[str] | None = None) -> int:
     sp = sub.add_parser("set-password", help="set or reset a user's password from a hidden prompt (never printed or logged)")
     sp.add_argument("--username", required=True, help="username or email of an existing user")
     sp.add_argument("--operator", required=True)
+    rm = sub.add_parser("reset-mfa", help="remove a user's second factor (authenticator or email code) so they can enrol again; signs them out everywhere")
+    rm.add_argument("--username", required=True)
+    rm.add_argument("--operator", required=True)
     ul = sub.add_parser("unlock-user", help="clear a lockout")
     ul.add_argument("--username", required=True)
     ul.add_argument("--operator", required=True)
@@ -244,6 +247,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "create-user":
         return _create_user(args)
+    if args.cmd == "reset-mfa":
+        from app.core import password_login as pl
+
+        db = db_module.SessionLocal()
+        try:
+            user = pl.find_user(db, pl.normalise(args.username))
+            if user is None:
+                print("no such user", file=sys.stderr)
+                return 2
+            user.totp_secret_enc, user.totp_enabled_at, user.totp_last_step, user.email_mfa_enabled_at = None, None, 0, None
+            auth.revoke_user_everywhere(db, user.user_id, reason="operator_reset_mfa")
+            auth.audit(db, actor_type="operator", actor_id=args.operator, action="mfa.reset_by_operator", decision="allowed", session_ref=user.user_id)
+            db.commit()
+            print("second factor removed; existing sessions were revoked. The user enrols again at next sign-in.")
+            return 0
+        finally:
+            db.close()
     if args.cmd in ("set-password", "unlock-user"):
         return _user_command(args)
     if args.cmd in ("bootstrap-ensemble-demo", "reset-ensemble-demo", "demo-status"):

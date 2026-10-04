@@ -71,7 +71,7 @@ def _view(db: Session, ctx: RequestContext, u: TempoUser, m: TenantMembership) -
     sites = list(db.scalars(select(UserSiteGrant.site_id).where(UserSiteGrant.user_id == u.user_id, UserSiteGrant.tenant_id == ctx.tenant_id)))
     custs = list(db.scalars(select(UserCustomerGrant.customer_id).where(UserCustomerGrant.user_id == u.user_id, UserCustomerGrant.tenant_id == ctx.tenant_id)))
     return {"user_id": u.user_id, "email": u.email, "username": u.username, "display_name": u.display_name, "roles": sorted(roles), "site_ids": sorted(sites),
-            "customer_ids": sorted(custs), "membership": m.status, "has_password": u.password_hash is not None, "mfa_enabled": u.totp_enabled_at is not None,
+            "customer_ids": sorted(custs), "membership": m.status, "has_password": u.password_hash is not None, "mfa_enabled": u.totp_enabled_at is not None or u.email_mfa_enabled_at is not None,
             "locked": bool(u.locked_until and pl._aware(u.locked_until) > pl._now()), "is_self": u.user_id == ctx.user_id}
 
 
@@ -170,7 +170,7 @@ def _lifecycle(status: str | None, action: str):
                 auth.revoke_user_everywhere(db, user_id, reason=action, correlation_id=ctx.correlation_id)
         elif action == "user.reset_mfa":
             with auth_phase(db, ctx.tenant_id):
-                u.totp_secret_enc, u.totp_enabled_at, u.totp_last_step = None, None, 0
+                u.totp_secret_enc, u.totp_enabled_at, u.totp_last_step, u.email_mfa_enabled_at = None, None, 0, None
                 auth.revoke_user_everywhere(db, user_id, reason=action, correlation_id=ctx.correlation_id)
         elif action == "user.unlock":
             with auth_phase(db, ctx.tenant_id):
