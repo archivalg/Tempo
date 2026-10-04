@@ -170,6 +170,15 @@ def main(argv: list[str] | None = None) -> int:
     cu.add_argument("--customers", default="", help="comma-separated customer ids")
     cu.add_argument("--password-stdin", action="store_true", required=True)
     cu.add_argument("--operator", required=True)
+    sm = sub.add_parser("set-smtp", help="set the platform SMTP account; the password is read from stdin (never an argument) and stored encrypted")
+    sm.add_argument("--host", required=True)
+    sm.add_argument("--port", type=int, default=587)
+    sm.add_argument("--security", choices=("starttls", "ssl", "none"), default="starttls")
+    sm.add_argument("--username", required=True)
+    sm.add_argument("--from-email", required=True)
+    sm.add_argument("--from-name", default="Tempo")
+    sm.add_argument("--password-stdin", action="store_true", required=True)
+    sm.add_argument("--operator", required=True)
     sub.add_parser("run-notification-jobs", help="run one cycle of the notification job loop (reminders, pushes, retries, receipts)")
     sub.add_parser("demo-status", help="show the demo seed manifest")
     args = ap.parse_args(argv)
@@ -178,6 +187,32 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: pass --confirm-verified-identity after verifying the identity with the IdP", file=sys.stderr)
             return 2
         return bootstrap_platform_admin(subject=args.subject, email=args.email, operator=args.operator)
+    if args.cmd == "set-smtp":
+        from datetime import datetime, timezone
+
+        from app.core import email as mail
+        from app.models.billing import SmtpConfig
+
+        pw = sys.stdin.readline().rstrip("\n")
+        if not pw:
+            print("no password on stdin", file=sys.stderr)
+            return 2
+        db = db_module.SessionLocal()
+        try:
+            begin_auth_lookup(db)
+            cfg = mail.get_config(db) or SmtpConfig(id="default")
+            db.add(cfg)
+            cfg.enabled, cfg.host, cfg.port, cfg.security, cfg.username = True, args.host, args.port, args.security, args.username
+            cfg.from_email, cfg.from_name, cfg.password_enc = args.from_email, args.from_name, mail.encrypt(pw)
+            cfg.updated_by, cfg.updated_at = f"operator:{args.operator}", datetime.now(timezone.utc)
+            cfg.last_test_at = cfg.last_test_ok = cfg.last_test_detail = None
+            auth.audit(db, actor_type="operator", actor_id=args.operator, action="platform.email_config", decision="allowed", reason_code="enabled,password_changed,cli")
+            ok, detail = mail.test_connection(db, cfg)
+            db.commit()
+            print(f"smtp saved (password stored encrypted). connection test: {'ok' if ok else 'FAILED'} - {detail}")
+            return 0 if ok else 4
+        finally:
+            db.close()
     if args.cmd == "run-notification-jobs":
         import json
 

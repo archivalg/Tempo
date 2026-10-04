@@ -55,6 +55,14 @@ def _invite(db: Session, *, email: str | None, subject: str | None) -> TempoUser
     return user
 
 
+def _email_invite(db: Session, to: str | None, token: str | None, *, org: str | None, tenant_id: str | None, p: auth.ResolvedPrincipal, purpose: str = "invite") -> str | None:
+    """Best-effort: the link is still shown on screen. Returns what happened so the console can say so honestly."""
+    if not token:
+        return None
+    from app.core import email as mail
+    return mail.send_invitation(db, to, token, who="Tempo platform administration", org=org, purpose=purpose, tenant_id=tenant_id, created_by=p.user_id)
+
+
 class Identity(BaseModel):
     email: str | None = None
     subject: str | None = None
@@ -105,8 +113,9 @@ def create_tenant(body: TenantCreate, request: Request, p: auth.ResolvedPrincipa
     from app.db import begin_auth_lookup as _b
     _b(db)
     token = pl.create_invitation(db, admin, p.user_id) if admin.password_hash is None else None
+    emailed = _email_invite(db, admin.email or body.first_admin.email, token, org=body.name, tenant_id=body.tenant_id, p=p)
     return {"tenant_id": body.tenant_id, "first_admin_user_id": admin.user_id, "status": "active", "invite_token": token,
-            "invite_path": f"/invite?token={token}" if token else None}
+            "invite_path": f"/invite?token={token}" if token else None, "emailed": emailed}
 
 
 class TenantAdminInvite(BaseModel):
@@ -140,7 +149,8 @@ def invite_tenant_admin(tenant_id: str, body: TenantAdminInvite, request: Reques
     begin_auth_lookup(db)
     auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, tenant_id=tenant_id, action="platform.tenant_admin_invite", decision="allowed", reason_code="reissued" if existing else "created", session_ref=admin.user_id, correlation_id=_cid(request))
     token = pl.create_invitation(db, admin, p.user_id, purpose="reset" if admin.password_hash else "invite")
-    return {"tenant_id": tenant_id, "user_id": admin.user_id, "invite_token": token, "invite_path": f"/invite?token={token}", "sites": sites}
+    emailed = _email_invite(db, body.email, token, org=t.name, tenant_id=tenant_id, p=p, purpose="reset" if admin.password_hash else "invite")
+    return {"tenant_id": tenant_id, "user_id": admin.user_id, "invite_token": token, "invite_path": f"/invite?token={token}", "sites": sites, "emailed": emailed}
 
 
 @router.post("/tenants/{tenant_id}/status")
@@ -190,7 +200,8 @@ def add_platform_admin(body: Identity, request: Request, p: auth.ResolvedPrincip
                session_ref=user.user_id, correlation_id=_cid(request))
     from app.core import password_login as pl
     token = pl.create_invitation(db, user, p.user_id) if user.password_hash is None else None
-    return {"user_id": user.user_id, "invite_token": token, "invite_path": f"/invite?token={token}" if token else None}
+    emailed = _email_invite(db, user.email or body.email, token, org=None, tenant_id=None, p=p) if token else None
+    return {"user_id": user.user_id, "invite_token": token, "invite_path": f"/invite?token={token}" if token else None, "emailed": emailed}
 
 
 class SupportGrantCreate(BaseModel):
@@ -257,3 +268,95 @@ def global_audit(limit: int = 100, p: auth.ResolvedPrincipal = Depends(get_platf
     rows = db.scalars(select(SecurityAuditEvent).order_by(SecurityAuditEvent.created_at.desc()).limit(min(limit, 500))).all()
     return [{"event_id": r.event_id, "at": r.created_at.isoformat(), "actor_type": r.actor_type, "actor_id": r.actor_id,
              "tenant_id": r.tenant_id, "action": r.action, "decision": r.decision, "reason_code": r.reason_code} for r in rows]
+
+
+# ---- outgoing email (SMTP) ------------------------------------------------------------------------------------------------
+
+class SmtpIn(BaseModel):
+    enabled: bool = False
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=587, ge=1, le=65535)
+    security: str = "starttls"
+    username: str = Field(default="", max_length=255)
+    password: str | None = Field(default=None, max_length=500)   # write-only; blank/absent keeps the stored one
+    from_email: str = Field(default="", max_length=255)
+    from_name: str = Field(default="Tempo", max_length=120)
+
+
+@router.get("/email")
+def get_email_config(p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> dict:
+    from app.core import email as mail
+    return mail.public_view(mail.get_config(db))
+
+
+@router.put("/email")
+def put_email_config(body: SmtpIn, request: Request, p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> dict:
+    """Sets the platform's outgoing email account. The password is stored encrypted, is never returned, and a blank value keeps the existing one."""
+    auth.require_step_up(p)
+    from app.core import email as mail
+    from app.models.billing import SmtpConfig
+    if body.security not in mail.SECURITIES:
+        raise ScopeError("security must be starttls, ssl or none")
+    if body.enabled and not (body.host.strip() and body.from_email.strip()):
+        raise ScopeError("a host and a from address are needed to enable email")
+    if body.from_email and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", body.from_email.strip()):
+        raise ScopeError("the from address is not a valid email address")
+    cfg = mail.get_config(db)
+    if cfg is None:
+        cfg = SmtpConfig(id="default")
+        db.add(cfg)
+    changed = (cfg.host, cfg.port, cfg.username) != (body.host.strip(), body.port, body.username.strip())
+    cfg.enabled, cfg.host, cfg.port, cfg.security = body.enabled, body.host.strip(), body.port, body.security
+    cfg.username, cfg.from_email, cfg.from_name = body.username.strip(), body.from_email.strip(), body.from_name.strip() or "Tempo"
+    if body.password:
+        cfg.password_enc = mail.encrypt(body.password)
+        changed = True
+    cfg.updated_by, cfg.updated_at = p.user_id, datetime.now(timezone.utc)
+    if changed:
+        cfg.last_test_at = cfg.last_test_ok = cfg.last_test_detail = None   # an old result no longer describes this configuration
+    db.flush()
+    from app.db import begin_auth_lookup
+    begin_auth_lookup(db)
+    auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, action="platform.email_config", decision="allowed",
+               reason_code=("enabled" if body.enabled else "disabled") + (",password_changed" if body.password else ""), correlation_id=_cid(request))
+    return mail.public_view(cfg)
+
+
+@router.post("/email/test-connection")
+def test_email_connection(request: Request, p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> dict:
+    """Signs in to the mail server with the saved settings. Sends no message."""
+    auth.require_step_up(p)
+    from app.core import email as mail
+    cfg = mail.get_config(db)
+    if cfg is None or not cfg.host:
+        raise ScopeError("save a host first")
+    ok, detail = mail.test_connection(db, cfg)
+    from app.db import begin_auth_lookup
+    begin_auth_lookup(db)
+    auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, action="platform.email_test_connection", decision="allowed" if ok else "denied", correlation_id=_cid(request))
+    return {"ok": ok, "detail": detail}
+
+
+class SendTest(BaseModel):
+    to: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=200)
+
+
+@router.post("/email/send-test")
+def send_test_email(body: SendTest, request: Request, p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> dict:
+    """Sends one plain test message to an address the administrator types."""
+    auth.require_step_up(p)
+    from app.core import email as mail
+    ok = mail.send(db, body.to.strip(), "Tempo email test", "This is a test message from Tempo. Outgoing email is working.\n\nTempo", kind="test", created_by=p.user_id)
+    from app.db import begin_auth_lookup
+    begin_auth_lookup(db)
+    auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, action="platform.email_send_test", decision="allowed" if ok else "denied", correlation_id=_cid(request))
+    return {"sent": ok, "detail": "The mail server accepted the message." if ok else "The message was not sent; see the recent messages list for the reason."}
+
+
+@router.get("/email/messages")
+def email_messages(limit: int = 50, p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> list[dict]:
+    from app.db import begin_auth_lookup
+    from app.models.billing import EmailMessage
+    begin_auth_lookup(db)   # the log spans tenants; row security lets only this platform path read all of it
+    rows = db.scalars(select(EmailMessage).order_by(EmailMessage.created_at.desc()).limit(min(max(limit, 1), 200)))
+    return [{"id": m.id, "at": m.created_at, "to": m.to_address, "subject": m.subject, "kind": m.kind, "status": m.status, "error": m.error, "tenant_id": m.tenant_id} for m in rows]

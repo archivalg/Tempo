@@ -56,6 +56,7 @@ services:
       TEMPO_CONSOLE_CORS_ORIGINS: http://tempo.ensemblesolutions.com.au,https://tempo.ensemblesolutions.com.au
       # Mobile notifications. Off until deliberately configured: nothing is sent while the provider is "disabled".
       TEMPO_PUSH_PROVIDER: ${TEMPO_PUSH_PROVIDER:-disabled}      # disabled | expo (| mock for testing only)
+      TEMPO_PUBLIC_APP_URL: ${TEMPO_PUBLIC_APP_URL:-https://tempo.ensemblesolutions.com.au}   # base of links in emails; SMTP itself is set in the platform console
       TEMPO_EXPO_ACCESS_TOKEN: ${TEMPO_EXPO_ACCESS_TOKEN:-}
       TEMPO_SMS_PROVIDER: ${TEMPO_SMS_PROVIDER:-disabled}        # no real SMS provider exists yet
       TEMPO_JOBS_ENABLED: ${TEMPO_JOBS_ENABLED:-false}           # run the notification job loop in this process (single instance)

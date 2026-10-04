@@ -71,25 +71,25 @@ function UsersSection() {
   const [email, setEmail] = useState('')
   const [roles, setRoles] = useState<string[]>(['planner'])
   const [siteIds, setSiteIds] = useState<string[]>([])
-  const [invite, setInvite] = useState<{ who: string; path: string } | null>(null)
+  const [invite, setInvite] = useState<{ who: string; path: string; emailed?: string | null } | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const toggle = (arr: string[], v: string) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v])
   async function create() {
     setErr(null)
     try {
       const u = await inviteUser({ email, roles, site_ids: siteIds.length ? siteIds : sites.map((s) => s.site_id).slice(0, 1), customer_ids: [] })
-      setInvite(u.invite_path ? { who: u.email, path: `${window.location.origin}${u.invite_path}` } : null); setEmail(''); setNonce((n) => n + 1)
+      setInvite(u.invite_path ? { who: u.email, path: `${window.location.origin}${u.invite_path}`, emailed: u.emailed } : null); setEmail(''); setNonce((n) => n + 1)
     } catch (e) { setErr(e instanceof Error ? e.message : 'Could not invite') }
   }
   async function act(id: string, a: Parameters<typeof userAction>[1]) {
     setErr(null)
-    try { const u = await userAction(id, a); if (u.invite_path) setInvite({ who: u.email, path: `${window.location.origin}${u.invite_path}` }); setNonce((n) => n + 1) } catch (e) { setErr(e instanceof Error ? e.message : 'Failed') }
+    try { const u = await userAction(id, a); if (u.invite_path) setInvite({ who: u.email, path: `${window.location.origin}${u.invite_path}`, emailed: u.emailed }); setNonce((n) => n + 1) } catch (e) { setErr(e instanceof Error ? e.message : 'Failed') }
   }
   return (
     <section className="tp-card" style={{ marginTop: 16 }}>
       <header><h2>Users</h2><span className="tp-muted" style={{ fontSize: 12 }}>invite-only · you can only grant sites and roles inside your own access</span></header>
       {err && <div className="tp-body"><Banner tone="bad" title="Error">{err}</Banner></div>}
-      {invite && <div className="tp-body"><Banner tone="warn" title={`One-time link for ${invite.who} — shown once`}><code style={{ wordBreak: 'break-all' }}>{invite.path}</code><div>Send it privately. It expires and works once; it lets them choose their own password.</div></Banner></div>}
+      {invite && <div className="tp-body"><Banner tone="warn" title={`One-time link for ${invite.who} — shown once`}><code style={{ wordBreak: 'break-all' }}>{invite.path}</code><div>{invite.emailed === 'sent' ? `We emailed this link to ${invite.who}. ` : invite.emailed === 'failed' ? 'We tried to email it but the mail server did not accept it, so send it yourself. ' : 'Email is not set up for this platform, so send it yourself. '}It expires and works once; it lets them choose their own password.</div></Banner></div>}
       <form className="tp-body tp-stack" onSubmit={(e) => { e.preventDefault(); void create() }}>
         <div className="tp-row">
           <label className="tp-field" style={{ minWidth: 260 }}>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" /></label>

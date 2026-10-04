@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
-  addPlatformAdmin, approvePlan, createGrant, createTenant, endGrant, getDiagnostics, inviteTenantAdmin, listGrants, openSupport, listPlans, newPlanVersion, platformAudit, setSubscription, setTenantStatus, subscriptionHistory, tenantOverview,
-  type AuditRow, type Diagnostics, type PlanDef, type SubscriptionInput, type SupportGrant, type TenantRow,
+  addPlatformAdmin, approvePlan, createGrant, createTenant, emailMessages, emailedNote, endGrant, getEmailConfig, putEmailConfig, sendTestEmail, testEmailConnection, getDiagnostics, inviteTenantAdmin, listGrants, openSupport, listPlans, newPlanVersion, platformAudit, setSubscription, setTenantStatus, subscriptionHistory, tenantOverview,
+  type AuditRow, type Diagnostics, type SmtpInput, type PlanDef, type SubscriptionInput, type SupportGrant, type TenantRow,
 } from '../api/platform'
 import { ApiError } from '../api/client'
 import { Banner, Drawer, Empty, PageHead, Skeleton, Status } from '../components/ui'
@@ -96,13 +96,13 @@ function NewTenant({ plans, onClose, onDone }: { plans: PlanDef[]; onClose: () =
     setBusy(true); setErr(null)
     try {
       const r = await createTenant({ tenant_id: t.id.trim(), name: t.name.trim(), first_admin: { email: t.email.trim() }, initial_site_ids: t.sites.split(',').map((x) => x.trim()).filter(Boolean), ...(s ? { subscription: s } : {}) })
-      setInvite(r.invite_path ? `${window.location.origin}${r.invite_path}` : 'The administrator already has a password; no invitation was needed.'); onDone()
+      setInvite(r.invite_path ? `${window.location.origin}${r.invite_path} — ${emailedNote(r.emailed, t.email.trim())}` : 'The administrator already has a password; no invitation was needed.'); onDone()
     } catch (e) { setErr(msg(e)) } finally { setBusy(false) }
   }
   return (
     <Drawer title="Create tenant" onClose={onClose}>
       {invite ? (
-        <div className="tp-stack"><Banner tone="info" title="Tenant created">Send this one-time link to the first administrator. It is shown once and expires; Tempo does not send email yet.</Banner><code style={{ wordBreak: 'break-all' }}>{invite}</code></div>
+        <div className="tp-stack"><Banner tone="info" title="Tenant created">Their one-time link is shown once and expires. If it was not emailed (see the note below), send it to the first administrator yourself.</Banner><code style={{ wordBreak: 'break-all' }}>{invite}</code></div>
       ) : (
         <div className="tp-stack">
           {err && <Banner tone="bad" title="Problem">{err}</Banner>}
@@ -121,13 +121,14 @@ function NewTenant({ plans, onClose, onDone }: { plans: PlanDef[]; onClose: () =
 function InviteAdmin({ tenantId }: { tenantId: string }) {
   const [email, setEmail] = useState('')
   const [link, setLink] = useState<string | null>(null)
+  const [note, setNote] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   return (
-    <form className="tp-stack" onSubmit={(e) => { e.preventDefault(); setBusy(true); setErr(null); setLink(null); inviteTenantAdmin(tenantId, email.trim()).then((r) => { setLink(`${window.location.origin}${r.invite_path}`); setEmail('') }).catch((x) => setErr(msg(x))).finally(() => setBusy(false)) }}>
+    <form className="tp-stack" onSubmit={(e) => { e.preventDefault(); setBusy(true); setErr(null); setLink(null); setNote(''); inviteTenantAdmin(tenantId, email.trim()).then((r) => { setLink(`${window.location.origin}${r.invite_path}`); setNote(emailedNote(r.emailed, email.trim())); setEmail('') }).catch((x) => setErr(msg(x))).finally(() => setBusy(false)) }}>
       <h3 style={{ margin: '8px 0 0', fontSize: 14 }}>Invite an administrator for this organisation</h3>
       {err && <Banner tone="bad" title="Problem">{err}</Banner>}
-      {link && <Banner tone="info" title="One-time link (shown once)">Send it to them privately; Tempo does not email it. <code style={{ wordBreak: 'break-all' }}>{link}</code></Banner>}
+      {link && <Banner tone="info" title="One-time link (shown once)">{note || 'Send it to them privately.'} <code style={{ wordBreak: 'break-all' }}>{link}</code></Banner>}
       <label className="tp-field">Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
       <button className="tp-btn" disabled={busy || !email}>Invite administrator</button>
       <p className="tp-muted" style={{ fontSize: 12, margin: 0 }}>They get the same sites as the organisation's existing administrators and set up two-step verification at first sign-in. Further users are invited by that organisation's administrators under Administration → Users.</p>
@@ -282,12 +283,62 @@ function Admins() {
   const [res, setRes] = useState<{ tone: 'info' | 'bad'; text: string } | null>(null)
   return (
     <>
-      <PageHead title="Platform admins" sub="Adding an admin needs your fresh two-step verification. You get a one-time invitation link to pass to them." />
+      <PageHead title="Platform admins" sub="Adding an admin needs your fresh two-step verification. They are emailed a one-time invitation link (when Email is set up) and you also see it once here." />
       {res && <Banner tone={res.tone} title={res.tone === 'info' ? 'Done' : 'Problem'}>{res.text}</Banner>}
       <section className="tp-card"><div className="tp-body tp-stack" style={{ maxWidth: 420 }}>
         <label className="tp-field">Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
-        <button className="tp-btn primary" disabled={!email} onClick={() => { setRes(null); addPlatformAdmin(email.trim()).then((r) => setRes({ tone: 'info', text: r.invite_path ? `Send ${email} this one-time link (shown once; Tempo does not email invitations yet): ${window.location.origin}${r.invite_path}` : `${email} already has a password and can sign in.` })).catch((e) => setRes({ tone: 'bad', text: msg(e) })) }}>Add platform admin</button>
+        <button className="tp-btn primary" disabled={!email} onClick={() => { setRes(null); addPlatformAdmin(email.trim()).then((r) => setRes({ tone: 'info', text: r.invite_path ? `Send ${email} this one-time link (shown once). ${emailedNote(r.emailed, email.trim())} ${window.location.origin}${r.invite_path}` : `${email} already has a password and can sign in.` })).catch((e) => setRes({ tone: 'bad', text: msg(e) })) }}>Add platform admin</button>
       </div></section>
+    </>
+  )
+}
+
+function EmailSettings() {
+  const { data, err, reload } = useLoad(getEmailConfig, [])
+  const log = useLoad(emailMessages, [])
+  const [f, setF] = useState<SmtpInput | null>(null)
+  const [res, setRes] = useState<{ tone: 'info' | 'bad'; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [to, setTo] = useState('')
+  useEffect(() => { if (data) setF({ enabled: data.enabled, host: data.host, port: data.port, security: data.security, username: data.username, password: '', from_email: data.from_email, from_name: data.from_name }) }, [data])
+  async function run(fn: () => Promise<string>, tone: 'info' | 'bad' = 'info') { setBusy(true); setRes(null); try { setRes({ tone, text: await fn() }); reload(); log.reload() } catch (e) { setRes({ tone: 'bad', text: msg(e) }) } finally { setBusy(false) } }
+  if (err) return <Banner tone="bad" title="Could not load">{err}</Banner>
+  if (!data || !f) return <Skeleton />
+  return (
+    <>
+      <PageHead title="Email" sub="The account Tempo sends invitation and password-reset emails from. It is one account for the whole platform; changes need your fresh two-step verification." />
+      {res && <Banner tone={res.tone} title={res.tone === 'info' ? 'Done' : 'Problem'}>{res.text}</Banner>}
+      {!data.configured && <Banner tone="warn" title="Email is not set up">Invitations still work: the one-time link is shown on screen for you to send yourself.</Banner>}
+      <section className="tp-card"><div className="tp-body tp-stack" style={{ maxWidth: 520 }}>
+        <label className="tp-check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Send email from Tempo</label>
+        <label className="tp-field">Mail server (SMTP host)<input value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} placeholder="smtp.example.com" /></label>
+        <div className="tp-row" style={{ gap: 12 }}>
+          <label className="tp-field">Port<input type="number" min={1} max={65535} value={f.port} onChange={(e) => setF({ ...f, port: Number(e.target.value) })} /></label>
+          <label className="tp-field">Security<select value={f.security} onChange={(e) => setF({ ...f, security: e.target.value })}><option value="starttls">STARTTLS (usually port 587)</option><option value="ssl">SSL/TLS (usually port 465)</option><option value="none">None (not recommended)</option></select></label>
+        </div>
+        <label className="tp-field">Username<input value={f.username} autoComplete="off" onChange={(e) => setF({ ...f, username: e.target.value })} /></label>
+        <label className="tp-field">Password<input type="password" autoComplete="new-password" value={f.password ?? ''} onChange={(e) => setF({ ...f, password: e.target.value })} placeholder={data.has_password ? 'Saved. Leave blank to keep it.' : 'Not set'} /></label>
+        <label className="tp-field">From address<input type="email" value={f.from_email} onChange={(e) => setF({ ...f, from_email: e.target.value })} /></label>
+        <label className="tp-field">From name<input value={f.from_name} onChange={(e) => setF({ ...f, from_name: e.target.value })} /></label>
+        <p className="tp-muted" style={{ fontSize: 12, margin: 0 }}>The password is stored encrypted and is never shown again. {data.updated_by ? `Last changed by ${data.updated_by.replace(/^operator:/, 'operator ')} ${when(data.updated_at)}.` : ''}</p>
+        <div className="tp-row" style={{ gap: 8 }}>
+          <button className="tp-btn primary" disabled={busy} onClick={() => run(async () => { await putEmailConfig({ ...f, password: f.password || undefined }); return 'Saved.' })}>Save</button>
+          <button className="tp-btn" disabled={busy || !data.host} onClick={() => run(async () => { const r = await testEmailConnection(); return r.detail }, 'info')}>Test connection</button>
+        </div>
+        {data.last_test_at && <Banner tone={data.last_test_ok ? 'info' : 'bad'} title={data.last_test_ok ? 'Last connection test passed' : 'Last connection test failed'}>{data.last_test_detail} ({when(data.last_test_at)})</Banner>}
+      </div></section>
+      <section className="tp-card" style={{ marginTop: 16 }}><div className="tp-body tp-stack" style={{ maxWidth: 520 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Send a test email</h3>
+        <p className="tp-muted" style={{ fontSize: 12, margin: 0 }}>Sends one short message to the address you type. Test connection above sends nothing.</p>
+        <label className="tp-field">To<input type="email" value={to} onChange={(e) => setTo(e.target.value)} /></label>
+        <button className="tp-btn" disabled={busy || !to || !data.configured || !data.enabled} onClick={() => run(async () => (await sendTestEmail(to.trim())).detail)}>Send test email</button>
+      </div></section>
+      <h3 style={{ margin: '24px 0 8px', fontSize: 14 }}>Recent messages</h3>
+      <p className="tp-muted" style={{ fontSize: 12, margin: '0 0 8px' }}>Who was emailed and what happened. Message contents are not kept (invitation links are one-time secrets).</p>
+      {!log.data ? <Skeleton /> : log.data.length === 0 ? <Empty title="No messages yet" /> : (
+        <table className="tp-table"><thead><tr><th>When</th><th>To</th><th>Kind</th><th>Result</th></tr></thead>
+          <tbody>{log.data.map((m) => <tr key={m.id}><td>{when(m.at)}</td><td>{m.to}</td><td>{m.kind.replace('_', ' ')}</td><td><Status tone={m.status === 'sent' ? 'ok' : 'bad'}>{m.status === 'not_configured' ? 'not sent (email off)' : m.status}</Status>{m.error ? ` — ${m.error}` : ''}</td></tr>)}</tbody></table>
+      )}
     </>
   )
 }
@@ -305,11 +356,11 @@ export default function PlatformConsole() {
         <div className="tp-user"><div><div>platform operator</div><small>{access.email ?? access.username}{access.mfa_verified ? ' · MFA' : ' · MFA required'}</small></div><button className="tp-iconbtn" onClick={() => void signOut()}>Sign out</button></div></header>
       <div className="tp-shell" style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 16, padding: 16 }}>
         <nav aria-label="Platform" className="tp-stack">
-          {[['/platform', 'Tenants', true], ['/platform/plans', 'Plans'], ['/platform/support', 'Support access'], ['/platform/audit', 'Audit'], ['/platform/admins', 'Platform admins'], ['/platform/account', 'My account & MFA']].map(([to, l, end]) => <NavLink key={to as string} to={to as string} end={!!end} className="tp-btn" style={{ textDecoration: 'none' }}>{l}</NavLink>)}
+          {[['/platform', 'Tenants', true], ['/platform/plans', 'Plans'], ['/platform/support', 'Support access'], ['/platform/audit', 'Audit'], ['/platform/admins', 'Platform admins'], ['/platform/email', 'Email'], ['/platform/account', 'My account & MFA']].map(([to, l, end]) => <NavLink key={to as string} to={to as string} end={!!end} className="tp-btn" style={{ textDecoration: 'none' }}>{l}</NavLink>)}
         </nav>
         <main id="main" tabIndex={-1}>
           {!access.mfa_verified && <Banner tone="warn" title="Two-step verification required">Platform actions need it. <NavLink to="/platform/account">Set it up or verify now</NavLink>.</Banner>}
-          <Routes><Route index element={<Tenants />} /><Route path="plans" element={<Plans />} /><Route path="support" element={<Support />} /><Route path="support/:grantId" element={<SupportSession />} /><Route path="audit" element={<Audit />} /><Route path="admins" element={<Admins />} /><Route path="account" element={<AccountPage />} /></Routes>
+          <Routes><Route index element={<Tenants />} /><Route path="plans" element={<Plans />} /><Route path="support" element={<Support />} /><Route path="support/:grantId" element={<SupportSession />} /><Route path="audit" element={<Audit />} /><Route path="admins" element={<Admins />} /><Route path="email" element={<EmailSettings />} /><Route path="account" element={<AccountPage />} /></Routes>
         </main>
       </div>
     </div>

@@ -83,7 +83,11 @@ def invite_employee(worker_id: str, body: AppInvite, ctx: RequestContext = Depen
         db.add(WorkerUserLink(tenant_id=ctx.tenant_id, user_id=u.user_id, worker_id=worker_id, linked_by=ctx.user_id))
     db.flush()
     auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="employee.app_invite", decision="allowed", session_ref=worker_id, reason_code="reissued" if link else "created", correlation_id=ctx.correlation_id)
-    return {"worker_id": worker_id, "user_id": u.user_id, "invite_token": token, "invite_path": f"/invite?token={token}", "app_link": f"tempo://invite?token={token}",
+    from app.core import email as mail
+    from app.models.identity import Tenant
+    t = db.get(Tenant, ctx.tenant_id)
+    emailed = mail.send_invitation(db, u.email, token, who="Your employer", org=t.name if t else None, purpose="reset" if u.password_hash else "invite", tenant_id=ctx.tenant_id, created_by=ctx.user_id) if u.email else None
+    return {"worker_id": worker_id, "user_id": u.user_id, "emailed": emailed, "invite_token": token, "invite_path": f"/invite?token={token}", "app_link": f"tempo://invite?token={token}",
             "note": "Shown once. Give it to the employee privately. It works once and expires; they set their own username and password in the app."}
 
 

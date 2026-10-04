@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     invite_ttl_hours: int = 72
     # Mobile: push provider (disabled | mock | expo) and optional SMS provider (disabled | mock). 'disabled' sends nothing and says so.
     push_provider: str = "disabled"
+    # Where links in emails point. SMTP itself is configured by a platform admin in the console (stored encrypted), not here.
+    public_app_url: str = "https://tempo.ensemblesolutions.com.au"
     expo_access_token: str = ""      # optional Expo enhanced-security token; never shipped in the app
     sms_provider: str = "disabled"
     jobs_enabled: bool = False       # run the notification job loop inside the API process (single instance, advisory-locked)

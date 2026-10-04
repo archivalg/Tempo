@@ -89,3 +89,38 @@ class TenantSetup(Base):
     skipped: Mapped[list] = mapped_column(JSON, default=list)
     updated_by: Mapped[str] = mapped_column(String, default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class SmtpConfig(Base):
+    """The platform's outgoing email account (one row). Managed by platform admins; the password is stored encrypted and is never returned by any API."""
+
+    __tablename__ = "smtp_config"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default="default")
+    enabled: Mapped[bool] = mapped_column(default=False)
+    host: Mapped[str] = mapped_column(String, default="")
+    port: Mapped[int] = mapped_column(Integer, default=587)
+    security: Mapped[str] = mapped_column(String, default="starttls")   # starttls | ssl | none
+    username: Mapped[str] = mapped_column(String, default="")
+    password_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    from_email: Mapped[str] = mapped_column(String, default="")
+    from_name: Mapped[str] = mapped_column(String, default="Tempo")
+    updated_by: Mapped[str] = mapped_column(String, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_test_ok: Mapped[bool | None] = mapped_column(nullable=True)
+    last_test_detail: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class EmailMessage(Base):
+    """What was sent, to whom and what happened. The BODY is never stored (invitation emails carry one-time links)."""
+
+    __tablename__ = "email_message"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_id)
+    tenant_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    to_address: Mapped[str] = mapped_column(String)
+    subject: Mapped[str] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String)                            # invitation | password_reset | test
+    status: Mapped[str] = mapped_column(String)                          # sent | failed | not_configured
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

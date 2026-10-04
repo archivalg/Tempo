@@ -60,6 +60,12 @@ class Grants(BaseModel):
     customer_ids: list[str] = []
 
 
+def _tenant_name(db, tenant_id: str) -> str | None:
+    from app.models.identity import Tenant
+    t = db.get(Tenant, tenant_id)
+    return t.name if t else None
+
+
 def _view(db: Session, ctx: RequestContext, u: TempoUser, m: TenantMembership) -> dict:
     roles = list(db.scalars(select(UserRoleAssignment.role).where(UserRoleAssignment.user_id == u.user_id, UserRoleAssignment.tenant_id == ctx.tenant_id)))
     sites = list(db.scalars(select(UserSiteGrant.site_id).where(UserSiteGrant.user_id == u.user_id, UserSiteGrant.tenant_id == ctx.tenant_id)))
@@ -119,7 +125,9 @@ def invite_user(body: NewUser, ctx: RequestContext = Depends(get_request_context
     _apply_grants(db, ctx, u.user_id, body.roles, body.site_ids, body.customer_ids)
     auth.audit(db, actor_type="user", actor_id=ctx.user_id, tenant_id=ctx.tenant_id, action="user.invite", decision="allowed", session_ref=u.user_id,
                reason_code=",".join(sorted(body.roles)), correlation_id=ctx.correlation_id)
-    return {**_view(db, ctx, u, db.get(TenantMembership, (u.user_id, ctx.tenant_id))), "invite_token": token,
+    from app.core import email as mail
+    emailed = mail.send_invitation(db, email, token, who="An administrator", org=_tenant_name(db, ctx.tenant_id), tenant_id=ctx.tenant_id, created_by=ctx.user_id) if token else None
+    return {**_view(db, ctx, u, db.get(TenantMembership, (u.user_id, ctx.tenant_id))), "invite_token": token, "emailed": emailed,
             "invite_path": f"/invite?token={token}" if token else None,
             "note": "Shown once. Send it to the person over a private channel; it expires and works once." if token else "This person already has an account; the new access applies at their next sign-in."}
 
@@ -157,6 +165,8 @@ def _lifecycle(status: str | None, action: str):
             with auth_phase(db, ctx.tenant_id):
                 out["invite_token"] = pl.create_invitation(db, u, ctx.user_id, purpose="reset")
                 out["invite_path"] = f"/invite?token={out['invite_token']}"
+                from app.core import email as mail
+                out["emailed"] = mail.send_invitation(db, u.email, out["invite_token"], who="An administrator", org=_tenant_name(db, ctx.tenant_id), purpose="reset", tenant_id=ctx.tenant_id, created_by=ctx.user_id)
                 auth.revoke_user_everywhere(db, user_id, reason=action, correlation_id=ctx.correlation_id)
         elif action == "user.reset_mfa":
             with auth_phase(db, ctx.tenant_id):
