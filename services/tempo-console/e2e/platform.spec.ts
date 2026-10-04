@@ -36,6 +36,12 @@ test('a platform operator creates a manual tenant, changes its plan, suspends it
   await expect(page.getByRole('dialog')).toBeHidden()
   await expect(row).toContainText('band 500')
 
+  await row.getByRole('button', { name: 'Manage' }).click()
+  await page.getByLabel('Email').fill(`second.${id}@example.test`)
+  await page.getByRole('button', { name: 'Invite administrator' }).click()
+  await expect(page.getByText('One-time link (shown once)')).toBeVisible()
+  await expect(page.getByRole('dialog')).toContainText('/invite?token=')
+  await page.keyboard.press('Escape')
   page.once('dialog', (d) => void d.accept())
   await row.getByRole('button', { name: 'Manage' }).click()
   await page.getByRole('button', { name: 'Suspend tenant' }).click()

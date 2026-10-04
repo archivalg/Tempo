@@ -57,7 +57,7 @@ test('invite an employee, offer them a shift, they accept, the manager confirms;
   await expect(page.getByRole('row').filter({ hasText: who }).filter({ hasText: 'No answer yet' }).first()).toBeVisible()
 
   // the employee sees and accepts it
-  const offers = (await (await phone.get(`${API}/me/offers`, { headers: auth })).json()).offers
+  const offers = (await (await phone.get(`${API}/me/offers`, { headers: auth })).json()).offers.filter((o: { status_for_me: string }) => o.status_for_me === 'open')   // earlier runs may have left offers for the same demo worker
   expect(offers).toHaveLength(1)
   expect(offers[0].instructions).toBe('Report to dock 3')
   const acc = await phone.post(`${API}/me/offers/${offers[0].id}/respond`, { headers: auth, data: { action: 'accept' } })
@@ -72,7 +72,7 @@ test('invite an employee, offer them a shift, they accept, the manager confirms;
   await page.getByRole('button', { name: 'All' }).click()
   await expect(page.getByText('Confirmed — on the roster').first()).toBeVisible()
   const mine = (await (await phone.get(`${API}/me/shifts`, { headers: auth })).json()).shifts.filter((s: { instructions: string }) => s.instructions === 'Report to dock 3')
-  expect(mine).toHaveLength(1)
+  expect(mine.length).toBeGreaterThanOrEqual(1)
 
   // changing it after confirmation makes the employee reconfirm
   await page.getByRole('row').filter({ hasText: who }).filter({ hasText: 'Confirmed' }).first().getByRole('button', { name: 'Manage' }).click()
@@ -107,7 +107,7 @@ test('invite an employee, offer them a shift, they accept, the manager confirms;
   await phone.dispose()
 })
 
-test('an employee account sees "Use the Tempo app" on the website and cannot reach manager data', async ({ page, playwright }) => {
+test('an employee account cannot reach manager data', async ({ page, playwright }) => {
   await signIn(page, 'admin')
   await page.goto('/attendance?view=badges')
   const row = page.locator('tbody tr').filter({ hasText: 'Not invited' }).filter({ hasText: 'Active' }).first()
@@ -127,4 +127,42 @@ test('an employee account sees "Use the Tempo app" on the website and cannot rea
   }
   await page.locator('tbody tr').filter({ hasText: who }).getByRole('button', { name: 'Remove' }).first().click().catch(() => undefined)
   await phone.dispose()
+})
+
+test('a team member signs in on the website and sees their own page (My shifts, offers, leave, clockings, notifications)', async ({ page, playwright }) => {
+  await signIn(page, 'admin')
+  await page.goto('/attendance?view=badges')
+  const row = page.locator('tbody tr').filter({ hasText: 'Not invited' }).filter({ hasText: 'Active' }).first()
+  const who = (await row.locator('td').first().innerText()).trim()
+  await row.getByRole('button', { name: 'Invite' }).click()
+  const token = (await page.getByLabel('Link to open on their phone').inputValue()).split('token=')[1]
+  await page.keyboard.press('Escape')
+  const api = await playwright.request.newContext()
+  const username = `e2e_${Date.now().toString(36)}w`
+  const pw = 'Correct-Horse-Battery-9!'
+  expect((await api.post(`${API}/auth/accept-invite`, { data: { token, username, password: pw } })).ok()).toBeTruthy()
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Sign out' }).click()
+  const login = await page.request.post(`${API}/auth/login`, { data: { username, password: pw } })
+  expect(login.ok()).toBeTruthy()
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/my$/)                                                   // a team member is sent to their own page, not the manager screens
+  await expect(page.getByRole('heading', { name: 'My shifts' })).toBeVisible()
+  await expect(page.getByText('Tempo on the web for team members')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Roster Planner' })).toHaveCount(0)
+  await page.getByRole('link', { name: 'Offers' }).click()
+  await expect(page.getByRole('heading', { name: 'Shift offers' })).toBeVisible()
+  await page.getByRole('link', { name: 'Leave & availability' }).click()
+  await page.getByLabel('First day').fill('2027-03-01')
+  await page.getByRole('button', { name: 'Send request' }).click()
+  await expect(page.getByText('Waiting for your manager').first()).toBeVisible()
+  await page.getByRole('link', { name: 'Clockings' }).click()
+  await expect(page.getByRole('heading', { name: 'My clockings' })).toBeVisible()
+  await page.getByRole('link', { name: 'Notifications' }).click()
+  await expect(page.getByLabel('Send push notifications to my phone')).toBeChecked()
+  await signIn(page, 'admin')
+  await page.goto('/attendance?view=badges')
+  page.once('dialog', (d) => void d.accept())
+  await page.locator('tbody tr').filter({ hasText: who }).getByRole('button', { name: 'Remove' }).first().click()
+  await api.dispose()
 })

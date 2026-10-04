@@ -35,3 +35,4 @@ export interface Diagnostics {
 }
 export const openSupport = (grant: string) => apiRequest<Diagnostics['session']>(`/platform/support-grants/${grant}/open`, { method: 'POST' })
 export const getDiagnostics = (grant: string) => apiRequest<Diagnostics>(`/platform/support/${grant}/diagnostics`)
+export const inviteTenantAdmin = (tenant: string, email: string) => apiRequest<{ invite_path: string; sites: string[] }>(`/platform/tenants/${tenant}/admins`, { method: 'POST', body: { email } })

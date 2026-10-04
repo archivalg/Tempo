@@ -179,3 +179,22 @@ def test_console_cookie_session_reaches_platform_routes_only_with_csrf_and_a_pla
     # a tenant user's cookie session is not a platform session
     client.post("/v1/auth/dev-login", json={"subject": "idp|plain", "email": "plain@example.test", "mfa": True})
     assert client.get("/v1/platform/plans").status_code in (401, 403)
+
+
+def test_a_platform_admin_can_invite_another_administrator_into_a_tenant(client):
+    _bootstrap(subject="idp|admin", email=None)
+    h = _admin_headers(client)
+    make_tenant(client, h)
+    r = client.post("/v1/platform/tenants/acme/admins", json={"email": "second.admin@example.test"}, headers=h)
+    assert r.status_code == 201, r.text
+    assert r.json()["sites"] == ["s1"] and r.json()["invite_token"]
+    with client.session_local() as s:
+        from app.models.identity import TempoUser, UserRoleAssignment
+        u = s.scalar(select(TempoUser).where(TempoUser.email == "second.admin@example.test"))
+        assert [x.role for x in s.scalars(select(UserRoleAssignment).where(UserRoleAssignment.user_id == u.user_id))] == ["tenant_admin"]
+    again = client.post("/v1/platform/tenants/acme/admins", json={"email": "second.admin@example.test"}, headers=h)          # a repeat re-issues the link; no duplicate role
+    assert again.status_code == 201 and again.json()["invite_token"] != r.json()["invite_token"]
+    assert client.post("/v1/platform/tenants/nope/admins", json={"email": "x@example.test"}, headers=h).status_code == 404
+    assert client.post("/v1/platform/tenants/acme/admins", json={"email": "not-an-email"}, headers=h).status_code == 422
+    me = context_header(tenant_id="acme", site_ids=["s1"], roles=["tenant_admin"], user_id="usr_acme")
+    assert client.post("/v1/platform/tenants/acme/admins", json={"email": "z@example.test"}, headers=me).status_code in (401, 403)   # a tenant admin cannot use platform routes

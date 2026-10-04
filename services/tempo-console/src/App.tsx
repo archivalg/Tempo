@@ -20,6 +20,7 @@ import { NewRunPage } from './pages/NewRun'
 import { OnboardingPage } from './pages/Onboarding'
 import HelpLibrary from './pages/HelpLibrary'
 import OffersPage from './pages/Offers'
+import MyTempo from './pages/MyTempo'
 import OverviewPage from './pages/Overview'
 import RequestsPage from './pages/Requests'
 import SetupWizard from './pages/SetupWizard'
@@ -37,6 +38,8 @@ function App() {
           {/* Kiosk is a device surface: no session, no navigation. */}
           <Route path="/kiosk" element={<KioskPage />} />
           <Route path="/invite" element={<InvitePage />} />
+          {/* Team members: their own roster, offers, leave and clockings on the web. A separate surface from the manager shell. */}
+          <Route path="/my/*" element={<MyTempo />} />
           {/* Platform operators have their own surface: a separate shell, banner and navigation, never the customer shell. */}
           <Route path="/platform/*" element={<PlatformConsole />} />
           <Route element={<AppShell />}>

@@ -45,7 +45,7 @@ export function AppShell() {
   if (status === 'loading') return <div className="tp-app" style={{ padding: 32 }}><Skeleton h={28} w={240} /></div>
   if (status === 'error') return <div className="tp-app" style={{ padding: 32 }}><Banner tone="bad" title="Cannot reach the Tempo API">{error} <button className="tp-btn" onClick={() => void reload()}>Retry</button></Banner></div>
   if (status === 'anonymous' || !access) return <LoginPage />
-  if (!can('labour.read') && can('labour.self')) return <div className="tp-app" style={{ padding: 32, maxWidth: 520 }}><h1>Use the Tempo app</h1><p>Your account is for the Tempo employee app on your phone. Managers use this website.</p><button className="tp-btn" onClick={() => void signOut()}>Sign out</button></div>
+  if (!can('labour.read') && can('labour.self')) return <Navigate to="/my" replace />   // team members have their own page
   if (access.platform_admin && !access.tenant_id) return <Navigate to="/platform" replace />   // platform operators have no organisation to show
 
   const setSite = (id: string) => { const p = new URLSearchParams(params); p.set('site', id); setParams(p, { replace: true }) }

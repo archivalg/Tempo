@@ -109,6 +109,40 @@ def create_tenant(body: TenantCreate, request: Request, p: auth.ResolvedPrincipa
             "invite_path": f"/invite?token={token}" if token else None}
 
 
+class TenantAdminInvite(BaseModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=200)
+
+
+@router.post("/tenants/{tenant_id}/admins", status_code=201)
+def invite_tenant_admin(tenant_id: str, body: TenantAdminInvite, request: Request, p: auth.ResolvedPrincipal = Depends(get_platform_principal), db: Session = Depends(get_db)) -> dict:
+    """Invite another administrator into an existing organisation (or re-issue the link for one who has not set a password yet).
+    They receive the same sites the organisation's existing administrators have. The invitation link is shown once; Tempo does not email it."""
+    auth.require_step_up(p)
+    t = db.get(Tenant, tenant_id)
+    if t is None:
+        raise RunNotFound("tenant not found")
+    from app.core import password_login as pl
+    from app.db import begin_auth_lookup, bind_tenant
+    admin = _invite(db, email=body.email, subject=None)
+    bind_tenant(db, tenant_id)
+    existing = db.get(TenantMembership, (admin.user_id, tenant_id))
+    if existing is None:
+        db.add(TenantMembership(user_id=admin.user_id, tenant_id=tenant_id, is_default=False, invitation_source=f"platform:{p.user_id}"))
+    admins = list(db.scalars(select(UserRoleAssignment.user_id).where(UserRoleAssignment.tenant_id == tenant_id, UserRoleAssignment.role == "tenant_admin")))
+    sites = sorted(set(db.scalars(select(UserSiteGrant.site_id).where(UserSiteGrant.tenant_id == tenant_id, UserSiteGrant.user_id.in_(admins or [""])))))
+    if not db.scalar(select(UserRoleAssignment.id).where(UserRoleAssignment.user_id == admin.user_id, UserRoleAssignment.tenant_id == tenant_id, UserRoleAssignment.role == "tenant_admin")):
+        db.add(UserRoleAssignment(user_id=admin.user_id, tenant_id=tenant_id, role="tenant_admin"))
+    have = set(db.scalars(select(UserSiteGrant.site_id).where(UserSiteGrant.user_id == admin.user_id, UserSiteGrant.tenant_id == tenant_id)))
+    for sid in sites:
+        if sid not in have:
+            db.add(UserSiteGrant(user_id=admin.user_id, tenant_id=tenant_id, site_id=sid))
+    db.flush()
+    begin_auth_lookup(db)
+    auth.audit(db, actor_type="platform_admin", actor_id=p.user_id, tenant_id=tenant_id, action="platform.tenant_admin_invite", decision="allowed", reason_code="reissued" if existing else "created", session_ref=admin.user_id, correlation_id=_cid(request))
+    token = pl.create_invitation(db, admin, p.user_id, purpose="reset" if admin.password_hash else "invite")
+    return {"tenant_id": tenant_id, "user_id": admin.user_id, "invite_token": token, "invite_path": f"/invite?token={token}", "sites": sites}
+
+
 @router.post("/tenants/{tenant_id}/status")
 def set_tenant_status(tenant_id: str, status: str, request: Request, p: auth.ResolvedPrincipal = Depends(get_platform_principal),
                       db: Session = Depends(get_db)) -> dict:

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
-  addPlatformAdmin, approvePlan, createGrant, createTenant, endGrant, getDiagnostics, listGrants, openSupport, listPlans, newPlanVersion, platformAudit, setSubscription, setTenantStatus, subscriptionHistory, tenantOverview,
+  addPlatformAdmin, approvePlan, createGrant, createTenant, endGrant, getDiagnostics, inviteTenantAdmin, listGrants, openSupport, listPlans, newPlanVersion, platformAudit, setSubscription, setTenantStatus, subscriptionHistory, tenantOverview,
   type AuditRow, type Diagnostics, type PlanDef, type SubscriptionInput, type SupportGrant, type TenantRow,
 } from '../api/platform'
 import { ApiError } from '../api/client'
@@ -118,6 +118,23 @@ function NewTenant({ plans, onClose, onDone }: { plans: PlanDef[]; onClose: () =
   )
 }
 
+function InviteAdmin({ tenantId }: { tenantId: string }) {
+  const [email, setEmail] = useState('')
+  const [link, setLink] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  return (
+    <form className="tp-stack" onSubmit={(e) => { e.preventDefault(); setBusy(true); setErr(null); setLink(null); inviteTenantAdmin(tenantId, email.trim()).then((r) => { setLink(`${window.location.origin}${r.invite_path}`); setEmail('') }).catch((x) => setErr(msg(x))).finally(() => setBusy(false)) }}>
+      <h3 style={{ margin: '8px 0 0', fontSize: 14 }}>Invite an administrator for this organisation</h3>
+      {err && <Banner tone="bad" title="Problem">{err}</Banner>}
+      {link && <Banner tone="info" title="One-time link (shown once)">Send it to them privately; Tempo does not email it. <code style={{ wordBreak: 'break-all' }}>{link}</code></Banner>}
+      <label className="tp-field">Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
+      <button className="tp-btn" disabled={busy || !email}>Invite administrator</button>
+      <p className="tp-muted" style={{ fontSize: 12, margin: 0 }}>They get the same sites as the organisation's existing administrators and set up two-step verification at first sign-in. Further users are invited by that organisation's administrators under Administration → Users.</p>
+    </form>
+  )
+}
+
 function ManageTenant({ t, plans, onClose, onDone }: { t: TenantRow; plans: PlanDef[]; onClose: () => void; onDone: () => void }) {
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -135,6 +152,7 @@ function ManageTenant({ t, plans, onClose, onDone }: { t: TenantRow; plans: Plan
           : <><h3 style={{ margin: '8px 0 0', fontSize: 14 }}>{t.managed ? 'Change the plan or allowance' : 'Record a plan'}</h3>
             <SubscriptionForm plans={plans} busy={busy} label="Save" initial={{ plan_key: plans.find((p) => p.name === t.plan)?.plan_key ?? 'optimise', licensed_sites: t.licensed_sites ?? Math.max(1, t.sites_in_use), worker_band: t.worker_band ?? '250', manual_kind: t.manual_kind ?? 'pilot' }}
               onSubmit={(s) => void act(() => setSubscription(t.tenant_id, s))} /></>}
+        <InviteAdmin tenantId={t.tenant_id} />
         <details><summary>Commercial history</summary>
           {!hist ? <Skeleton h={50} /> : hist.length === 0 ? <p className="tp-muted">Nothing recorded.</p> : <ul style={{ paddingLeft: 18, fontSize: 13 }}>{hist.map((h, i) => <li key={i}>{when(h.at)} — {h.action.replace('_', ' ')}{h.reason ? ` — “${h.reason}”` : ''} <span className="tp-muted">({h.actor.slice(0, 8)})</span></li>)}</ul>}
         </details>
