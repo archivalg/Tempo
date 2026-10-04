@@ -179,6 +179,9 @@ def main(argv: list[str] | None = None) -> int:
     sm.add_argument("--from-name", default="Tempo")
     sm.add_argument("--password-stdin", action="store_true", required=True)
     sm.add_argument("--operator", required=True)
+    ip = sub.add_parser("email-platform-invite", help="re-issue a platform admin's one-time invitation and email it (needs SMTP to be set); the link is not printed")
+    ip.add_argument("--email", required=True)
+    ip.add_argument("--operator", required=True)
     sub.add_parser("run-notification-jobs", help="run one cycle of the notification job loop (reminders, pushes, retries, receipts)")
     sub.add_parser("demo-status", help="show the demo seed manifest")
     args = ap.parse_args(argv)
@@ -211,6 +214,25 @@ def main(argv: list[str] | None = None) -> int:
             db.commit()
             print(f"smtp saved (password stored encrypted). connection test: {'ok' if ok else 'FAILED'} - {detail}")
             return 0 if ok else 4
+        finally:
+            db.close()
+    if args.cmd == "email-platform-invite":
+        from app.core import email as mail, password_login as pl
+
+        db = db_module.SessionLocal()
+        try:
+            begin_auth_lookup(db)
+            email = args.email.strip().lower()
+            user = db.scalar(select(TempoUser).where(TempoUser.email == email))
+            if user is None or db.get(PlatformAdmin, user.user_id) is None:
+                print("no platform admin with that email", file=sys.stderr)
+                return 2
+            token = pl.create_invitation(db, user, f"operator:{args.operator}", purpose="reset" if user.password_hash else "invite")
+            result = mail.send_invitation(db, email, token, who="Tempo platform administration", org=None, purpose="reset" if user.password_hash else "invite", created_by=f"operator:{args.operator}")
+            auth.audit(db, actor_type="operator", actor_id=args.operator, action="platform.admin_invite_email", decision="allowed" if result == "sent" else "denied", reason_code=result, session_ref=user.user_id)
+            db.commit()
+            print(f"invitation email: {result}" + ("" if result == "sent" else " (see Platform console > Email; no link was printed)"))
+            return 0 if result == "sent" else 4
         finally:
             db.close()
     if args.cmd == "run-notification-jobs":

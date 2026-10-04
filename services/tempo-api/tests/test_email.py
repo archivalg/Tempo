@@ -133,3 +133,17 @@ def test_email_log_is_tenant_isolated_for_tenant_sessions(client):
         assert [m.to_address for m in s.scalars(select(EmailMessage))] == ["a@example.test"]
     with db_module.tenant_session("ten_b") as s:
         assert list(s.scalars(select(EmailMessage))) == []
+
+
+def test_cli_emails_a_platform_admin_invitation_without_printing_the_link(client, smtp, capsys):
+    from app.cli import main
+    _bootstrap(subject="idp|admin", email=None)
+    h = _admin_headers(client)
+    client.post("/v1/platform/admins", headers=h, json={"email": "second@example.test"})
+    client.put("/v1/platform/email", headers=h, json=CFG)
+    smtp.sent.clear()
+    capsys.readouterr()
+    assert main(["email-platform-invite", "--email", "second@example.test", "--operator", "test"]) == 0
+    out = capsys.readouterr().out
+    assert "sent" in out and "token=" not in out and len(smtp.sent) == 1 and "/invite?token=" in smtp.sent[0].get_content()
+    assert main(["email-platform-invite", "--email", "nobody@example.test", "--operator", "test"]) == 2
