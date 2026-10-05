@@ -54,3 +54,9 @@ The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database 
 
 ## Known operational gaps
 No automated backups; no secret vault; database connection not TLS; one host, no failover; the capacity test is not part of CI; the demo tenant `ensemble_solutions` (synthetic data, account `tempo.admin`) is the only tenant.
+
+## Frontend release: landing pages and UI refresh
+
+- `3f231a7`: `/landing` and `/landing2` public pages. `8c55410`: UI design-system refresh, Billing, Help and Platform Admin pages. Deployed 2026-10-05, frontend only (no backend or database change; backend remains `c3e096e`, migration head `a9b0c1d2e3f4`).
+- Rollback image: `tempo-tempo_frontend:rollback-20261005-013356`. Smoke test passed; `/landing`, `/landing2`, `/login`, `/billing`, `/help` return 200.
+- `ee48fed` and later add only docs, AGENTS.md and a patch file, so no redeploy is needed for them.
