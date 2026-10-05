@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ErrorBanner } from '../components/ErrorBanner'
+import { Banner, Empty, PageHead, Skeleton } from '../components/ui'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { useApi } from '../hooks/useApi'
@@ -31,16 +31,15 @@ export function RunsListPage() {
   }
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Runs</h1>
-        <Link className="button" to="/runs/new">
-          New run
-        </Link>
-      </div>
+    <>
+      <PageHead title="Optimisation Studio" sub="Advanced run history and comparisons. Everyday planning should start from Demand and Roster Planner.">
+        <Link className="tp-btn primary" style={{ textDecoration: 'none' }} to="/runs/new">New run</Link>
+      </PageHead>
 
-      <div className="filters">
-        <label>
+      <section className="tp-card">
+        <header><h2>Run history</h2><button className="tp-btn" onClick={reload}>Refresh</button></header>
+        <div className="tp-body tp-row">
+        <label className="tp-field">
           Run type
           <select
             value={runType}
@@ -57,7 +56,7 @@ export function RunsListPage() {
             ))}
           </select>
         </label>
-        <label>
+        <label className="tp-field">
           Status
           <select
             value={status}
@@ -72,17 +71,16 @@ export function RunsListPage() {
             <option value="failed">failed</option>
           </select>
         </label>
-        <button onClick={reload}>Refresh</button>
-        <button disabled={selected.length < 2} onClick={() => navigate('/runs/compare', { state: { runIds: selected } })}>
+        <button className="tp-btn" disabled={selected.length < 2} onClick={() => navigate('/runs/compare', { state: { runIds: selected } })}>
           Compare selected ({selected.length})
         </button>
-      </div>
+        </div>
 
-      <ErrorBanner error={error} />
-      {loading && <p>Loading...</p>}
-      {data && data.runs.length === 0 && <p>No runs yet — create one to get started.</p>}
+      {error ? <div className="tp-body"><Banner tone="bad" title="Could not load runs">{error instanceof Error ? error.message : String(error)}</Banner></div> : null}
+      {loading && <div className="tp-body"><Skeleton h={180} /></div>}
+      {data && data.runs.length === 0 && <Empty title="No runs yet">Create one from here only for advanced diagnostics; core roster generation lives in Roster Planner.</Empty>}
       {data && data.runs.length > 0 && (
-        <table>
+        <table className="tp-table">
           <thead>
             <tr>
               <th></th>
@@ -119,8 +117,8 @@ export function RunsListPage() {
         </table>
       )}
 
-      <div className="pager">
-        <button disabled={history.length === 0} onClick={() => {
+      <div className="tp-body tp-row">
+        <button className="tp-btn" disabled={history.length === 0} onClick={() => {
           const prev = [...history]
           const last = prev.pop()
           setHistory(prev)
@@ -128,7 +126,7 @@ export function RunsListPage() {
         }}>
           Previous
         </button>
-        <button
+        <button className="tp-btn"
           disabled={!data?.next_cursor}
           onClick={() => {
             if (!data?.next_cursor) return
@@ -139,6 +137,7 @@ export function RunsListPage() {
           Next
         </button>
       </div>
-    </div>
+      </section>
+    </>
   )
 }

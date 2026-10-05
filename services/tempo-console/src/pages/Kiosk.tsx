@@ -82,44 +82,47 @@ export function KioskPage() {
 
   const pad = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
   return (
-    <div className="tp-app" style={{ minHeight: '100vh', background: 'var(--tp-charcoal)', color: 'var(--tp-on-chrome)', display: 'grid', placeItems: 'center', padding: 16 }}>
-      <main style={{ width: 'min(560px, 100%)' }} aria-live="polite">
-        <img src="/brand/tempo-lockup-dark.png" alt="Tempo" style={{ height: 44, marginBottom: 12 }} />
+    <div className="tp-app tp-kiosk" aria-live="polite">
+      <main className="tp-kiosk-main">
+        <div className="tp-row" style={{ justifyContent: 'space-between', marginBottom: 12 }}>
+          <img src="/brand/tempo-lockup-light.png" alt="Tempo" className="tp-kiosk-logo" style={{ marginBottom: 0 }} />
+          <span className="tp-badge neutral" title="This browser kiosk records punches only after the server acknowledges them."><span aria-hidden="true">●</span>Online-only capture</span>
+        </div>
         {screen === 'enrol' && (
-          <div className="tp-card" style={{ padding: 24, color: 'var(--tp-ink)' }}>
+          <div className="tp-card tp-kiosk-card">
             <h1 style={{ marginTop: 0 }}>Set up this kiosk</h1>
             <p className="tp-muted">An administrator creates the device in Administration and gives you a one-time code (valid 15 minutes).</p>
             <label className="tp-field">Enrolment code<input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" style={{ fontSize: 20 }} /></label>
             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)' }}>{msg}</p>}
-            <button className="tp-btn primary" style={{ marginTop: 12, fontSize: 18, padding: '12px 20px' }} disabled={busy || code.length < 8} onClick={() => void enrol()}>Enrol device</button>
+            <button className="tp-btn primary tp-touch" disabled={busy || code.length < 8} onClick={() => void enrol()}>Enrol device</button>
           </div>
         )}
         {screen === 'offline' && (
-          <div className="tp-card" style={{ padding: 24, color: 'var(--tp-ink)' }}>
+          <div className="tp-card tp-kiosk-card">
             <h1 style={{ marginTop: 0 }}>Cannot clock right now</h1>
             <p>Tempo can’t be reached and this kiosk does not store punches offline. Please tell your supervisor — they will record your time.</p>
-            <button className="tp-btn primary" style={{ fontSize: 18, padding: '12px 20px' }} onClick={reset}>Try again</button>
+            <button className="tp-btn primary tp-touch" onClick={reset}>Try again</button>
           </div>
         )}
         {screen === 'idle' && (
-          <div className="tp-card" style={{ padding: 20, color: 'var(--tp-ink)' }}>
+          <div className="tp-card tp-kiosk-card">
             <h1 style={{ marginTop: 0, fontSize: 22 }}>Clock in or out</h1>
             <div className="tp-row" style={{ marginBottom: 12 }}>
-              <button className="tp-btn" style={{ flex: 1, fontSize: 20, padding: 14, ...(field === 'worker' ? { outline: '3px solid var(--tp-focus)' } : {}) }} aria-pressed={field === 'worker'} onClick={() => setField('worker')}>Worker no.: <b className="tp-num">{worker || '—'}</b></button>
-              <button className="tp-btn" style={{ flex: 1, fontSize: 20, padding: 14, ...(field === 'pin' ? { outline: '3px solid var(--tp-focus)' } : {}) }} aria-pressed={field === 'pin'} onClick={() => setField('pin')}>PIN: <b className="tp-num" aria-label={`${pin.length} digits entered`}>{'•'.repeat(pin.length) || '—'}</b></button>
+              <button className={`tp-btn tp-touch tp-kiosk-field${field === 'worker' ? ' active' : ''}`} aria-pressed={field === 'worker'} onClick={() => setField('worker')}>Worker no.: <b className="tp-num">{worker || '—'}</b></button>
+              <button className={`tp-btn tp-touch tp-kiosk-field${field === 'pin' ? ' active' : ''}`} aria-pressed={field === 'pin'} onClick={() => setField('pin')}>PIN: <b className="tp-num" aria-label={`${pin.length} digits entered`}>{'•'.repeat(pin.length) || '—'}</b></button>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
-              {pad.map((d) => (<button key={d} className="tp-btn" style={{ fontSize: 28, padding: 18 }} onClick={() => press(d)}>{d}</button>))}
-              <button className="tp-btn" style={{ fontSize: 18 }} onClick={() => (field === 'worker' ? setWorker('') : setPin(''))}>Clear</button>
-              <button className="tp-btn" style={{ fontSize: 28, padding: 18 }} onClick={() => press('0')}>0</button>
-              <button className="tp-btn" style={{ fontSize: 18 }} onClick={back} aria-label="Backspace">⌫</button>
+            <div className="tp-keypad">
+              {pad.map((d) => (<button key={d} className="tp-btn tp-key" onClick={() => press(d)}>{d}</button>))}
+              <button className="tp-btn tp-key small" onClick={() => (field === 'worker' ? setWorker('') : setPin(''))}>Clear</button>
+              <button className="tp-btn tp-key" onClick={() => press('0')}>0</button>
+              <button className="tp-btn tp-key small" onClick={back} aria-label="Backspace">⌫</button>
             </div>
             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)', fontSize: 18 }}>{msg}</p>}
-            <button className="tp-btn primary" style={{ width: '100%', marginTop: 12, fontSize: 22, padding: 16 }} disabled={busy || !worker || !pin} onClick={() => void verify()}>Continue</button>
+            <button className="tp-btn primary tp-touch tp-wide" disabled={busy || !worker || !pin} onClick={() => void verify()}>{busy ? 'Checking…' : 'Continue'}</button>
           </div>
         )}
         {screen === 'confirm' && who && (
-          <div className="tp-card" style={{ padding: 20, color: 'var(--tp-ink)' }}>
+          <div className="tp-card tp-kiosk-card">
             <h1 style={{ marginTop: 0, fontSize: 22 }}>Hello, worker <span className="tp-num">{who.masked_identity}</span></h1>
             {who.location_mode && who.location_mode !== 'off' && <p className="tp-muted" style={{ fontSize: 13 }}>This site checks the kiosk’s location when you clock.</p>}
             <p style={{ fontSize: 18 }}>{{ not_clocked_in: 'You are not clocked in.', working: 'You are clocked in.', on_break: 'You are on a break.' }[who.state]}</p>
@@ -127,16 +130,16 @@ export function KioskPage() {
             {who.upcoming_shifts.length === 0 ? <p className="tp-muted">No upcoming shifts.</p> : <ul style={{ paddingLeft: 18 }}>{who.upcoming_shifts.slice(0, 4).map((s) => (<li key={s.shift_id} className="tp-num">{new Date(s.start_at).toLocaleString('en-AU', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} – {new Date(s.end_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} · {s.role}</li>))}</ul>}
             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)' }}>{msg}</p>}
             <div className="tp-row" style={{ flexWrap: 'wrap' }}>
-              {who.allowed_actions.includes('clock_in') && <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-in')}>{busy ? 'Recording…' : 'Clock in'}</button>}
-              {who.allowed_actions.includes('break_start') && <button className="tp-btn" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('break-start')}>{busy ? 'Recording…' : 'Start break'}</button>}
-              {who.allowed_actions.includes('break_end') && <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('break-end')}>{busy ? 'Recording…' : 'End break'}</button>}
-              {who.allowed_actions.includes('clock_out') && <button className="tp-btn" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-out')}>{busy ? 'Recording…' : 'Clock out'}</button>}
-              <button className="tp-btn" style={{ fontSize: 18, padding: 18 }} onClick={reset}>Cancel</button>
+              {who.allowed_actions.includes('clock_in') && <button className="tp-btn primary tp-touch tp-grow" disabled={busy} onClick={() => void punch('clock-in')}>{busy ? 'Recording…' : 'Clock in'}</button>}
+              {who.allowed_actions.includes('break_start') && <button className="tp-btn tp-touch tp-grow" disabled={busy} onClick={() => void punch('break-start')}>{busy ? 'Recording…' : 'Start break'}</button>}
+              {who.allowed_actions.includes('break_end') && <button className="tp-btn primary tp-touch tp-grow" disabled={busy} onClick={() => void punch('break-end')}>{busy ? 'Recording…' : 'End break'}</button>}
+              {who.allowed_actions.includes('clock_out') && <button className="tp-btn tp-touch tp-grow" disabled={busy} onClick={() => void punch('clock-out')}>{busy ? 'Recording…' : 'Clock out'}</button>}
+              <button className="tp-btn tp-touch" onClick={reset}>Cancel</button>
             </div>
           </div>
         )}
         {screen === 'done' && (
-          <div className="tp-card" style={{ padding: 28, color: 'var(--tp-ink)', textAlign: 'center' }}>
+          <div className="tp-card tp-kiosk-card" style={{ textAlign: 'center' }}>
             <div aria-hidden="true" style={{ fontSize: 48, color: 'var(--tp-green-ink)' }}>✓</div>
             <h1 style={{ fontSize: 26 }}>{msg}</h1>
             <p className="tp-muted">This screen clears automatically.</p>

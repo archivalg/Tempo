@@ -11,6 +11,7 @@ import AttendancePage from './pages/Attendance'
 import DemandPage from './pages/Demand'
 import ReportsPage from './pages/Reports'
 import AccountPage from './pages/Account'
+import BillingPage from './pages/Billing'
 import InvitePage from './pages/Invite'
 import { KioskPage } from './pages/Kiosk'
 import LandingPage from './pages/Landing'
@@ -64,6 +65,7 @@ function App() {
             <Route path="/onboarding" element={<OnboardingPage />} />
             <Route path="/providers" element={<LabourProvidersPage />} />
             <Route path="/admin" element={<AdminPage />} />
+            <Route path="/billing" element={<BillingPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/data" element={<DataPage />} />
             <Route path="/setup" element={<SetupWizard />} />

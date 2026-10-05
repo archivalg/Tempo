@@ -17,7 +17,7 @@ describe('apiFetch', () => {
     vi.unstubAllGlobals()
   })
 
-  it('sends the X-Tempo-Context header as JSON and returns the parsed body', async () => {
+  it('ignores the legacy context object and returns the parsed body', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
     )
@@ -27,17 +27,20 @@ describe('apiFetch', () => {
 
     expect(result).toEqual({ ok: true })
     const [, init] = fetchMock.mock.calls[0]
-    expect(JSON.parse(init.headers['X-Tempo-Context'])).toEqual(context)
+    expect(init.credentials).toBe('include')
+    expect(init.headers['X-Tempo-Context']).toBeUndefined()
   })
 
-  it('includes the Idempotency-Key header when provided', async () => {
+  it('includes CSRF and Idempotency-Key headers for mutations when provided', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 202 }))
     vi.stubGlobal('fetch', fetchMock)
+    document.cookie = 'tempo_csrf=csrf-123'
 
     await apiFetch('/actions', context, { method: 'POST', body: { a: 1 }, idempotencyKey: 'key-123' })
 
     const [, init] = fetchMock.mock.calls[0]
     expect(init.headers['Idempotency-Key']).toBe('key-123')
+    expect(init.headers['X-CSRF-Token']).toBe('csrf-123')
     expect(init.headers['Content-Type']).toBe('application/json')
     expect(init.body).toBe(JSON.stringify({ a: 1 }))
   })

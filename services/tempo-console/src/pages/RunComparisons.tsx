@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ErrorBanner } from '../components/ErrorBanner'
+import { Banner, PageHead } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { compareRuns } from '../api/runs'
 import type { RunComparisonResponse } from '../api/types'
@@ -46,29 +46,28 @@ export function RunComparisonsPage() {
   const kpiKeys = result ? Array.from(new Set(result.kpis.flatMap((r) => Object.keys(r.kpis)))) : []
 
   return (
-    <div className="page">
-      <h1>Compare runs</h1>
-      <p className="hint">
-        Runs must be in a comparable terminal state (<code>completed</code> or{' '}
-        <code>completed_with_warnings</code>). A <code>margin_3pl</code> run's KPIs are only visible with{' '}
-        <code>labour.margin.read</code> — same restriction as the Run detail page.
-      </p>
+    <>
+      <PageHead title="Compare runs" sub="Compare terminal optimisation results with the same permission gates as run detail." />
+      <Banner tone="info" title="Comparable runs only">Runs must be completed or completed with warnings. Margin KPIs remain hidden without the required permission.</Banner>
 
-      <form onSubmit={handleCompare}>
-        <label>
+      <section className="tp-card" style={{ marginBottom: 16 }}>
+        <header><h2>Selection</h2></header>
+      <form className="tp-body tp-stack" onSubmit={handleCompare}>
+        <label className="tp-field">
           Run IDs (comma-separated, at least two)
           <input value={runIdsInput} onChange={(e) => setRunIdsInput(e.target.value)} required />
         </label>
-        <ErrorBanner error={error} />
-        <button type="submit" disabled={busy}>
+        {error ? <Banner tone="bad" title="Could not compare runs">{error instanceof Error ? error.message : String(error)}</Banner> : null}
+        <button className="tp-btn primary" type="submit" disabled={busy}>
           Compare
         </button>
       </form>
+      </section>
 
       {result && (
-        <section className="card">
-          <h2>KPIs</h2>
-          <table>
+        <section className="tp-card">
+          <header><h2>KPIs</h2></header>
+          <table className="tp-table">
             <thead>
               <tr>
                 <th>KPI</th>
@@ -93,7 +92,7 @@ export function RunComparisonsPage() {
         </section>
       )}
 
-      <Link to="/runs">Back to runs</Link>
-    </div>
+      <p><Link to="/runs">Back to runs</Link></p>
+    </>
   )
 }

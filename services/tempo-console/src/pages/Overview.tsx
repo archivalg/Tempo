@@ -22,6 +22,18 @@ export default function OverviewPage() {
   useEffect(() => { const t = setInterval(() => setTick((n) => n + 1), 60000); return () => clearInterval(t) }, [])
   const ov = q.data
   const tz = ov?.site.timezone ?? site?.timezone ?? 'UTC'
+  const kpi = (key: string) => ov?.kpis.find((x) => x.key === key)
+  const labourGap = ov ? ov.hourly.reduce((sum, h) => sum + ((h.staffed_hours ?? 0) - (h.required_hours ?? h.staffed_hours ?? 0)), 0) : null
+  const shortageHours = ov ? ov.heatmap.cells.filter((c) => c.status === 'shortage').reduce((sum, c) => sum + Math.max(0, c.required_hours - c.staffed_hours), 0) : 0
+  const coverageCells = ov?.heatmap.cells.filter((c) => c.status !== 'no_demand') ?? []
+  const coveredPct = coverageCells.length ? Math.round((coverageCells.filter((c) => c.status === 'covered').length / coverageCells.length) * 100) : null
+  const liveSources = ov?.data_sources.filter((s) => s.mode === 'live' && s.fresh).length ?? 0
+  const sourcePct = ov?.data_sources.length ? Math.round((liveSources / ov.data_sources.length) * 100) : null
+  const nextRoster = ov?.roster_preview.find((r) => r.state !== 'published') ?? ov?.roster_preview[0]
+  const topException = ov?.attention.find((e) => e.severity === 'critical' || e.severity === 'high') ?? ov?.attention[0]
+  const bestMove = ov?.recommendations.find((r) => !r.stale) ?? ov?.recommendations[0]
+  const actionTitle = topException ? `${KIND_LABEL[topException.kind] ?? topException.kind}${topException.worker_label ? ` · ${topException.worker_label}` : ''}` : bestMove ? bestMove.title : nextRoster ? `${nextRoster.label} roster is ${nextRoster.state}` : 'No action queued'
+  const readiness = ov ? Math.round(((sourcePct ?? 0) * 0.35) + ((coveredPct ?? 0) * 0.35) + ((ov.attention.length === 0 ? 100 : Math.max(0, 100 - ov.attention.length * 18)) * 0.30)) : 0
 
   if (!site) return <Empty title="No site available">You have no site grants. Ask an administrator to grant access.</Empty>
   return (
@@ -40,6 +52,60 @@ export default function OverviewPage() {
       {ov && <div style={{ marginBottom: 12 }}><SourcePills sources={ov.data_sources} /></div>}
       {ov && <FreshnessBanner sources={ov.data_sources} attendanceVerified={ov.attendance_verified} />}
       {q.error ? <Banner tone="bad" title="Overview could not be loaded">{String((q.error as Error).message)}</Banner> : null}
+
+      <section className="tp-command" aria-label="Site command centre">
+        <div className="tp-command-main">
+          <div className="tp-row" style={{ justifyContent: 'space-between' }}>
+            <div>
+              <div className="tp-muted">Site command centre</div>
+              <h2>{!ov ? 'Building today’s operating picture…' : `${site.name} is ${ov.attention.length ? 'carrying open exceptions' : 'clear for the current view'}`}</h2>
+            </div>
+            {ov && <Status tone={readiness >= 85 ? 'ok' : readiness >= 65 ? 'risk' : 'bad'}>{readiness}% ready</Status>}
+          </div>
+          <div className="tp-command-grid">
+            <div className="tp-command-metric">
+              <div className="lbl">Labour gap today</div>
+              <div className="val">{labourGap == null ? '—' : `${labourGap >= 0 ? '+' : ''}${fmtNum(labourGap, 1)} h`}</div>
+              <div className="meta">staffed minus required hours</div>
+            </div>
+            <div className="tp-command-metric">
+              <div className="lbl">Coverage confidence</div>
+              <div className="val">{coveredPct == null ? 'No forecast' : `${coveredPct}%`}</div>
+              <div className="meta">{shortageHours > 0 ? `${fmtNum(shortageHours, 1)} h short across zones` : 'published roster vs demand'}</div>
+            </div>
+            <div className="tp-command-metric">
+              <div className="lbl">Data confidence</div>
+              <div className="val">{sourcePct == null ? '—' : `${sourcePct}%`}</div>
+              <div className="meta">{ov?.attendance_verified === false ? 'presence not verified live' : 'fresh live sources'}</div>
+            </div>
+          </div>
+          <div className="tp-row">
+            {kpi('payable_hours') && <Status tone="neutral">Payable {kpi('payable_hours')!.display}</Status>}
+            {kpi('forecast_wape') && <Status tone="neutral">Forecast error {kpi('forecast_wape')!.display}</Status>}
+            {ov?.forecast.method && <span className="tp-muted">{ov.forecast.method}</span>}
+          </div>
+        </div>
+        <div className="tp-action-card">
+          <div className="tp-row" style={{ justifyContent: 'space-between' }}>
+            <h2>Next best action</h2>
+            {topException ? <Status tone={severityTone(topException.severity)}>{topException.severity}</Status> : bestMove?.stale ? <Status tone="risk">Expired</Status> : <Status tone="ok">Ready</Status>}
+          </div>
+          <div className="primary-line">{!ov ? 'Loading action queue…' : actionTitle}</div>
+          <p className="tp-muted" style={{ margin: 0 }}>
+            {topException ? `${STATE_LABEL[topException.state] ?? topException.state} · open for ${fmtAge(topException.age_seconds)} · detected after ${fmtAge(topException.detection_lag_seconds)}.`
+              : bestMove ? `Recommended move set from optimisation run ${bestMove.run_id.slice(-6)}; backlog remaining ${fmtNum(bestMove.impact.remaining_backlog, 0)}.`
+              : nextRoster ? `${nextRoster.shifts} shifts · ${nextRoster.workers} workers · ${nextRoster.approval ?? 'approval not recorded'}.`
+              : 'No exception, recommendation or roster publication task is queued for this view.'}
+          </p>
+          <div className="tp-meter" aria-hidden="true"><span style={{ width: `${readiness}%` }} /></div>
+          <div className="tp-row">
+            {topException ? <button className="tp-btn primary" onClick={() => setPicked(topException)}>Open case</button>
+              : bestMove ? <button className="tp-btn primary" onClick={() => nav(`/runs/${bestMove.run_id}?site=${site.site_id}`)}>Review move</button>
+              : <Link className="tp-btn primary" style={{ textDecoration: 'none' }} to={`/roster?site=${site.site_id}`}>Open roster</Link>}
+            <Link className="tp-btn" style={{ textDecoration: 'none' }} to={`/reports?site=${site.site_id}`}>View insights</Link>
+          </div>
+        </div>
+      </section>
 
       <section className="tp-kpis" aria-label="Key figures">
         {!ov ? Array.from({ length: 6 }).map((_, i) => <div key={i} className="tp-card tp-kpi"><Skeleton h={12} w="60%" /><Skeleton h={28} w="50%" /><Skeleton h={10} w="70%" /></div>) : ov.kpis.map((k) => <KpiCard key={k.key} k={k} />)}

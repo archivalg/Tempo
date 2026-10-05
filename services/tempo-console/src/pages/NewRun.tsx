@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ErrorBanner } from '../components/ErrorBanner'
+import { Banner, PageHead } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { createRun } from '../api/runs'
 import { OBJECTIVE_PROFILES, RUN_TYPES, type ObjectiveProfile, type RunType } from '../api/types'
@@ -48,10 +48,12 @@ export function NewRunPage() {
   }
 
   return (
-    <div className="page">
-      <h1>New run</h1>
-      <form onSubmit={handleSubmit}>
-        <label>
+    <>
+      <PageHead title="New optimisation run" sub="Advanced diagnostic run creation. Roster generation for normal planning is available in Roster Planner." />
+      <section className="tp-card">
+        <header><h2>Run parameters</h2></header>
+      <form className="tp-body tp-stack" onSubmit={handleSubmit}>
+        <label className="tp-field">
           Run type
           <select value={runType} onChange={(e) => setRunType(e.target.value as RunType)}>
             {RUN_TYPES.map((t) => (
@@ -61,23 +63,27 @@ export function NewRunPage() {
             ))}
           </select>
         </label>
-        <label>
+        <div className="tp-cols2">
+        <label className="tp-field">
           Site IDs (comma-separated, at least one required)
           <input value={siteIds} onChange={(e) => setSiteIds(e.target.value)} required />
         </label>
-        <label>
+        <label className="tp-field">
           Customer IDs (comma-separated, optional)
           <input value={customerIds} onChange={(e) => setCustomerIds(e.target.value)} />
         </label>
-        <label>
+        </div>
+        <div className="tp-cols2">
+        <label className="tp-field">
           Window start
           <input type="datetime-local" value={windowStart} onChange={(e) => setWindowStart(e.target.value)} required />
         </label>
-        <label>
+        <label className="tp-field">
           Window end
           <input type="datetime-local" value={windowEnd} onChange={(e) => setWindowEnd(e.target.value)} required />
         </label>
-        <label>
+        </div>
+        <label className="tp-field">
           Objective profile
           <select value={objectiveProfile} onChange={(e) => setObjectiveProfile(e.target.value as ObjectiveProfile)}>
             {OBJECTIVE_PROFILES.map((p) => (
@@ -87,11 +93,12 @@ export function NewRunPage() {
             ))}
           </select>
         </label>
-        <ErrorBanner error={error} />
-        <button type="submit" disabled={submitting}>
+        {error ? <Banner tone="bad" title="Could not create run">{error instanceof Error ? error.message : String(error)}</Banner> : null}
+        <button className="tp-btn primary" type="submit" disabled={submitting}>
           {submitting ? 'Submitting...' : 'Create run'}
         </button>
       </form>
-    </div>
+      </section>
+    </>
   )
 }

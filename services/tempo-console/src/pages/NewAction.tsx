@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { ErrorBanner } from '../components/ErrorBanner'
+import { Banner, PageHead, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { executeAction, validateAction } from '../api/actions'
 import type { ActionValidateResponse } from '../api/types'
@@ -74,15 +74,13 @@ export function NewActionPage() {
   }
 
   return (
-    <div className="page">
-      <h1>New action</h1>
-      <p className="hint">
-        §12's two-step contract: validate previews the impact and issues a short-lived token; execute (requires
-        labour.approve) submits it. See services/tempo-api README's Phase E section — there is no real vendor
-        writeback connector yet, so execute will honestly report <code>unknown</code> unless reconciled later.
-      </p>
-      <form onSubmit={handleValidate}>
-        <label>
+    <>
+      <PageHead title="New controlled action" sub="Validate first, then execute with an expiring action token and approval permission." />
+      <Banner tone="info" title="Writeback boundary">Native Tempo publication is real. Overlay vendor writeback remains unknown unless a verified connector reconciles it.</Banner>
+      <section className="tp-card">
+        <header><h2>Validate action</h2></header>
+      <form className="tp-body tp-stack" onSubmit={handleValidate}>
+        <label className="tp-field">
           Action type
           <select value={actionType} onChange={(e) => setActionType(e.target.value)}>
             {ACTION_TYPES.map((t) => (
@@ -92,11 +90,12 @@ export function NewActionPage() {
             ))}
           </select>
         </label>
-        <label>
+        <label className="tp-field">
           Recommendation ID
           <input value={recommendationId} onChange={(e) => setRecommendationId(e.target.value)} required />
         </label>
-        <label>
+        <div className="tp-cols2">
+        <label className="tp-field">
           Target system
           <select value={system} onChange={(e) => setSystem(e.target.value)}>
             {SOURCE_SYSTEMS.map((s) => (
@@ -106,45 +105,50 @@ export function NewActionPage() {
             ))}
           </select>
         </label>
-        <label>
+        <label className="tp-field">
           Connection ID
           <input value={connectionId} onChange={(e) => setConnectionId(e.target.value)} required />
         </label>
-        <label>
+        </div>
+        <div className="tp-cols2">
+        <label className="tp-field">
           Site ID
           <input value={siteId} onChange={(e) => setSiteId(e.target.value)} required />
         </label>
-        <label>
+        <label className="tp-field">
           Expected source version (leave blank if this target has never been written to)
           <input value={expectedSourceVersion} onChange={(e) => setExpectedSourceVersion(e.target.value)} />
         </label>
-        <ErrorBanner error={error} />
-        <button type="submit" disabled={busy}>
+        </div>
+        {error ? <Banner tone="bad" title="Action failed">{error instanceof Error ? error.message : String(error)}</Banner> : null}
+        <button className="tp-btn primary" type="submit" disabled={busy}>
           Validate
         </button>
       </form>
+      </section>
 
       {validated && (
-        <section className="card">
-          <h2>Validated — impact summary</h2>
-          <pre className="json-block">{JSON.stringify(validated.impact_summary, null, 2)}</pre>
+        <section className="tp-card" style={{ marginTop: 16 }}>
+          <header><h2>Validated impact</h2><Status tone="risk">Token expires {new Date(validated.expires_at).toLocaleString()}</Status></header>
+          <div className="tp-body tp-stack">
+          <pre className="tp-code">{JSON.stringify(validated.impact_summary, null, 2)}</pre>
           <p>Token expires: {new Date(validated.expires_at).toLocaleString()}</p>
-          <button onClick={handleExecute} disabled={busy || !!executeResult}>
+          <button className="tp-btn primary" onClick={handleExecute} disabled={busy || !!executeResult}>
             Execute (requires labour.approve)
           </button>
+          </div>
         </section>
       )}
 
       {executeResult && (
-        <section className="card">
-          <h2>Execution result</h2>
-          <p>
-            Status: <strong>{executeResult.status}</strong>
-          </p>
-          {executeResult.detail && <p>{executeResult.detail}</p>}
-          <button onClick={() => navigate(`/actions/${validated?.action_id}`)}>View action</button>
+        <section className="tp-card" style={{ marginTop: 16 }}>
+          <header><h2>Execution result</h2><Status tone={executeResult.status === 'confirmed' ? 'ok' : executeResult.status === 'unknown' ? 'risk' : 'neutral'}>{executeResult.status}</Status></header>
+          <div className="tp-body">
+            {executeResult.detail && <p>{executeResult.detail}</p>}
+            <button className="tp-btn" onClick={() => navigate(`/actions/${validated?.action_id}`)}>View action</button>
+          </div>
         </section>
       )}
-    </div>
+    </>
   )
 }

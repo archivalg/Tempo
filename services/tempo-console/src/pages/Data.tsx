@@ -133,7 +133,7 @@ function ApiTab() {
       <section className="tp-card" aria-label="API reference"><header><h2>Sending data</h2></header>
         <div className="tp-body tp-stack">
           <p style={{ margin: 0 }}>Send rows as JSON. Add an <code>Idempotency-Key</code> so a retry returns the same receipt instead of loading twice. The templates below list every field.</p>
-          <pre style={{ overflow: 'auto', background: 'var(--tp-bg)', padding: 10, borderRadius: 6, fontSize: 12.5 }}>{`curl -X POST ${origin}/v1/imports/batches \\
+          <pre style={{ overflow: 'auto', background: 'var(--tp-surface-2)', padding: 10, borderRadius: 6, fontSize: 12.5 }}>{`curl -X POST ${origin}/v1/imports/batches \\
   -H "Authorization: Bearer tsc_…" -H "Idempotency-Key: feed-2026-10-05" -H "Content-Type: application/json" \\
   -d '{"data_class":"bulk","apply":true,"rows":[{"site":"mel_dc_01","activity":"picking","period_start":"2026-10-05","grain":"day","units":26140}]}'`}</pre>
           <div className="tp-row" role="group" aria-label="Templates">

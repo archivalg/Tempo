@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   addShift, approveRoster, copyPublished, deleteShift, editShift, generateRoster, getVersionBoard, getVersionEvents, listRosterVersions, publishRoster, rejectRoster, submitRoster,
@@ -111,6 +111,15 @@ export default function RosterPlannerPage() {
   if (!site) return <Empty title="No site available" />
   const cur = board?.totals[v && ['published', 'reconciled'].includes(v.state) ? 'published' : 'draft']
   const live = board?.totals.published
+  const coveredDays = board?.coverage_band.filter((b) => b.status === 'covered').length ?? 0
+  const plannedDays = board?.coverage_band.filter((b) => b.required_hours != null).length ?? 0
+  const coverageScore = plannedDays ? Math.round((coveredDays / plannedDays) * 100) : 0
+  const conflictScore = board ? Math.max(0, 100 - board.hard_conflicts * 25) : 0
+  const approvalScore = v ? (['published', 'reconciled'].includes(v.state) ? 100 : v.state === 'approved' ? 85 : v.state === 'pending_approval' ? 65 : v.state === 'draft' ? 45 : 15) : 0
+  const publishReady = board && v ? Math.round((coverageScore * 0.38) + (conflictScore * 0.34) + (approvalScore * 0.28)) : 0
+  const hourDelta = cur && live ? cur.hours - live.hours : null
+  const shiftDelta = cur && live ? cur.shifts - live.shifts : null
+  const costDelta = cur && live && cur.cost != null && live.cost != null ? cur.cost - live.cost : null
   return (
     <>
       <PageHead title="Roster Planner" sub={<>{site.name} · week of {days[0]} · times in {tz}</>}>
@@ -126,6 +135,27 @@ export default function RosterPlannerPage() {
 
       {err && <Banner tone="bad" title="That didn’t work">{err}</Banner>}
       {board && site.operating_mode === 'overlay' && <Banner tone="info" title="Overlay site">The roster of record is in the external system. After you publish, Tempo prepares a hand-over: download the file and record that it was loaded, or send it through a vendor connector once one is connected and your organisation has writeback switched on.</Banner>}
+
+      {board && v && (
+        <section className="tp-command" aria-label="Roster readiness">
+          <div className="tp-action-card">
+            <div className="tp-score">
+              <div className="tp-score-ring" style={{ '--score': publishReady } as CSSProperties}><span>{publishReady}%</span></div>
+              <div>
+                <h2>Publish readiness</h2>
+                <p className="tp-muted" style={{ margin: '4px 0 10px' }}>Combines demand coverage, hard conflicts and approval progress. This is a planning signal; server rules still decide publication.</p>
+                <div className={`tp-meter ${publishReady < 65 ? 'bad' : publishReady < 85 ? 'risk' : ''}`}><span style={{ width: `${publishReady}%` }} /></div>
+              </div>
+            </div>
+          </div>
+          <div className="tp-insight-strip" style={{ margin: 0 }}>
+            <div className="tp-insight"><b>Demand coverage</b><div className="big">{plannedDays ? `${coverageScore}%` : 'No forecast'}</div><span className="tp-muted">{coveredDays} of {plannedDays || 0} demand days covered</span></div>
+            <div className="tp-insight"><b>Hard conflicts</b><div className="big">{board.hard_conflicts}</div><span className="tp-muted">{board.hard_conflicts ? 'publication blocked until resolved' : 'server validation clear'}</span></div>
+            <div className="tp-insight"><b>Scenario delta</b><div className="big">{hourDelta == null ? '—' : `${hourDelta >= 0 ? '+' : ''}${fmtNum(hourDelta, 1)} h`}</div><span className="tp-muted">{shiftDelta == null ? 'published comparison unavailable' : `${shiftDelta >= 0 ? '+' : ''}${shiftDelta} shifts vs live`}</span></div>
+            <div className="tp-insight"><b>Cost movement</b><div className="big">{costDelta == null ? 'Withheld' : `${costDelta >= 0 ? '+' : ''}${fmtMoney(costDelta)}`}</div><span className="tp-muted">only shown when rate evidence is available</span></div>
+          </div>
+        </section>
+      )}
 
       <section className="tp-card" style={{ marginBottom: 12 }} aria-label="Roster version and workflow">
         <div className="tp-body tp-row" style={{ justifyContent: 'space-between' }}>

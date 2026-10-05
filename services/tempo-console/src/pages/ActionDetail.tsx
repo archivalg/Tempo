@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ErrorBanner } from '../components/ErrorBanner'
+import { Banner, PageHead, Skeleton } from '../components/ui'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { useApi } from '../hooks/useApi'
@@ -25,18 +25,18 @@ export function ActionDetailPage() {
   const needsReconciliation = data?.status === 'unknown' || data?.status === 'partially_confirmed'
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Action {actionId}</h1>
+    <>
+      <PageHead title={`Action ${actionId}`} sub="Validated writeback evidence, status and reconciliation.">
         {data && <StatusBadge status={data.status} />}
-      </div>
+      </PageHead>
 
-      <ErrorBanner error={error} />
-      {loading && <p>Loading...</p>}
+      {error ? <Banner tone="bad" title="Could not load action">{error instanceof Error ? error.message : String(error)}</Banner> : null}
+      {loading && <Skeleton h={160} />}
 
       {data && (
-        <section className="card">
-          <dl>
+        <section className="tp-card">
+          <div className="tp-body">
+          <dl className="tp-dl">
             <dt>Action type</dt>
             <dd>{data.action_type}</dd>
             <dt>Recommendation</dt>
@@ -55,18 +55,16 @@ export function ActionDetailPage() {
 
           {needsReconciliation && (
             <>
-              <p className="hint">
-                No real vendor writeback connector exists yet (see services/tempo-api README's Phase E section) — an
-                <code> unknown</code> outcome needs reconciliation before any retry.
-              </p>
-              <button onClick={handleReconcile}>Reconcile</button>
-              <ErrorBanner error={reconcileError} />
+              <Banner tone="warn" title="Reconciliation required">No real vendor writeback connector exists yet. Unknown outcomes must be reconciled before any retry.</Banner>
+              <button className="tp-btn primary" onClick={handleReconcile}>Reconcile</button>
+              {reconcileError ? <Banner tone="bad" title="Could not reconcile">{reconcileError instanceof Error ? reconcileError.message : String(reconcileError)}</Banner> : null}
             </>
           )}
+          </div>
         </section>
       )}
 
-      <Link to="/actions">Back to actions</Link>
-    </div>
+      <p><Link to="/actions">Back to actions</Link></p>
+    </>
   )
 }

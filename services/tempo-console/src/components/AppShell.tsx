@@ -12,7 +12,7 @@ interface SiteCtx { sites: SiteSummary[]; site: SiteSummary | null; setSite: (id
 const SiteContext = createContext<SiteCtx>({ sites: [], site: null, setSite: () => {} })
 export const useSite = () => useContext(SiteContext)
 
-const NAV: { to: string; label: string; perm: string; end?: boolean; group?: string }[] = [
+const NAV: { to: string; label: string; perm?: string; end?: boolean; group?: string; platform?: boolean }[] = [
   { to: '/', label: 'Overview', perm: 'labour.read', end: true, group: 'Operate' },
   { to: '/demand', label: 'Demand', perm: 'labour.read' },
   { to: '/roster', label: 'Roster Planner', perm: 'labour.read' },
@@ -27,7 +27,10 @@ const NAV: { to: string; label: string; perm: string; end?: boolean; group?: str
   { to: '/data', label: 'Data', perm: 'labour.data.import' },
   { to: '/onboarding', label: 'Connections', perm: 'labour.configure' },
   { to: '/admin', label: 'Administration', perm: 'labour.configure' },
+  { to: '/billing', label: 'Plans & billing', perm: 'labour.configure' },
   { to: '/audit', label: 'Audit log', perm: 'labour.configure' },
+  { to: '/help', label: 'Help library', perm: 'labour.read', group: 'Support' },
+  { to: '/platform', label: 'Platform admin', platform: true, group: 'Platform' },
 ]
 
 export function AppShell() {
@@ -49,7 +52,7 @@ export function AppShell() {
   if (access.platform_admin && !access.tenant_id) return <Navigate to="/platform" replace />   // platform operators have no organisation to show
 
   const setSite = (id: string) => { const p = new URLSearchParams(params); p.set('site', id); setParams(p, { replace: true }) }
-  const nav = NAV.filter((n) => can(n.perm))
+  const nav = NAV.filter((n) => (n.platform ? access.platform_admin : n.perm ? can(n.perm) : true))
   return (
     <SiteContext.Provider value={{ sites, site, setSite }}>
       <div className="tp-app">
@@ -92,6 +95,7 @@ export function AppShell() {
           </aside>
           <main className="tp-main" id="main" tabIndex={-1}>
             {access.mfa_required && <Banner tone="warn" title="Set up two-step verification">Your role needs it. Until then admin actions are unavailable. <NavLink to="/account">Set it up now</NavLink></Banner>}
+            {access.platform_admin && <Banner tone="info" title="Platform operator session">You are signed in as a platform operator. Customer data access must use a time-boxed support grant and remain visibly separate from ordinary customer login.</Banner>}
             {sitesQ.error ? <Banner tone="bad" title="Could not load your sites">Try again shortly.</Banner> : <Outlet />}
           </main>
         </div>

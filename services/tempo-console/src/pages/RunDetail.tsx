@@ -1,5 +1,5 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ErrorBanner } from '../components/ErrorBanner'
+import { Banner, Empty, PageHead, Skeleton } from '../components/ui'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { useApi } from '../hooks/useApi'
@@ -7,7 +7,7 @@ import { cancelRun, getRun } from '../api/runs'
 import { ACTION_TYPE_BY_RUN_TYPE } from '../api/types'
 
 function JsonBlock({ value }: { value: unknown }) {
-  return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>
+  return <pre className="tp-code">{JSON.stringify(value, null, 2)}</pre>
 }
 
 export function RunDetailPage() {
@@ -25,35 +25,36 @@ export function RunDetailPage() {
   const actionType = data?.run_type ? ACTION_TYPE_BY_RUN_TYPE[data.run_type] : undefined
 
   return (
-    <div className="page">
-      <div className="page-header">
-        <h1>Run {runId}</h1>
+    <>
+      <PageHead title={`Run ${runId}`} sub="Model evidence, result payload and controlled action handoff.">
         {data && <StatusBadge status={data.status} />}
-      </div>
+      </PageHead>
 
-      <ErrorBanner error={error} />
-      {loading && <p>Loading...</p>}
+      {error ? <Banner tone="bad" title="Could not load run">{error instanceof Error ? error.message : String(error)}</Banner> : null}
+      {loading && <Skeleton h={220} />}
 
       {data && !isTerminal && (
-        <div className="card">
+        <section className="tp-card">
+          <div className="tp-body tp-stack">
           <p>This run is not yet in a terminal state.</p>
-          <button onClick={reload}>Refresh</button>
-          <button onClick={handleCancel}>Cancel run</button>
-        </div>
+          <div className="tp-row"><button className="tp-btn" onClick={reload}>Refresh</button><button className="tp-btn danger" onClick={handleCancel}>Cancel run</button></div>
+          </div>
+        </section>
       )}
 
       {data && isTerminal && (
         <>
-          <section className="card">
-            <h2>Model</h2>
-            <p>
+          <section className="tp-card">
+            <header><h2>Model</h2></header>
+            <div className="tp-body"><p>
               {data.model?.name} v{data.model?.version} ({data.model?.solver})
-            </p>
+            </p></div>
           </section>
 
           {data.explanation && (
-            <section className="card">
-              <h2>Explanation</h2>
+            <section className="tp-card" style={{ marginTop: 16 }}>
+              <header><h2>Explanation</h2></header>
+              <div className="tp-body">
               <p>
                 Confidence: <strong>{data.explanation.confidence.score}</strong> ({data.explanation.confidence.band})
               </p>
@@ -78,7 +79,7 @@ export function RunDetailPage() {
                   </ul>
                 </>
               )}
-              <div className="columns">
+              <div className="tp-cols2">
                 <div>
                   <h3>Baseline</h3>
                   <JsonBlock value={data.explanation.baseline} />
@@ -92,23 +93,27 @@ export function RunDetailPage() {
                   <JsonBlock value={data.explanation.delta} />
                 </div>
               </div>
+              </div>
             </section>
           )}
 
-          <section className="card">
-            <h2>Result</h2>
+          <section className="tp-card" style={{ marginTop: 16 }}>
+            <header><h2>Result</h2></header>
+            <div className="tp-body">
             <JsonBlock value={data.result} />
+            </div>
           </section>
 
           {actionType && (
-            <section className="card">
-              <h2>Take action</h2>
+            <section className="tp-card" style={{ marginTop: 16 }}>
+              <header><h2>Take action</h2></header>
+              <div className="tp-body">
               {data.recommendation_id ? (
                 <>
                   <p>
                     This run type maps to action_type <code>{actionType}</code>.
                   </p>
-                  <button
+                  <button className="tp-btn primary"
                     onClick={() =>
                       navigate('/actions/new', {
                         state: { recommendationId: data.recommendation_id, actionType },
@@ -119,14 +124,15 @@ export function RunDetailPage() {
                   </button>
                 </>
               ) : (
-                <p>No recommendation was recorded for this run — nothing to act on.</p>
+                <Empty title="No recommendation recorded">There is nothing to act on from this run.</Empty>
               )}
+              </div>
             </section>
           )}
         </>
       )}
 
-      <Link to="/runs">Back to runs</Link>
-    </div>
+      <p><Link to="/runs">Back to runs</Link></p>
+    </>
   )
 }

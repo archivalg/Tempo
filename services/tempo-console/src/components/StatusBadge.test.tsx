@@ -8,14 +8,17 @@ describe('StatusBadge', () => {
     expect(screen.getByText('completed')).toBeInTheDocument()
   })
 
-  it('gives an unrecognised status the info tone rather than throwing', () => {
+  it('gives an unrecognised status the neutral Tempo tone rather than throwing', () => {
     render(<StatusBadge status="something_new" />)
-    const badge = screen.getByText('something_new')
-    expect(badge.className).toContain('badge-info')
+    const badge = screen.getByText('something new')
+    expect(badge.className).toContain('tp-badge')
+    expect(badge.className).toContain('neutral')
   })
 
   it('maps a bad-tone status correctly', () => {
     render(<StatusBadge status="rejected" />)
-    expect(screen.getByText('rejected').className).toContain('badge-bad')
+    const badge = screen.getByText('rejected')
+    expect(badge.className).toContain('tp-badge')
+    expect(badge.className).toContain('bad')
   })
 })

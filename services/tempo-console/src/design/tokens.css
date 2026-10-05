@@ -41,7 +41,7 @@
   --tp-chart-grid: #e3e8ea;
   /* scale */
   --tp-space-1: 4px; --tp-space-2: 8px; --tp-space-3: 12px; --tp-space-4: 16px; --tp-space-5: 24px; --tp-space-6: 32px;
-  --tp-radius-s: 6px; --tp-radius-m: 10px; --tp-radius-l: 14px;
+  --tp-radius-s: 6px; --tp-radius-m: 8px; --tp-radius-l: 12px;
   --tp-shadow-1: 0 1px 2px rgba(27, 38, 43, 0.08);
   --tp-shadow-2: 0 6px 20px rgba(27, 38, 43, 0.16);
   --tp-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
