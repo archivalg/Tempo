@@ -1,0 +1,1965 @@
+diff --git a/docs/build-progress.md b/docs/build-progress.md
+index 5a07be7..446f2e9 100644
+--- a/docs/build-progress.md
++++ b/docs/build-progress.md
+@@ -120,3 +120,16 @@ Limits to be honest about: synchronous apply only (batches over 20,000 rows are
+ With the installed FastAPI (0.141), the database session's `commit()` ran **after** the response was sent. Consequences: a client could be told "done" before the write was visible to the next request (this is what made one browser test flaky), and a commit that failed would never have reached the caller. Fixed with a function-scoped dependency on the API router that commits before the response (`commit_before_response`). `tests/test_commit_ordering.py` fails without the fix (a separate connection sees nothing when the response starts) and passes with it.
+ 
+ Migration `e1f2a3b4c5d6` adds the ingestion tables (tenant row security; site-scoped where they carry a site; DELETE revoked on evidence tables).
++
++## UI/UX foundation pass (2 Oct 2026) — status: **partial, not accepted**
++
++Implemented a shared SaaS UI foundation across the console without changing production deployment or claiming functional acceptance:
++
++- Added `docs/ui-design-system.md` and root `AGENTS.md` so future work follows the Tempo tokens, shell conventions, table/form/status patterns, responsive rules and kiosk/mobile guidance.
++- Added customer Help, Plans & billing and Platform administration shells. These are honest shells: billing remains indicative and not connected to Stripe; platform support access is described as requiring time-boxed grants; API contracts are recorded as next steps.
++- Reworked Connections & onboarding into the shared Tempo component system, with clear Deputy/second-vendor status and pending-credentials wording.
++- Tightened shared CSS so the new shell is not constrained by legacy global `main`/`form` rules, added reusable tile grids and mobile layout refinements, and kept cards at the design-system radius.
++- Added a visible platform-operator session banner in the application shell.
++- Continued the pass across the remaining legacy routes: Team & Skills, Optimisation Studio, Runs, Actions and Kiosk now use the shared shell/components/status styles. Added `docs/ui-route-checklist.md` for route-by-route status, dependencies and browser evidence tracking.
++
++Verification: `npm test` and `npm run build` pass; `npm run lint` exits 0 with existing warnings. Browser/e2e screenshots remain blocked in this sandbox: cached Chromium starts but exits before page creation with `setsockopt: Operation not permitted`, and cached `headless_shell` fails at sandbox host shutdown with `Operation not permitted`. Capture screenshots and rerun Playwright in an authorised environment that permits Chromium process setup before treating the UX foundation as accepted.
+diff --git a/services/tempo-console/src/App.tsx b/services/tempo-console/src/App.tsx
+index 5deba7e..087da32 100644
+--- a/services/tempo-console/src/App.tsx
++++ b/services/tempo-console/src/App.tsx
+@@ -11,6 +11,8 @@ import AttendancePage from './pages/Attendance'
+ import DemandPage from './pages/Demand'
+ import ReportsPage from './pages/Reports'
+ import AccountPage from './pages/Account'
++import BillingPage from './pages/Billing'
++import HelpPage from './pages/Help'
+ import InvitePage from './pages/Invite'
+ import { KioskPage } from './pages/Kiosk'
+ import { LabourProvidersPage } from './pages/LabourProviders'
+@@ -19,6 +21,7 @@ import { NewActionPage } from './pages/NewAction'
+ import { NewRunPage } from './pages/NewRun'
+ import { OnboardingPage } from './pages/Onboarding'
+ import OverviewPage from './pages/Overview'
++import PlatformAdminPage from './pages/PlatformAdmin'
+ import RosterPlannerPage from './pages/RosterPlanner'
+ import { RunComparisonsPage } from './pages/RunComparisons'
+ import { RunDetailPage } from './pages/RunDetail'
+@@ -50,6 +53,9 @@ function App() {
+             <Route path="/onboarding" element={<OnboardingPage />} />
+             <Route path="/providers" element={<LabourProvidersPage />} />
+             <Route path="/admin" element={<AdminPage />} />
++            <Route path="/billing" element={<BillingPage />} />
++            <Route path="/help" element={<HelpPage />} />
++            <Route path="/platform" element={<PlatformAdminPage />} />
+             <Route path="/audit" element={<AuditPage />} />
+             <Route path="/data" element={<DataPage />} />
+             <Route path="/account" element={<AccountPage />} />
+diff --git a/services/tempo-console/src/api/client.test.ts b/services/tempo-console/src/api/client.test.ts
+index 60dee02..4ac1fc0 100644
+--- a/services/tempo-console/src/api/client.test.ts
++++ b/services/tempo-console/src/api/client.test.ts
+@@ -17,7 +17,7 @@ describe('apiFetch', () => {
+     vi.unstubAllGlobals()
+   })
+ 
+-  it('sends the X-Tempo-Context header as JSON and returns the parsed body', async () => {
++  it('ignores the legacy context object and returns the parsed body', async () => {
+     const fetchMock = vi.fn().mockResolvedValue(
+       new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+     )
+@@ -27,17 +27,20 @@ describe('apiFetch', () => {
+ 
+     expect(result).toEqual({ ok: true })
+     const [, init] = fetchMock.mock.calls[0]
+-    expect(JSON.parse(init.headers['X-Tempo-Context'])).toEqual(context)
++    expect(init.credentials).toBe('include')
++    expect(init.headers['X-Tempo-Context']).toBeUndefined()
+   })
+ 
+-  it('includes the Idempotency-Key header when provided', async () => {
++  it('includes CSRF and Idempotency-Key headers for mutations when provided', async () => {
+     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 202 }))
+     vi.stubGlobal('fetch', fetchMock)
++    document.cookie = 'tempo_csrf=csrf-123'
+ 
+     await apiFetch('/actions', context, { method: 'POST', body: { a: 1 }, idempotencyKey: 'key-123' })
+ 
+     const [, init] = fetchMock.mock.calls[0]
+     expect(init.headers['Idempotency-Key']).toBe('key-123')
++    expect(init.headers['X-CSRF-Token']).toBe('csrf-123')
+     expect(init.headers['Content-Type']).toBe('application/json')
+     expect(init.body).toBe(JSON.stringify({ a: 1 }))
+   })
+diff --git a/services/tempo-console/src/components/AppShell.tsx b/services/tempo-console/src/components/AppShell.tsx
+index 29478f9..acf4eb4 100644
+--- a/services/tempo-console/src/components/AppShell.tsx
++++ b/services/tempo-console/src/components/AppShell.tsx
+@@ -12,7 +12,7 @@ interface SiteCtx { sites: SiteSummary[]; site: SiteSummary | null; setSite: (id
+ const SiteContext = createContext<SiteCtx>({ sites: [], site: null, setSite: () => {} })
+ export const useSite = () => useContext(SiteContext)
+ 
+-const NAV: { to: string; label: string; perm: string; end?: boolean; group?: string }[] = [
++const NAV: { to: string; label: string; perm?: string; end?: boolean; group?: string; platform?: boolean }[] = [
+   { to: '/', label: 'Overview', perm: 'labour.read', end: true, group: 'Operate' },
+   { to: '/demand', label: 'Demand', perm: 'labour.read' },
+   { to: '/roster', label: 'Roster Planner', perm: 'labour.read' },
+@@ -25,7 +25,10 @@ const NAV: { to: string; label: string; perm: string; end?: boolean; group?: str
+   { to: '/data', label: 'Data', perm: 'labour.data.import' },
+   { to: '/onboarding', label: 'Connections', perm: 'labour.configure' },
+   { to: '/admin', label: 'Administration', perm: 'labour.configure' },
++  { to: '/billing', label: 'Plans & billing', perm: 'labour.configure' },
+   { to: '/audit', label: 'Audit log', perm: 'labour.configure' },
++  { to: '/help', label: 'Help library', perm: 'labour.read', group: 'Support' },
++  { to: '/platform', label: 'Platform admin', platform: true, group: 'Platform' },
+ ]
+ 
+ export function AppShell() {
+@@ -45,7 +48,7 @@ export function AppShell() {
+   if (status === 'anonymous' || !access) return <LoginPage />
+ 
+   const setSite = (id: string) => { const p = new URLSearchParams(params); p.set('site', id); setParams(p, { replace: true }) }
+-  const nav = NAV.filter((n) => can(n.perm))
++  const nav = NAV.filter((n) => (n.platform ? access.platform_admin : n.perm ? can(n.perm) : true))
+   return (
+     <SiteContext.Provider value={{ sites, site, setSite }}>
+       <div className="tp-app">
+@@ -71,6 +74,7 @@ export function AppShell() {
+             <div className="tp-user">
+               <div><div>{access.roles.map((r) => r.replace(/_/g, ' ')).join(', ') || 'no role'}</div><small>{access.tenant_id}{access.mfa_verified ? ' · MFA' : ''}</small></div>
+               <NotificationBell />
++              <NavLink className="tp-iconbtn" style={{ textDecoration: 'none' }} to="/help">Help</NavLink>
+               <NavLink className="tp-iconbtn" style={{ textDecoration: 'none' }} to="/account">Account</NavLink>
+               <button className="tp-iconbtn" onClick={() => void signOut()}>Sign out</button>
+             </div>
+@@ -87,6 +91,7 @@ export function AppShell() {
+           </aside>
+           <main className="tp-main" id="main" tabIndex={-1}>
+             {access.mfa_required && <Banner tone="warn" title="Set up two-step verification">Your role needs it. Until then admin actions are unavailable. <NavLink to="/account">Set it up now</NavLink></Banner>}
++            {access.platform_admin && <Banner tone="info" title="Platform operator session">You are signed in as a platform operator. Customer data access must use a time-boxed support grant and remain visibly separate from ordinary customer login.</Banner>}
+             {sitesQ.error ? <Banner tone="bad" title="Could not load your sites">Try again shortly.</Banner> : <Outlet />}
+           </main>
+         </div>
+diff --git a/services/tempo-console/src/components/StatusBadge.test.tsx b/services/tempo-console/src/components/StatusBadge.test.tsx
+index 51c9b22..c107cca 100644
+--- a/services/tempo-console/src/components/StatusBadge.test.tsx
++++ b/services/tempo-console/src/components/StatusBadge.test.tsx
+@@ -8,14 +8,17 @@ describe('StatusBadge', () => {
+     expect(screen.getByText('completed')).toBeInTheDocument()
+   })
+ 
+-  it('gives an unrecognised status the info tone rather than throwing', () => {
++  it('gives an unrecognised status the neutral Tempo tone rather than throwing', () => {
+     render(<StatusBadge status="something_new" />)
+-    const badge = screen.getByText('something_new')
+-    expect(badge.className).toContain('badge-info')
++    const badge = screen.getByText('something new')
++    expect(badge.className).toContain('tp-badge')
++    expect(badge.className).toContain('neutral')
+   })
+ 
+   it('maps a bad-tone status correctly', () => {
+     render(<StatusBadge status="rejected" />)
+-    expect(screen.getByText('rejected').className).toContain('badge-bad')
++    const badge = screen.getByText('rejected')
++    expect(badge.className).toContain('tp-badge')
++    expect(badge.className).toContain('bad')
+   })
+ })
+diff --git a/services/tempo-console/src/components/StatusBadge.tsx b/services/tempo-console/src/components/StatusBadge.tsx
+index 0e513ee..d28f10b 100644
+--- a/services/tempo-console/src/components/StatusBadge.tsx
++++ b/services/tempo-console/src/components/StatusBadge.tsx
+@@ -1,17 +1,17 @@
+ const TONE_BY_STATUS: Record<string, string> = {
+-  completed: 'good',
+-  confirmed: 'good',
+-  approved: 'good',
+-  completed_with_warnings: 'warn',
+-  partially_confirmed: 'warn',
+-  validated: 'warn',
+-  submitted: 'warn',
+-  unknown: 'warn',
+-  pending_credentials: 'warn',
+-  running: 'info',
+-  queued: 'info',
+-  accepted: 'info',
+-  validating: 'info',
++  completed: 'ok',
++  confirmed: 'ok',
++  approved: 'ok',
++  completed_with_warnings: 'risk',
++  partially_confirmed: 'risk',
++  validated: 'risk',
++  submitted: 'risk',
++  unknown: 'risk',
++  pending_credentials: 'risk',
++  running: 'neutral',
++  queued: 'neutral',
++  accepted: 'neutral',
++  validating: 'neutral',
+   failed: 'bad',
+   rejected: 'bad',
+   cancelled: 'bad',
+@@ -19,6 +19,7 @@ const TONE_BY_STATUS: Record<string, string> = {
+ }
+ 
+ export function StatusBadge({ status }: { status: string }) {
+-  const tone = TONE_BY_STATUS[status] ?? 'info'
+-  return <span className={`badge badge-${tone}`}>{status}</span>
++  const tone = TONE_BY_STATUS[status] ?? 'neutral'
++  const icon = tone === 'ok' ? '✓' : tone === 'risk' ? '▲' : tone === 'bad' ? '✕' : '●'
++  return <span className={`tp-badge ${tone}`}><span aria-hidden="true">{icon}</span>{status.replace(/_/g, ' ')}</span>
+ }
+diff --git a/services/tempo-console/src/design/tempo.css b/services/tempo-console/src/design/tempo.css
+index 432bc8e..6a89321 100644
+--- a/services/tempo-console/src/design/tempo.css
++++ b/services/tempo-console/src/design/tempo.css
+@@ -23,7 +23,7 @@
+ .tp-spacer { flex: 1; }
+ .tp-search { background: var(--tp-charcoal-2); border: 1px solid var(--tp-charcoal-3); color: var(--tp-on-chrome); border-radius: var(--tp-radius-s); padding: 7px 10px; width: 220px; }
+ .tp-search::placeholder { color: var(--tp-on-chrome-muted); }
+-.tp-iconbtn { background: transparent; border: 1px solid transparent; color: var(--tp-on-chrome); border-radius: var(--tp-radius-s); padding: 6px 9px; cursor: pointer; }
++.tp-iconbtn { background: transparent; border: 1px solid transparent; color: var(--tp-on-chrome); border-radius: var(--tp-radius-s); padding: 6px 9px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+ .tp-iconbtn:hover { background: var(--tp-charcoal-2); }
+ .tp-user { display: flex; align-items: center; gap: var(--tp-space-2); font-size: 13px; }
+ .tp-user small { color: var(--tp-on-chrome-muted); display: block; }
+@@ -33,7 +33,8 @@
+ .tp-side a:hover { background: var(--tp-charcoal-2); color: var(--tp-on-chrome); }
+ .tp-side a[aria-current='page'] { background: var(--tp-charcoal-3); color: #fff; box-shadow: inset 3px 0 0 var(--tp-green); }
+ .tp-side .tp-navgroup { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--tp-on-chrome-muted); padding: 14px 12px 4px; }
+-.tp-main { padding: var(--tp-space-5); min-width: 0; }
++.tp-main { padding: var(--tp-space-5); min-width: 0; max-width: none; width: auto; margin: 0; flex: initial; }
++.tp-app form { max-width: none; }
+ .tp-page-head { display: flex; align-items: flex-end; gap: var(--tp-space-4); flex-wrap: wrap; margin-bottom: var(--tp-space-4); }
+ .tp-page-head h1 { margin: 0; font-size: 24px; letter-spacing: -.01em; }
+ .tp-page-head .tp-sub { color: var(--tp-ink-muted); }
+@@ -73,6 +74,12 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
+ .tp-grid { display: grid; gap: var(--tp-space-4); grid-template-columns: minmax(0, 1fr) 340px; align-items: start; }
+ .tp-stack { display: flex; flex-direction: column; gap: var(--tp-space-4); min-width: 0; }
+ .tp-row { display: flex; gap: var(--tp-space-3); align-items: center; flex-wrap: wrap; }
++.tp-tilegrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--tp-space-3); }
++.tp-tile { display: flex; flex-direction: column; gap: 6px; padding: 14px; min-height: 112px; border: 1px solid var(--tp-line); border-radius: var(--tp-radius-m); background: var(--tp-surface); color: inherit; text-decoration: none; }
++.tp-tile:hover { border-color: var(--tp-line-strong); background: var(--tp-surface-2); }
++.tp-tile b { font-size: 15px; }
++.tp-tile span, .tp-tile small { color: var(--tp-ink-muted); }
++.tp-code { overflow: auto; background: var(--tp-surface-2); border: 1px solid var(--tp-line); border-radius: var(--tp-radius-s); padding: 10px; font-family: var(--tp-font-mono); font-size: 12.5px; line-height: 1.45; max-height: 420px; }
+ 
+ /* ---------- chart ---------- */
+ .tp-chart { width: 100%; height: auto; display: block; }
+@@ -99,7 +106,7 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
+ .tp-item:hover { background: var(--tp-surface-2); }
+ .tp-item .t { font-weight: 600; } .tp-item .s { color: var(--tp-ink-muted); font-size: 12.5px; }
+ .tp-table { width: 100%; border-collapse: collapse; }
+-.tp-table th, .tp-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--tp-line); vertical-align: middle; }
++.tp-table th, .tp-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--tp-line); vertical-align: middle; overflow-wrap: anywhere; }
+ .tp-table th { font-size: 12px; color: var(--tp-ink-muted); font-weight: 600; background: var(--tp-surface-2); position: sticky; top: 0; }
+ .tp-btn { font: inherit; border: 1px solid var(--tp-line-strong); background: var(--tp-surface); color: var(--tp-ink); border-radius: var(--tp-radius-s); padding: 7px 12px; cursor: pointer; font-weight: 600; }
+ .tp-btn:hover { background: var(--tp-surface-2); }
+@@ -151,6 +158,26 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
+ .tp-login .tp-card { width: min(440px, 100%); padding: 28px; }
+ .tp-login img { height: 56px; margin-bottom: 8px; }
+ 
++/* ---------- kiosk ---------- */
++.tp-kiosk { min-height: 100svh; background: var(--tp-charcoal); color: var(--tp-on-chrome); display: grid; place-items: center; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); touch-action: manipulation; }
++.tp-kiosk-main { width: min(620px, 100%); }
++.tp-kiosk-logo { height: 44px; margin-bottom: 12px; }
++.tp-kiosk-card { padding: 24px; color: var(--tp-ink); }
++.tp-touch { min-height: 52px; font-size: 18px; padding: 12px 18px; }
++.tp-wide { width: 100%; margin-top: 12px; }
++.tp-grow { flex: 1; }
++.tp-kiosk-field { flex: 1; justify-content: center; font-size: 20px; }
++.tp-kiosk-field.active { outline: 3px solid var(--tp-focus); }
++.tp-keypad { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
++.tp-key { min-height: 64px; font-size: 28px; }
++.tp-key.small { font-size: 18px; }
++@media (orientation: landscape) and (max-height: 560px) {
++  .tp-kiosk { align-items: start; }
++  .tp-kiosk-main { width: min(860px, 100%); }
++  .tp-kiosk-card { padding: 16px; }
++  .tp-key { min-height: 52px; }
++}
++
+ /* ---------- responsive ---------- */
+ @media (max-width: 1180px) { .tp-grid { grid-template-columns: minmax(0, 1fr); } .tp-search { display: none; } }
+ @media (max-width: 900px) {
+@@ -161,6 +188,19 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
+   .tp-side nav { flex-direction: row; overflow-x: auto; } .tp-side a { white-space: nowrap; } .tp-side .tp-navgroup { display: none; }
+   .tp-main { padding: 12px; } .tp-sitepick { min-width: 0; }
+   .tp-band { grid-template-columns: repeat(2, 1fr); } .tp-band > :first-child { display: none; }
++  .tp-user { width: 100%; justify-content: flex-start; }
++  .tp-tilegrid { grid-template-columns: 1fr; }
++}
++@media (max-width: 620px) {
++  .tp-page-head { align-items: stretch; }
++  .tp-page-head > div:first-child { width: 100%; }
++  .tp-page-head .tp-row, .tp-page-head .tp-field { width: 100%; }
++  .tp-page-head .tp-btn { flex: 1; }
++  .tp-board { max-height: none; }
++}
++
++@supports (padding: max(0px)) {
++  .tp-app { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+ }
+ 
+ .tp-add { display: block; width: 100%; border: 1px dashed transparent; background: none; color: var(--tp-ink-muted); font: inherit; font-size: 11px; padding: 1px 0; cursor: pointer; opacity: 0; border-radius: 4px; }
+@@ -183,7 +223,7 @@ a.tp-kpi:hover { border-color: var(--tp-line-strong); }
+ /* notification bell */
+ .tp-bell { position: relative; }
+ .tp-bell .tp-count { margin-left: 6px; background: var(--tp-red); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+-.tp-bellpanel { position: fixed; right: 16px; left: auto; top: 100px; font-size: 13px; width: 360px; max-width: 92vw; z-index: 40; color: var(--tp-ink); background: var(--tp-surface); border: 1px solid var(--tp-line-strong); border-radius: var(--tp-radius); padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
++.tp-bellpanel { position: fixed; right: 16px; left: auto; top: 100px; font-size: 13px; width: 360px; max-width: 92vw; z-index: 40; color: var(--tp-ink); background: var(--tp-surface); border: 1px solid var(--tp-line-strong); border-radius: var(--tp-radius-m); padding: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+ .tp-notice { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; width: 100%; text-align: left; padding: 9px 4px; border: 0; border-bottom: 1px solid var(--tp-line); background: none; color: inherit; font: inherit; cursor: pointer; }
+ .tp-notice.unread .t { font-weight: 700; }
+-.tp-notice:hover { background: var(--tp-bg); }
++.tp-notice:hover { background: var(--tp-surface-2); }
+diff --git a/services/tempo-console/src/design/tokens.css b/services/tempo-console/src/design/tokens.css
+index eea31de..edb2b74 100644
+--- a/services/tempo-console/src/design/tokens.css
++++ b/services/tempo-console/src/design/tokens.css
+@@ -41,7 +41,7 @@
+   --tp-chart-grid: #e3e8ea;
+   /* scale */
+   --tp-space-1: 4px; --tp-space-2: 8px; --tp-space-3: 12px; --tp-space-4: 16px; --tp-space-5: 24px; --tp-space-6: 32px;
+-  --tp-radius-s: 6px; --tp-radius-m: 10px; --tp-radius-l: 14px;
++  --tp-radius-s: 6px; --tp-radius-m: 8px; --tp-radius-l: 12px;
+   --tp-shadow-1: 0 1px 2px rgba(27, 38, 43, 0.08);
+   --tp-shadow-2: 0 6px 20px rgba(27, 38, 43, 0.16);
+   --tp-font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+diff --git a/services/tempo-console/src/pages/ActionDetail.tsx b/services/tempo-console/src/pages/ActionDetail.tsx
+index e14d86d..c20fe78 100644
+--- a/services/tempo-console/src/pages/ActionDetail.tsx
++++ b/services/tempo-console/src/pages/ActionDetail.tsx
+@@ -1,6 +1,6 @@
+ import { useState } from 'react'
+ import { Link, useParams } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, PageHead, Skeleton } from '../components/ui'
+ import { StatusBadge } from '../components/StatusBadge'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { useApi } from '../hooks/useApi'
+@@ -25,18 +25,18 @@ export function ActionDetailPage() {
+   const needsReconciliation = data?.status === 'unknown' || data?.status === 'partially_confirmed'
+ 
+   return (
+-    <div className="page">
+-      <div className="page-header">
+-        <h1>Action {actionId}</h1>
++    <>
++      <PageHead title={`Action ${actionId}`} sub="Validated writeback evidence, status and reconciliation.">
+         {data && <StatusBadge status={data.status} />}
+-      </div>
++      </PageHead>
+ 
+-      <ErrorBanner error={error} />
+-      {loading && <p>Loading...</p>}
++      {error ? <Banner tone="bad" title="Could not load action">{error instanceof Error ? error.message : String(error)}</Banner> : null}
++      {loading && <Skeleton h={160} />}
+ 
+       {data && (
+-        <section className="card">
+-          <dl>
++        <section className="tp-card">
++          <div className="tp-body">
++          <dl className="tp-dl">
+             <dt>Action type</dt>
+             <dd>{data.action_type}</dd>
+             <dt>Recommendation</dt>
+@@ -55,18 +55,16 @@ export function ActionDetailPage() {
+ 
+           {needsReconciliation && (
+             <>
+-              <p className="hint">
+-                No real vendor writeback connector exists yet (see services/tempo-api README's Phase E section) — an
+-                <code> unknown</code> outcome needs reconciliation before any retry.
+-              </p>
+-              <button onClick={handleReconcile}>Reconcile</button>
+-              <ErrorBanner error={reconcileError} />
++              <Banner tone="warn" title="Reconciliation required">No real vendor writeback connector exists yet. Unknown outcomes must be reconciled before any retry.</Banner>
++              <button className="tp-btn primary" onClick={handleReconcile}>Reconcile</button>
++              {reconcileError ? <Banner tone="bad" title="Could not reconcile">{reconcileError instanceof Error ? reconcileError.message : String(reconcileError)}</Banner> : null}
+             </>
+           )}
++          </div>
+         </section>
+       )}
+ 
+-      <Link to="/actions">Back to actions</Link>
+-    </div>
++      <p><Link to="/actions">Back to actions</Link></p>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/ActionsList.tsx b/services/tempo-console/src/pages/ActionsList.tsx
+index 6f05088..e787d13 100644
+--- a/services/tempo-console/src/pages/ActionsList.tsx
++++ b/services/tempo-console/src/pages/ActionsList.tsx
+@@ -1,6 +1,6 @@
+ import { useState } from 'react'
+ import { Link } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, Empty, PageHead, Skeleton } from '../components/ui'
+ import { StatusBadge } from '../components/StatusBadge'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { useApi } from '../hooks/useApi'
+@@ -14,28 +14,31 @@ export function ActionsListPage() {
+   const { data, error, loading, reload } = useApi(() => listActions(context!, { status: status || undefined }), [context, status])
+ 
+   return (
+-    <div className="page">
+-      <h1>Actions</h1>
+-      <div className="filters">
+-        <label>
+-          Status
+-          <select value={status} onChange={(e) => setStatus(e.target.value)}>
++    <>
++      <PageHead title="Controlled actions" sub="Validated writeback and reconciliation history. Native publication uses Roster Planner for everyday work.">
++        <Link className="tp-btn primary" style={{ textDecoration: 'none' }} to="/actions/new">New action</Link>
++      </PageHead>
++      <section className="tp-card">
++        <header><h2>Action history</h2><button className="tp-btn" onClick={reload}>Refresh</button></header>
++        <div className="tp-body tp-row">
++          <label className="tp-field">
++            Status
++            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+             <option value="">All</option>
+             {STATUSES.map((s) => (
+               <option key={s} value={s}>
+                 {s}
+               </option>
+             ))}
+-          </select>
+-        </label>
+-        <button onClick={reload}>Refresh</button>
+-      </div>
++            </select>
++          </label>
++        </div>
+ 
+-      <ErrorBanner error={error} />
+-      {loading && <p>Loading...</p>}
+-      {data && data.actions.length === 0 && <p>No actions yet — validate one from a completed run.</p>}
++      {error ? <div className="tp-body"><Banner tone="bad" title="Could not load actions">{error instanceof Error ? error.message : String(error)}</Banner></div> : null}
++      {loading && <div className="tp-body"><Skeleton h={160} /></div>}
++      {data && data.actions.length === 0 && <Empty title="No actions yet">Validate one from a completed run, or publish native rosters from Roster Planner.</Empty>}
+       {data && data.actions.length > 0 && (
+-        <table>
++        <table className="tp-table">
+           <thead>
+             <tr>
+               <th>Action ID</th>
+@@ -62,6 +65,7 @@ export function ActionsListPage() {
+           </tbody>
+         </table>
+       )}
+-    </div>
++      </section>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/Data.tsx b/services/tempo-console/src/pages/Data.tsx
+index bbd27d0..c6c901f 100644
+--- a/services/tempo-console/src/pages/Data.tsx
++++ b/services/tempo-console/src/pages/Data.tsx
+@@ -133,7 +133,7 @@ function ApiTab() {
+       <section className="tp-card" aria-label="API reference"><header><h2>Sending data</h2></header>
+         <div className="tp-body tp-stack">
+           <p style={{ margin: 0 }}>Send rows as JSON. Add an <code>Idempotency-Key</code> so a retry returns the same receipt instead of loading twice. The templates below list every field.</p>
+-          <pre style={{ overflow: 'auto', background: 'var(--tp-bg)', padding: 10, borderRadius: 6, fontSize: 12.5 }}>{`curl -X POST ${origin}/v1/imports/batches \\
++          <pre style={{ overflow: 'auto', background: 'var(--tp-surface-2)', padding: 10, borderRadius: 6, fontSize: 12.5 }}>{`curl -X POST ${origin}/v1/imports/batches \\
+   -H "Authorization: Bearer tsc_…" -H "Idempotency-Key: feed-2026-10-05" -H "Content-Type: application/json" \\
+   -d '{"data_class":"bulk","apply":true,"rows":[{"site":"mel_dc_01","activity":"picking","period_start":"2026-10-05","grain":"day","units":26140}]}'`}</pre>
+           <div className="tp-row" role="group" aria-label="Templates">
+diff --git a/services/tempo-console/src/pages/Kiosk.tsx b/services/tempo-console/src/pages/Kiosk.tsx
+index b2a13c2..779d775 100644
+--- a/services/tempo-console/src/pages/Kiosk.tsx
++++ b/services/tempo-console/src/pages/Kiosk.tsx
+@@ -70,58 +70,60 @@ export function KioskPage() {
+ 
+   const pad = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+   return (
+-    <div className="tp-app" style={{ minHeight: '100vh', background: 'var(--tp-charcoal)', color: 'var(--tp-on-chrome)', display: 'grid', placeItems: 'center', padding: 16 }}>
+-      <main style={{ width: 'min(560px, 100%)' }} aria-live="polite">
+-        <img src="/brand/tempo-lockup-dark.png" alt="Tempo" style={{ height: 44, marginBottom: 12 }} />
++    <div className="tp-app tp-kiosk" aria-live="polite">
++      <main className="tp-kiosk-main">
++        <img src="/brand/tempo-lockup-dark.png" alt="Tempo" className="tp-kiosk-logo" />
+         {screen === 'enrol' && (
+-          <div className="tp-card" style={{ padding: 24, color: 'var(--tp-ink)' }}>
++          <div className="tp-card tp-kiosk-card">
+             <h1 style={{ marginTop: 0 }}>Set up this kiosk</h1>
+             <p className="tp-muted">An administrator creates the device in Administration and gives you a one-time code (valid 15 minutes).</p>
+             <label className="tp-field">Enrolment code<input value={code} onChange={(e) => setCode(e.target.value)} autoFocus autoComplete="off" style={{ fontSize: 20 }} /></label>
+             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)' }}>{msg}</p>}
+-            <button className="tp-btn primary" style={{ marginTop: 12, fontSize: 18, padding: '12px 20px' }} disabled={busy || code.length < 8} onClick={() => void enrol()}>Enrol device</button>
++            <button className="tp-btn primary tp-touch" disabled={busy || code.length < 8} onClick={() => void enrol()}>Enrol device</button>
+           </div>
+         )}
+         {screen === 'offline' && (
+-          <div className="tp-card" style={{ padding: 24, color: 'var(--tp-ink)' }}>
++          <div className="tp-card tp-kiosk-card">
+             <h1 style={{ marginTop: 0 }}>Cannot clock right now</h1>
+             <p>Tempo can’t be reached and this kiosk does not store punches offline. Please tell your supervisor — they will record your time.</p>
+-            <button className="tp-btn primary" style={{ fontSize: 18, padding: '12px 20px' }} onClick={reset}>Try again</button>
++            <button className="tp-btn primary tp-touch" onClick={reset}>Try again</button>
+           </div>
+         )}
+         {screen === 'idle' && (
+-          <div className="tp-card" style={{ padding: 20, color: 'var(--tp-ink)' }}>
++          <div className="tp-card tp-kiosk-card">
+             <h1 style={{ marginTop: 0, fontSize: 22 }}>Clock in or out</h1>
+             <div className="tp-row" style={{ marginBottom: 12 }}>
+-              <button className="tp-btn" style={{ flex: 1, fontSize: 20, padding: 14, ...(field === 'worker' ? { outline: '3px solid var(--tp-focus)' } : {}) }} aria-pressed={field === 'worker'} onClick={() => setField('worker')}>Worker no.: <b className="tp-num">{worker || '—'}</b></button>
+-              <button className="tp-btn" style={{ flex: 1, fontSize: 20, padding: 14, ...(field === 'pin' ? { outline: '3px solid var(--tp-focus)' } : {}) }} aria-pressed={field === 'pin'} onClick={() => setField('pin')}>PIN: <b className="tp-num" aria-label={`${pin.length} digits entered`}>{'•'.repeat(pin.length) || '—'}</b></button>
++              <button className={`tp-btn tp-touch tp-kiosk-field${field === 'worker' ? ' active' : ''}`} aria-pressed={field === 'worker'} onClick={() => setField('worker')}>Worker no.: <b className="tp-num">{worker || '—'}</b></button>
++              <button className={`tp-btn tp-touch tp-kiosk-field${field === 'pin' ? ' active' : ''}`} aria-pressed={field === 'pin'} onClick={() => setField('pin')}>PIN: <b className="tp-num" aria-label={`${pin.length} digits entered`}>{'•'.repeat(pin.length) || '—'}</b></button>
+             </div>
+-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+-              {pad.map((d) => (<button key={d} className="tp-btn" style={{ fontSize: 28, padding: 18 }} onClick={() => press(d)}>{d}</button>))}
+-              <button className="tp-btn" style={{ fontSize: 18 }} onClick={() => (field === 'worker' ? setWorker('') : setPin(''))}>Clear</button>
+-              <button className="tp-btn" style={{ fontSize: 28, padding: 18 }} onClick={() => press('0')}>0</button>
+-              <button className="tp-btn" style={{ fontSize: 18 }} onClick={back} aria-label="Backspace">⌫</button>
++            <div className="tp-keypad">
++              {pad.map((d) => (<button key={d} className="tp-btn tp-key" onClick={() => press(d)}>{d}</button>))}
++              <button className="tp-btn tp-key small" onClick={() => (field === 'worker' ? setWorker('') : setPin(''))}>Clear</button>
++              <button className="tp-btn tp-key" onClick={() => press('0')}>0</button>
++              <button className="tp-btn tp-key small" onClick={back} aria-label="Backspace">⌫</button>
+             </div>
+             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)', fontSize: 18 }}>{msg}</p>}
+-            <button className="tp-btn primary" style={{ width: '100%', marginTop: 12, fontSize: 22, padding: 16 }} disabled={busy || !worker || !pin} onClick={() => void verify()}>Continue</button>
++            <button className="tp-btn primary tp-touch tp-wide" disabled={busy || !worker || !pin} onClick={() => void verify()}>{busy ? 'Checking…' : 'Continue'}</button>
+           </div>
+         )}
+         {screen === 'confirm' && who && (
+-          <div className="tp-card" style={{ padding: 20, color: 'var(--tp-ink)' }}>
++          <div className="tp-card tp-kiosk-card">
+             <h1 style={{ marginTop: 0, fontSize: 22 }}>Hello, worker <span className="tp-num">{who.masked_identity}</span></h1>
+             <p style={{ fontSize: 18 }}>{who.has_open_session ? 'You are clocked in.' : 'You are not clocked in.'}</p>
+             <h2 style={{ fontSize: 15 }}>Your upcoming shifts</h2>
+             {who.upcoming_shifts.length === 0 ? <p className="tp-muted">No upcoming shifts.</p> : <ul style={{ paddingLeft: 18 }}>{who.upcoming_shifts.slice(0, 4).map((s) => (<li key={s.shift_id} className="tp-num">{new Date(s.start_at).toLocaleString('en-AU', { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })} – {new Date(s.end_at).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit', hour12: false })} · {s.role}</li>))}</ul>}
+             {msg && <p role="alert" style={{ color: 'var(--tp-red-ink)' }}>{msg}</p>}
+             <div className="tp-row">
+-              {!who.has_open_session ? <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-in')}>Clock in</button>
+-                : <button className="tp-btn primary" style={{ flex: 1, fontSize: 24, padding: 18 }} disabled={busy} onClick={() => void punch('clock-out')}>Clock out</button>}
+-              <button className="tp-btn" style={{ fontSize: 18, padding: 18 }} onClick={reset}>Cancel</button>
++              {!who.has_open_session ? <button className="tp-btn primary tp-touch tp-grow" disabled={busy} onClick={() => void punch('clock-in')}>{busy ? 'Recording…' : 'Clock in'}</button>
++                : <button className="tp-btn primary tp-touch tp-grow" disabled={busy} onClick={() => void punch('clock-out')}>{busy ? 'Recording…' : 'Clock out'}</button>}
++              <button className="tp-btn tp-touch" disabled title="Break capture is not configured in this release">Break</button>
++              <button className="tp-btn tp-touch" onClick={reset}>Cancel</button>
+             </div>
++            <p className="tp-muted">Break capture is planned but not configured. See a supervisor for break corrections.</p>
+           </div>
+         )}
+         {screen === 'done' && (
+-          <div className="tp-card" style={{ padding: 28, color: 'var(--tp-ink)', textAlign: 'center' }}>
++          <div className="tp-card tp-kiosk-card" style={{ textAlign: 'center' }}>
+             <div aria-hidden="true" style={{ fontSize: 48, color: 'var(--tp-green-ink)' }}>✓</div>
+             <h1 style={{ fontSize: 26 }}>{msg}</h1>
+             <p className="tp-muted">This screen clears automatically.</p>
+diff --git a/services/tempo-console/src/pages/LabourProviders.tsx b/services/tempo-console/src/pages/LabourProviders.tsx
+index b8f1eeb..299529f 100644
+--- a/services/tempo-console/src/pages/LabourProviders.tsx
++++ b/services/tempo-console/src/pages/LabourProviders.tsx
+@@ -1,19 +1,19 @@
+ import { useState, type FormEvent } from 'react'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, Empty, PageHead, Skeleton, Status } from '../components/ui'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { useApi } from '../hooks/useApi'
+ import { addCertification, createProvider, listProviders, listSuppliedWorkers, registerSuppliedWorker } from '../api/providers'
+ 
+ export function LabourProvidersPage() {
+-  const { context } = useTempoContext()
+-  const providers = useApi(() => listProviders(context!), [context])
++  const { context, can } = useTempoContext()
++  const providers = useApi(() => (context ? listProviders(context) : Promise.resolve([])), [context])
+ 
+   const [providerName, setProviderName] = useState('')
+   const [providerError, setProviderError] = useState<unknown>(null)
+ 
+   const [activeProviderId, setActiveProviderId] = useState(context?.provider_id ?? '')
+   const workers = useApi(
+-    () => (activeProviderId ? listSuppliedWorkers(context!, activeProviderId) : Promise.resolve([])),
++    () => (context && activeProviderId ? listSuppliedWorkers(context, activeProviderId) : Promise.resolve([])),
+     [context, activeProviderId],
+   )
+ 
+@@ -27,9 +27,10 @@ export function LabourProvidersPage() {
+ 
+   async function handleCreateProvider(event: FormEvent) {
+     event.preventDefault()
++    if (!context) return
+     setProviderError(null)
+     try {
+-      await createProvider(context!, providerName)
++      await createProvider(context, providerName)
+       setProviderName('')
+       providers.reload()
+     } catch (err) {
+@@ -39,9 +40,10 @@ export function LabourProvidersPage() {
+ 
+   async function handleRegisterWorker(event: FormEvent) {
+     event.preventDefault()
++    if (!context) return
+     setWorkerError(null)
+     try {
+-      await registerSuppliedWorker(context!, activeProviderId, { home_site: workerSite })
++      await registerSuppliedWorker(context, activeProviderId, { home_site: workerSite })
+       workers.reload()
+     } catch (err) {
+       setWorkerError(err)
+@@ -50,9 +52,10 @@ export function LabourProvidersPage() {
+ 
+   async function handleAddCertification(event: FormEvent) {
+     event.preventDefault()
++    if (!context) return
+     setCertError(null)
+     try {
+-      await addCertification(context!, activeProviderId, certWorkerId, {
++      await addCertification(context, activeProviderId, certWorkerId, {
+         skill_code: certSkillCode,
+         valid_from: new Date(certValidFrom).toISOString(),
+       })
+@@ -64,119 +67,61 @@ export function LabourProvidersPage() {
+     }
+   }
+ 
++  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
++
+   return (
+-    <div className="page">
+-      <h1>Labour providers</h1>
+-      <p className="hint">
+-        Business Spec §8's Labour Provider role: "manage supplied workers, certifications, shift assignments."
+-        Registering a provider requires <code>labour.configure</code> (Tenant Admin); managing a provider's own
+-        supplied workers requires <code>labour.provider.manage</code> with a matching provider ID — a role and
+-        permission this pass added, since the Integration Spec's §5.2 table has no row for this role. A provider
+-        can only view which shifts their workers have been assigned, never create or edit one directly — Tempo's
+-        own roster optimiser stays the single source of truth for scheduling.
+-      </p>
++    <>
++      <PageHead title="Team & skills" sub="Labour providers, supplied workers, certifications and upcoming roster visibility." />
++      <Banner tone="info" title="Provider boundary">Providers can manage supplied-worker records and certifications inside their provider scope, but cannot create or edit roster assignments. Tempo remains the scheduling source of truth.</Banner>
+ 
+-      <section className="card">
+-        <h2>Providers</h2>
+-        <form onSubmit={handleCreateProvider}>
+-          <label>
+-            Name
+-            <input value={providerName} onChange={(e) => setProviderName(e.target.value)} required />
+-          </label>
+-          <ErrorBanner error={providerError} />
+-          <button type="submit">Register provider</button>
+-        </form>
+-        <ErrorBanner error={providers.error} />
+-        {providers.data && providers.data.length > 0 && (
+-          <table>
+-            <thead>
+-              <tr>
+-                <th>Provider ID</th>
+-                <th>Name</th>
+-                <th>Status</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {providers.data.map((p) => (
+-                <tr key={p.provider_id}>
+-                  <td>{p.provider_id}</td>
+-                  <td>{p.name}</td>
+-                  <td>{p.status}</td>
+-                </tr>
+-              ))}
+-            </tbody>
+-          </table>
+-        )}
+-      </section>
++      <div className="tp-grid">
++        <div className="tp-stack">
++          <section className="tp-card">
++            <header><h2>Providers</h2><Status tone={can('labour.configure') ? 'neutral' : 'risk'}>{can('labour.configure') ? 'Tenant admin' : 'Read only'}</Status></header>
++            <form className="tp-body tp-row" onSubmit={handleCreateProvider}>
++              <label className="tp-field">Name<input value={providerName} onChange={(e) => setProviderName(e.target.value)} required /></label>
++              <button className="tp-btn primary" type="submit" disabled={!can('labour.configure') || !providerName.trim()}>Register provider</button>
++            </form>
++            {providerError ? <div className="tp-body"><Banner tone="bad" title="Could not register provider">{errText(providerError)}</Banner></div> : null}
++            {providers.error ? <div className="tp-body"><Banner tone="bad" title="Could not load providers">{errText(providers.error)}</Banner></div> : null}
++            {!providers.data ? <div className="tp-body"><Skeleton h={120} /></div> : providers.data.length === 0 ? <Empty title="No providers registered" /> : (
++              <table className="tp-table"><thead><tr><th>Provider ID</th><th>Name</th><th>Status</th></tr></thead><tbody>
++                {providers.data.map((p) => <tr key={p.provider_id}><td>{p.provider_id}</td><td>{p.name}</td><td><Status tone={p.status === 'active' ? 'ok' : 'neutral'}>{p.status}</Status></td></tr>)}
++              </tbody></table>
++            )}
++          </section>
+ 
+-      <section className="card">
+-        <h2>Supplied workers</h2>
+-        <div className="filters">
+-          <label>
+-            Provider ID
+-            <input value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)} />
+-          </label>
+-          <button onClick={workers.reload} disabled={!activeProviderId}>
+-            Refresh
+-          </button>
++          <section className="tp-card">
++            <header><h2>Supplied workers</h2><button className="tp-btn" onClick={workers.reload} disabled={!activeProviderId}>Refresh</button></header>
++            <div className="tp-body"><label className="tp-field">Provider ID<input value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)} /></label></div>
++            {workers.error ? <div className="tp-body"><Banner tone="bad" title="Could not load supplied workers">{errText(workers.error)}</Banner></div> : null}
++            {!workers.data ? <div className="tp-body"><Skeleton h={140} /></div> : workers.data.length === 0 ? <Empty title="No supplied workers for this provider" /> : (
++              <table className="tp-table"><thead><tr><th>Worker ID</th><th>Home site</th><th>Certifications</th><th>Upcoming shifts</th></tr></thead><tbody>
++                {workers.data.map((w) => <tr key={w.worker_id}><td>{w.worker_id}</td><td>{w.home_site}</td><td>{w.certifications.length === 0 ? '—' : w.certifications.map((c) => c.skill_code).join(', ')}</td><td>{w.upcoming_shifts.length === 0 ? '—' : `${w.upcoming_shifts.length} shift(s)`}</td></tr>)}
++              </tbody></table>
++            )}
++          </section>
+         </div>
+-        <ErrorBanner error={workers.error} />
+-        {workers.data && workers.data.length === 0 && <p>No supplied workers registered for this provider yet.</p>}
+-        {workers.data && workers.data.length > 0 && (
+-          <table>
+-            <thead>
+-              <tr>
+-                <th>Worker ID</th>
+-                <th>Home site</th>
+-                <th>Certifications</th>
+-                <th>Upcoming shifts</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {workers.data.map((w) => (
+-                <tr key={w.worker_id}>
+-                  <td>{w.worker_id}</td>
+-                  <td>{w.home_site}</td>
+-                  <td>{w.certifications.length === 0 ? '—' : w.certifications.map((c) => c.skill_code).join(', ')}</td>
+-                  <td>{w.upcoming_shifts.length === 0 ? '—' : `${w.upcoming_shifts.length} shift(s)`}</td>
+-                </tr>
+-              ))}
+-            </tbody>
+-          </table>
+-        )}
+-
+-        <h3>Register a supplied worker</h3>
+-        <form onSubmit={handleRegisterWorker}>
+-          <label>
+-            Home site
+-            <input value={workerSite} onChange={(e) => setWorkerSite(e.target.value)} required />
+-          </label>
+-          <ErrorBanner error={workerError} />
+-          <button type="submit" disabled={!activeProviderId}>
+-            Register worker
+-          </button>
+-        </form>
+ 
+-        <h3>Add a certification</h3>
+-        <form onSubmit={handleAddCertification}>
+-          <label>
+-            Worker ID
+-            <input value={certWorkerId} onChange={(e) => setCertWorkerId(e.target.value)} required />
+-          </label>
+-          <label>
+-            Skill code
+-            <input value={certSkillCode} onChange={(e) => setCertSkillCode(e.target.value)} required />
+-          </label>
+-          <label>
+-            Valid from
+-            <input type="datetime-local" value={certValidFrom} onChange={(e) => setCertValidFrom(e.target.value)} required />
+-          </label>
+-          <ErrorBanner error={certError} />
+-          <button type="submit" disabled={!activeProviderId}>
+-            Add certification
+-          </button>
+-        </form>
+-      </section>
+-    </div>
++        <aside className="tp-stack">
++          <section className="tp-card"><header><h2>Register worker</h2></header>
++            <form className="tp-body tp-stack" onSubmit={handleRegisterWorker}>
++              <label className="tp-field">Home site<input value={workerSite} onChange={(e) => setWorkerSite(e.target.value)} required /></label>
++              {workerError ? <Banner tone="bad" title="Could not register worker">{errText(workerError)}</Banner> : null}
++              <button className="tp-btn primary" type="submit" disabled={!activeProviderId || !workerSite}>Register worker</button>
++            </form>
++          </section>
++          <section className="tp-card"><header><h2>Add certification</h2></header>
++            <form className="tp-body tp-stack" onSubmit={handleAddCertification}>
++              <label className="tp-field">Worker ID<input value={certWorkerId} onChange={(e) => setCertWorkerId(e.target.value)} required /></label>
++              <label className="tp-field">Skill code<input value={certSkillCode} onChange={(e) => setCertSkillCode(e.target.value)} required /></label>
++              <label className="tp-field">Valid from<input type="datetime-local" value={certValidFrom} onChange={(e) => setCertValidFrom(e.target.value)} required /></label>
++              {certError ? <Banner tone="bad" title="Could not add certification">{errText(certError)}</Banner> : null}
++              <button className="tp-btn primary" type="submit" disabled={!activeProviderId || !certWorkerId || !certSkillCode || !certValidFrom}>Add certification</button>
++            </form>
++          </section>
++        </aside>
++      </div>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/NewAction.tsx b/services/tempo-console/src/pages/NewAction.tsx
+index 612373f..c194b5d 100644
+--- a/services/tempo-console/src/pages/NewAction.tsx
++++ b/services/tempo-console/src/pages/NewAction.tsx
+@@ -1,6 +1,6 @@
+ import { useState, type FormEvent } from 'react'
+ import { useLocation, useNavigate } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, PageHead, Status } from '../components/ui'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { executeAction, validateAction } from '../api/actions'
+ import type { ActionValidateResponse } from '../api/types'
+@@ -74,15 +74,13 @@ export function NewActionPage() {
+   }
+ 
+   return (
+-    <div className="page">
+-      <h1>New action</h1>
+-      <p className="hint">
+-        §12's two-step contract: validate previews the impact and issues a short-lived token; execute (requires
+-        labour.approve) submits it. See services/tempo-api README's Phase E section — there is no real vendor
+-        writeback connector yet, so execute will honestly report <code>unknown</code> unless reconciled later.
+-      </p>
+-      <form onSubmit={handleValidate}>
+-        <label>
++    <>
++      <PageHead title="New controlled action" sub="Validate first, then execute with an expiring action token and approval permission." />
++      <Banner tone="info" title="Writeback boundary">Native Tempo publication is real. Overlay vendor writeback remains unknown unless a verified connector reconciles it.</Banner>
++      <section className="tp-card">
++        <header><h2>Validate action</h2></header>
++      <form className="tp-body tp-stack" onSubmit={handleValidate}>
++        <label className="tp-field">
+           Action type
+           <select value={actionType} onChange={(e) => setActionType(e.target.value)}>
+             {ACTION_TYPES.map((t) => (
+@@ -92,11 +90,12 @@ export function NewActionPage() {
+             ))}
+           </select>
+         </label>
+-        <label>
++        <label className="tp-field">
+           Recommendation ID
+           <input value={recommendationId} onChange={(e) => setRecommendationId(e.target.value)} required />
+         </label>
+-        <label>
++        <div className="tp-cols2">
++        <label className="tp-field">
+           Target system
+           <select value={system} onChange={(e) => setSystem(e.target.value)}>
+             {SOURCE_SYSTEMS.map((s) => (
+@@ -106,45 +105,50 @@ export function NewActionPage() {
+             ))}
+           </select>
+         </label>
+-        <label>
++        <label className="tp-field">
+           Connection ID
+           <input value={connectionId} onChange={(e) => setConnectionId(e.target.value)} required />
+         </label>
+-        <label>
++        </div>
++        <div className="tp-cols2">
++        <label className="tp-field">
+           Site ID
+           <input value={siteId} onChange={(e) => setSiteId(e.target.value)} required />
+         </label>
+-        <label>
++        <label className="tp-field">
+           Expected source version (leave blank if this target has never been written to)
+           <input value={expectedSourceVersion} onChange={(e) => setExpectedSourceVersion(e.target.value)} />
+         </label>
+-        <ErrorBanner error={error} />
+-        <button type="submit" disabled={busy}>
++        </div>
++        {error ? <Banner tone="bad" title="Action failed">{error instanceof Error ? error.message : String(error)}</Banner> : null}
++        <button className="tp-btn primary" type="submit" disabled={busy}>
+           Validate
+         </button>
+       </form>
++      </section>
+ 
+       {validated && (
+-        <section className="card">
+-          <h2>Validated — impact summary</h2>
+-          <pre className="json-block">{JSON.stringify(validated.impact_summary, null, 2)}</pre>
++        <section className="tp-card" style={{ marginTop: 16 }}>
++          <header><h2>Validated impact</h2><Status tone="risk">Token expires {new Date(validated.expires_at).toLocaleString()}</Status></header>
++          <div className="tp-body tp-stack">
++          <pre className="tp-code">{JSON.stringify(validated.impact_summary, null, 2)}</pre>
+           <p>Token expires: {new Date(validated.expires_at).toLocaleString()}</p>
+-          <button onClick={handleExecute} disabled={busy || !!executeResult}>
++          <button className="tp-btn primary" onClick={handleExecute} disabled={busy || !!executeResult}>
+             Execute (requires labour.approve)
+           </button>
++          </div>
+         </section>
+       )}
+ 
+       {executeResult && (
+-        <section className="card">
+-          <h2>Execution result</h2>
+-          <p>
+-            Status: <strong>{executeResult.status}</strong>
+-          </p>
+-          {executeResult.detail && <p>{executeResult.detail}</p>}
+-          <button onClick={() => navigate(`/actions/${validated?.action_id}`)}>View action</button>
++        <section className="tp-card" style={{ marginTop: 16 }}>
++          <header><h2>Execution result</h2><Status tone={executeResult.status === 'confirmed' ? 'ok' : executeResult.status === 'unknown' ? 'risk' : 'neutral'}>{executeResult.status}</Status></header>
++          <div className="tp-body">
++            {executeResult.detail && <p>{executeResult.detail}</p>}
++            <button className="tp-btn" onClick={() => navigate(`/actions/${validated?.action_id}`)}>View action</button>
++          </div>
+         </section>
+       )}
+-    </div>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/NewRun.tsx b/services/tempo-console/src/pages/NewRun.tsx
+index 04f5020..bb87507 100644
+--- a/services/tempo-console/src/pages/NewRun.tsx
++++ b/services/tempo-console/src/pages/NewRun.tsx
+@@ -1,6 +1,6 @@
+ import { useState, type FormEvent } from 'react'
+ import { useNavigate } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, PageHead } from '../components/ui'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { createRun } from '../api/runs'
+ import { OBJECTIVE_PROFILES, RUN_TYPES, type ObjectiveProfile, type RunType } from '../api/types'
+@@ -48,10 +48,12 @@ export function NewRunPage() {
+   }
+ 
+   return (
+-    <div className="page">
+-      <h1>New run</h1>
+-      <form onSubmit={handleSubmit}>
+-        <label>
++    <>
++      <PageHead title="New optimisation run" sub="Advanced diagnostic run creation. Roster generation for normal planning is available in Roster Planner." />
++      <section className="tp-card">
++        <header><h2>Run parameters</h2></header>
++      <form className="tp-body tp-stack" onSubmit={handleSubmit}>
++        <label className="tp-field">
+           Run type
+           <select value={runType} onChange={(e) => setRunType(e.target.value as RunType)}>
+             {RUN_TYPES.map((t) => (
+@@ -61,23 +63,27 @@ export function NewRunPage() {
+             ))}
+           </select>
+         </label>
+-        <label>
++        <div className="tp-cols2">
++        <label className="tp-field">
+           Site IDs (comma-separated, at least one required)
+           <input value={siteIds} onChange={(e) => setSiteIds(e.target.value)} required />
+         </label>
+-        <label>
++        <label className="tp-field">
+           Customer IDs (comma-separated, optional)
+           <input value={customerIds} onChange={(e) => setCustomerIds(e.target.value)} />
+         </label>
+-        <label>
++        </div>
++        <div className="tp-cols2">
++        <label className="tp-field">
+           Window start
+           <input type="datetime-local" value={windowStart} onChange={(e) => setWindowStart(e.target.value)} required />
+         </label>
+-        <label>
++        <label className="tp-field">
+           Window end
+           <input type="datetime-local" value={windowEnd} onChange={(e) => setWindowEnd(e.target.value)} required />
+         </label>
+-        <label>
++        </div>
++        <label className="tp-field">
+           Objective profile
+           <select value={objectiveProfile} onChange={(e) => setObjectiveProfile(e.target.value as ObjectiveProfile)}>
+             {OBJECTIVE_PROFILES.map((p) => (
+@@ -87,11 +93,12 @@ export function NewRunPage() {
+             ))}
+           </select>
+         </label>
+-        <ErrorBanner error={error} />
+-        <button type="submit" disabled={submitting}>
++        {error ? <Banner tone="bad" title="Could not create run">{error instanceof Error ? error.message : String(error)}</Banner> : null}
++        <button className="tp-btn primary" type="submit" disabled={submitting}>
+           {submitting ? 'Submitting...' : 'Create run'}
+         </button>
+       </form>
+-    </div>
++      </section>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/Onboarding.tsx b/services/tempo-console/src/pages/Onboarding.tsx
+index e73c9f7..ab19fe4 100644
+--- a/services/tempo-console/src/pages/Onboarding.tsx
++++ b/services/tempo-console/src/pages/Onboarding.tsx
+@@ -1,33 +1,24 @@
+ import { useState, type FormEvent } from 'react'
+-import { ErrorBanner } from '../components/ErrorBanner'
+-import { StatusBadge } from '../components/StatusBadge'
++import { Banner, Empty, PageHead, Skeleton, Status } from '../components/ui'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { useApi } from '../hooks/useApi'
+ import { enrollCredential } from '../api/attendance'
+ import type { CredentialEnrollResponse } from '../api/types'
+-import {
+-  createConnection,
+-  createTenantScope,
+-  listConnections,
+-  listConnectors,
+-  listTenantScopes,
+-} from '../api/onboarding'
++import { createConnection, createTenantScope, listConnections, listConnectors, listTenantScopes } from '../api/onboarding'
+ 
+ export function OnboardingPage() {
+-  const { context } = useTempoContext()
+-  const catalogue = useApi(() => listConnectors(context!), [context])
+-  const scopes = useApi(() => listTenantScopes(context!), [context])
+-  const connections = useApi(() => listConnections(context!), [context])
++  const { context, can } = useTempoContext()
++  const catalogue = useApi(() => (context ? listConnectors(context) : Promise.resolve([])), [context])
++  const scopes = useApi(() => (context ? listTenantScopes(context) : Promise.resolve([])), [context])
++  const connections = useApi(() => (context ? listConnections(context) : Promise.resolve({ connections: [] })), [context])
+ 
+   const [scopeSiteId, setScopeSiteId] = useState('')
+   const [scopeCompanyId, setScopeCompanyId] = useState('')
+   const [scopeError, setScopeError] = useState<unknown>(null)
+-
+   const [connSourceSystem, setConnSourceSystem] = useState('deputy')
+   const [connSiteId, setConnSiteId] = useState('')
+   const [connDisplayName, setConnDisplayName] = useState('')
+   const [connError, setConnError] = useState<unknown>(null)
+-
+   const [credWorkerId, setCredWorkerId] = useState('')
+   const [credPin, setCredPin] = useState('')
+   const [credNfcTagId, setCredNfcTagId] = useState('')
+@@ -36,195 +27,111 @@ export function OnboardingPage() {
+ 
+   async function handleCreateScope(event: FormEvent) {
+     event.preventDefault()
++    if (!context) return
+     setScopeError(null)
+     try {
+-      await createTenantScope(context!, { site_id: scopeSiteId, company_id: scopeCompanyId || undefined })
++      await createTenantScope(context, { site_id: scopeSiteId, company_id: scopeCompanyId || undefined })
+       setScopeSiteId('')
+       setScopeCompanyId('')
+       scopes.reload()
+-    } catch (err) {
+-      setScopeError(err)
+-    }
++    } catch (err) { setScopeError(err) }
+   }
+ 
+   async function handleEnrollCredential(event: FormEvent) {
+     event.preventDefault()
++    if (!context) return
+     setCredError(null)
+     setCredResult(null)
+     try {
+-      const result = await enrollCredential(context!, credWorkerId, { pin: credPin || undefined, nfcTagId: credNfcTagId || undefined })
++      const result = await enrollCredential(context, credWorkerId, { pin: credPin || undefined, nfcTagId: credNfcTagId || undefined })
+       setCredResult(result)
+       setCredPin('')
+       setCredNfcTagId('')
+-    } catch (err) {
+-      setCredError(err)
+-    }
++    } catch (err) { setCredError(err) }
+   }
+ 
+   async function handleCreateConnection(event: FormEvent) {
+     event.preventDefault()
++    if (!context) return
+     setConnError(null)
+     try {
+-      await createConnection(context!, {
+-        source_system: connSourceSystem,
+-        site_id: connSiteId,
+-        display_name: connDisplayName || undefined,
+-      })
++      await createConnection(context, { source_system: connSourceSystem, site_id: connSiteId, display_name: connDisplayName || undefined })
+       setConnSiteId('')
+       setConnDisplayName('')
+       connections.reload()
+-    } catch (err) {
+-      setConnError(err)
+-    }
++    } catch (err) { setConnError(err) }
+   }
+ 
++  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
++  const connectionRows = connections.data?.connections ?? []
+   return (
+-    <div className="page">
+-      <h1>Onboarding</h1>
+-      <p className="hint">
+-        Requires <code>labour.configure</code> (Tenant Admin). Registering a connection never configures a live
+-        vendor credential or triggers ingestion — see services/tempo-api README's Phase F section; it stays{' '}
+-        <code>pending_credentials</code> until an engineer wires up a real client.
+-      </p>
++    <>
++      <PageHead title="Connections & onboarding" sub="Register scopes, prepare workforce connections and enrol kiosk credentials. Live vendor credentials are not configured from this page yet." />
++      <Banner tone="info" title="Current release boundary">Deputy is the first confirmed external workforce connection. The second vendor remains open. Registered connections stay pending until credentials, mapping and verified sync are implemented.</Banner>
+ 
+-      <section className="card">
+-        <h2>Connector catalogue</h2>
+-        <ErrorBanner error={catalogue.error} />
+-        {catalogue.data && (
+-          <table>
+-            <thead>
+-              <tr>
+-                <th>Source system</th>
+-                <th>Display name</th>
+-                <th>Entity types</th>
+-                <th>Status</th>
+-                <th>Notes</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {catalogue.data.map((c) => (
+-                <tr key={c.source_system}>
+-                  <td>{c.source_system}</td>
+-                  <td>{c.display_name}</td>
+-                  <td>{c.entity_types.join(', ')}</td>
+-                  <td>{c.status}</td>
+-                  <td>{c.notes}</td>
+-                </tr>
+-              ))}
+-            </tbody>
+-          </table>
+-        )}
+-      </section>
++      <div className="tp-grid">
++        <div className="tp-stack">
++          <section className="tp-card">
++            <header><h2>Connection catalogue</h2><Status tone="risk">Credentials pending</Status></header>
++            {catalogue.error ? <div className="tp-body"><Banner tone="bad" title="Could not load catalogue">{errText(catalogue.error)}</Banner></div> : null}
++            {!catalogue.data ? <div className="tp-body"><Skeleton h={120} /></div> : catalogue.data.length === 0 ? <Empty title="No connectors registered" /> : (
++              <table className="tp-table"><thead><tr><th>Source</th><th>Covers</th><th>Status</th><th>Notes</th></tr></thead><tbody>
++                {catalogue.data.map((c) => (
++                  <tr key={c.source_system}><td><b>{c.display_name}</b><div className="tp-muted" style={{ fontSize: 12 }}>{c.source_system}</div></td><td>{c.entity_types.join(', ')}</td><td><Status tone={c.status === 'available' ? 'neutral' : 'risk'}>{c.status.replace(/_/g, ' ')}</Status></td><td>{c.notes}</td></tr>
++                ))}
++              </tbody></table>
++            )}
++          </section>
+ 
+-      <section className="card">
+-        <h2>Tenant scopes</h2>
+-        <form onSubmit={handleCreateScope}>
+-          <label>
+-            Site ID
+-            <input value={scopeSiteId} onChange={(e) => setScopeSiteId(e.target.value)} required />
+-          </label>
+-          <label>
+-            Company ID (optional)
+-            <input value={scopeCompanyId} onChange={(e) => setScopeCompanyId(e.target.value)} />
+-          </label>
+-          <ErrorBanner error={scopeError} />
+-          <button type="submit">Register scope</button>
+-        </form>
+-        <ErrorBanner error={scopes.error} />
+-        {scopes.data && (
+-          <ul>
+-            {scopes.data.map((s) => (
+-              <li key={s.site_id}>
+-                {s.site_id} {s.company_id ? `(${s.company_id})` : ''}
+-              </li>
+-            ))}
+-          </ul>
+-        )}
+-      </section>
++          <section className="tp-card">
++            <header><h2>Registered connections</h2></header>
++            {connError ? <div className="tp-body"><Banner tone="bad" title="Could not register connection">{errText(connError)}</Banner></div> : null}
++            <form className="tp-body tp-row" onSubmit={handleCreateConnection}>
++              <label className="tp-field">Source system
++                <select value={connSourceSystem} onChange={(e) => setConnSourceSystem(e.target.value)}>
++                  {(catalogue.data ?? []).map((c) => <option key={c.source_system} value={c.source_system}>{c.display_name}</option>)}
++                </select>
++              </label>
++              <label className="tp-field">Site ID<input value={connSiteId} onChange={(e) => setConnSiteId(e.target.value)} required /></label>
++              <label className="tp-field">Display name<input value={connDisplayName} onChange={(e) => setConnDisplayName(e.target.value)} placeholder="e.g. Deputy Melbourne" /></label>
++              <button className="tp-btn primary" type="submit" disabled={!can('labour.configure') || !connSiteId}>Register connection</button>
++            </form>
++            {!connections.data ? <div className="tp-body"><Skeleton h={90} /></div> : connectionRows.length === 0 ? <Empty title="No connections registered yet" /> : (
++              <table className="tp-table"><thead><tr><th>Connection</th><th>Source</th><th>Site</th><th>Status</th></tr></thead><tbody>
++                {connectionRows.map((c) => <tr key={c.connection_id}><td>{c.connection_id}</td><td>{c.source_system}</td><td>{c.site_id}</td><td><Status tone={c.status === 'verified' ? 'ok' : c.status === 'failed' ? 'bad' : 'risk'}>{c.status.replace(/_/g, ' ')}</Status></td></tr>)}
++              </tbody></table>
++            )}
++          </section>
++        </div>
+ 
+-      <section className="card">
+-        <h2>Clock-in credentials</h2>
+-        <p className="hint">
+-          Enrols a Kiosk PIN and/or NFC tag for a worker (<code>POST /v1/attendance/credentials</code>) — the
+-          same lookup the Kiosk page uses to identify who's clocking in. There is no endpoint to list existing
+-          enrolments yet, so this form only confirms what it just wrote, not a worker's full credential history.
+-        </p>
+-        <form onSubmit={handleEnrollCredential}>
+-          <label>
+-            Worker ID
+-            <input value={credWorkerId} onChange={(e) => setCredWorkerId(e.target.value)} required />
+-          </label>
+-          <label>
+-            PIN
+-            <input value={credPin} onChange={(e) => setCredPin(e.target.value)} inputMode="numeric" />
+-          </label>
+-          <label>
+-            NFC tag ID
+-            <input value={credNfcTagId} onChange={(e) => setCredNfcTagId(e.target.value)} />
+-          </label>
+-          <ErrorBanner error={credError} />
+-          <button type="submit" disabled={!credWorkerId || (!credPin && !credNfcTagId)}>
+-            Enrol credential
+-          </button>
+-        </form>
+-        {credResult && (
+-          <p className="hint">
+-            Worker {credResult.worker_id}: {credResult.has_pin ? 'has a PIN' : 'no PIN'},{' '}
+-            {credResult.has_nfc ? 'has an NFC tag' : 'no NFC tag'}.
+-          </p>
+-        )}
+-      </section>
++        <aside className="tp-stack">
++          <section className="tp-card">
++            <header><h2>Tenant scopes</h2></header>
++            <form className="tp-body tp-stack" onSubmit={handleCreateScope}>
++              <label className="tp-field">Site ID<input value={scopeSiteId} onChange={(e) => setScopeSiteId(e.target.value)} required /></label>
++              <label className="tp-field">Company ID (optional)<input value={scopeCompanyId} onChange={(e) => setScopeCompanyId(e.target.value)} /></label>
++              {scopeError ? <Banner tone="bad" title="Could not register scope">{errText(scopeError)}</Banner> : null}
++              <button className="tp-btn primary" type="submit" disabled={!can('labour.configure') || !scopeSiteId}>Register scope</button>
++            </form>
++            {!scopes.data ? <div className="tp-body"><Skeleton h={60} /></div> : scopes.data.length === 0 ? <Empty title="No scopes registered" /> : (
++              <ul className="tp-list">{scopes.data.map((s) => <li key={s.site_id} className="tp-item" style={{ gridTemplateColumns: '1fr auto', cursor: 'default' }}><span><b>{s.site_id}</b><br /><span className="s">{s.company_id ?? 'No company scope'}</span></span><Status tone="neutral">Registered</Status></li>)}</ul>
++            )}
++          </section>
+ 
+-      <section className="card">
+-        <h2>Connections</h2>
+-        <form onSubmit={handleCreateConnection}>
+-          <label>
+-            Source system
+-            <select value={connSourceSystem} onChange={(e) => setConnSourceSystem(e.target.value)}>
+-              {(catalogue.data ?? []).map((c) => (
+-                <option key={c.source_system} value={c.source_system}>
+-                  {c.display_name}
+-                </option>
+-              ))}
+-            </select>
+-          </label>
+-          <label>
+-            Site ID (must already have a registered tenant scope)
+-            <input value={connSiteId} onChange={(e) => setConnSiteId(e.target.value)} required />
+-          </label>
+-          <label>
+-            Display name (optional)
+-            <input value={connDisplayName} onChange={(e) => setConnDisplayName(e.target.value)} />
+-          </label>
+-          <ErrorBanner error={connError} />
+-          <button type="submit">Register connection</button>
+-        </form>
+-        <ErrorBanner error={connections.error} />
+-        {connections.data && (
+-          <table>
+-            <thead>
+-              <tr>
+-                <th>Connection ID</th>
+-                <th>Source system</th>
+-                <th>Site</th>
+-                <th>Status</th>
+-              </tr>
+-            </thead>
+-            <tbody>
+-              {connections.data.connections.map((c) => (
+-                <tr key={c.connection_id}>
+-                  <td>{c.connection_id}</td>
+-                  <td>{c.source_system}</td>
+-                  <td>{c.site_id}</td>
+-                  <td>
+-                    <StatusBadge status={c.status} />
+-                  </td>
+-                </tr>
+-              ))}
+-            </tbody>
+-          </table>
+-        )}
+-      </section>
+-    </div>
++          <section className="tp-card">
++            <header><h2>Clock-in credentials</h2></header>
++            <form className="tp-body tp-stack" onSubmit={handleEnrollCredential}>
++              <p className="tp-muted" style={{ margin: 0 }}>Enrols a worker PIN and/or NFC tag for the browser kiosk. The page confirms only what it just wrote; credential history still needs an API.</p>
++              <label className="tp-field">Worker ID<input value={credWorkerId} onChange={(e) => setCredWorkerId(e.target.value)} required /></label>
++              <label className="tp-field">PIN<input value={credPin} onChange={(e) => setCredPin(e.target.value)} inputMode="numeric" /></label>
++              <label className="tp-field">NFC tag ID<input value={credNfcTagId} onChange={(e) => setCredNfcTagId(e.target.value)} /></label>
++              {credError ? <Banner tone="bad" title="Could not enrol credential">{errText(credError)}</Banner> : null}
++              <button className="tp-btn primary" type="submit" disabled={!can('labour.configure') || !credWorkerId || (!credPin && !credNfcTagId)}>Enrol credential</button>
++              {credResult && <Status tone="ok">Worker {credResult.worker_id}: {credResult.has_pin ? 'PIN enrolled' : 'no PIN'}, {credResult.has_nfc ? 'NFC enrolled' : 'no NFC'}</Status>}
++            </form>
++          </section>
++        </aside>
++      </div>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/RunComparisons.tsx b/services/tempo-console/src/pages/RunComparisons.tsx
+index 84f64cb..c72d95d 100644
+--- a/services/tempo-console/src/pages/RunComparisons.tsx
++++ b/services/tempo-console/src/pages/RunComparisons.tsx
+@@ -1,6 +1,6 @@
+ import { useState, type FormEvent } from 'react'
+ import { Link, useLocation } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, PageHead } from '../components/ui'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { compareRuns } from '../api/runs'
+ import type { RunComparisonResponse } from '../api/types'
+@@ -46,29 +46,28 @@ export function RunComparisonsPage() {
+   const kpiKeys = result ? Array.from(new Set(result.kpis.flatMap((r) => Object.keys(r.kpis)))) : []
+ 
+   return (
+-    <div className="page">
+-      <h1>Compare runs</h1>
+-      <p className="hint">
+-        Runs must be in a comparable terminal state (<code>completed</code> or{' '}
+-        <code>completed_with_warnings</code>). A <code>margin_3pl</code> run's KPIs are only visible with{' '}
+-        <code>labour.margin.read</code> — same restriction as the Run detail page.
+-      </p>
++    <>
++      <PageHead title="Compare runs" sub="Compare terminal optimisation results with the same permission gates as run detail." />
++      <Banner tone="info" title="Comparable runs only">Runs must be completed or completed with warnings. Margin KPIs remain hidden without the required permission.</Banner>
+ 
+-      <form onSubmit={handleCompare}>
+-        <label>
++      <section className="tp-card" style={{ marginBottom: 16 }}>
++        <header><h2>Selection</h2></header>
++      <form className="tp-body tp-stack" onSubmit={handleCompare}>
++        <label className="tp-field">
+           Run IDs (comma-separated, at least two)
+           <input value={runIdsInput} onChange={(e) => setRunIdsInput(e.target.value)} required />
+         </label>
+-        <ErrorBanner error={error} />
+-        <button type="submit" disabled={busy}>
++        {error ? <Banner tone="bad" title="Could not compare runs">{error instanceof Error ? error.message : String(error)}</Banner> : null}
++        <button className="tp-btn primary" type="submit" disabled={busy}>
+           Compare
+         </button>
+       </form>
++      </section>
+ 
+       {result && (
+-        <section className="card">
+-          <h2>KPIs</h2>
+-          <table>
++        <section className="tp-card">
++          <header><h2>KPIs</h2></header>
++          <table className="tp-table">
+             <thead>
+               <tr>
+                 <th>KPI</th>
+@@ -93,7 +92,7 @@ export function RunComparisonsPage() {
+         </section>
+       )}
+ 
+-      <Link to="/runs">Back to runs</Link>
+-    </div>
++      <p><Link to="/runs">Back to runs</Link></p>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/RunDetail.tsx b/services/tempo-console/src/pages/RunDetail.tsx
+index d56707b..90e6531 100644
+--- a/services/tempo-console/src/pages/RunDetail.tsx
++++ b/services/tempo-console/src/pages/RunDetail.tsx
+@@ -1,5 +1,5 @@
+ import { Link, useNavigate, useParams } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, Empty, PageHead, Skeleton } from '../components/ui'
+ import { StatusBadge } from '../components/StatusBadge'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { useApi } from '../hooks/useApi'
+@@ -7,7 +7,7 @@ import { cancelRun, getRun } from '../api/runs'
+ import { ACTION_TYPE_BY_RUN_TYPE } from '../api/types'
+ 
+ function JsonBlock({ value }: { value: unknown }) {
+-  return <pre className="json-block">{JSON.stringify(value, null, 2)}</pre>
++  return <pre className="tp-code">{JSON.stringify(value, null, 2)}</pre>
+ }
+ 
+ export function RunDetailPage() {
+@@ -25,35 +25,36 @@ export function RunDetailPage() {
+   const actionType = data?.run_type ? ACTION_TYPE_BY_RUN_TYPE[data.run_type] : undefined
+ 
+   return (
+-    <div className="page">
+-      <div className="page-header">
+-        <h1>Run {runId}</h1>
++    <>
++      <PageHead title={`Run ${runId}`} sub="Model evidence, result payload and controlled action handoff.">
+         {data && <StatusBadge status={data.status} />}
+-      </div>
++      </PageHead>
+ 
+-      <ErrorBanner error={error} />
+-      {loading && <p>Loading...</p>}
++      {error ? <Banner tone="bad" title="Could not load run">{error instanceof Error ? error.message : String(error)}</Banner> : null}
++      {loading && <Skeleton h={220} />}
+ 
+       {data && !isTerminal && (
+-        <div className="card">
++        <section className="tp-card">
++          <div className="tp-body tp-stack">
+           <p>This run is not yet in a terminal state.</p>
+-          <button onClick={reload}>Refresh</button>
+-          <button onClick={handleCancel}>Cancel run</button>
+-        </div>
++          <div className="tp-row"><button className="tp-btn" onClick={reload}>Refresh</button><button className="tp-btn danger" onClick={handleCancel}>Cancel run</button></div>
++          </div>
++        </section>
+       )}
+ 
+       {data && isTerminal && (
+         <>
+-          <section className="card">
+-            <h2>Model</h2>
+-            <p>
++          <section className="tp-card">
++            <header><h2>Model</h2></header>
++            <div className="tp-body"><p>
+               {data.model?.name} v{data.model?.version} ({data.model?.solver})
+-            </p>
++            </p></div>
+           </section>
+ 
+           {data.explanation && (
+-            <section className="card">
+-              <h2>Explanation</h2>
++            <section className="tp-card" style={{ marginTop: 16 }}>
++              <header><h2>Explanation</h2></header>
++              <div className="tp-body">
+               <p>
+                 Confidence: <strong>{data.explanation.confidence.score}</strong> ({data.explanation.confidence.band})
+               </p>
+@@ -78,7 +79,7 @@ export function RunDetailPage() {
+                   </ul>
+                 </>
+               )}
+-              <div className="columns">
++              <div className="tp-cols2">
+                 <div>
+                   <h3>Baseline</h3>
+                   <JsonBlock value={data.explanation.baseline} />
+@@ -92,23 +93,27 @@ export function RunDetailPage() {
+                   <JsonBlock value={data.explanation.delta} />
+                 </div>
+               </div>
++              </div>
+             </section>
+           )}
+ 
+-          <section className="card">
+-            <h2>Result</h2>
++          <section className="tp-card" style={{ marginTop: 16 }}>
++            <header><h2>Result</h2></header>
++            <div className="tp-body">
+             <JsonBlock value={data.result} />
++            </div>
+           </section>
+ 
+           {actionType && (
+-            <section className="card">
+-              <h2>Take action</h2>
++            <section className="tp-card" style={{ marginTop: 16 }}>
++              <header><h2>Take action</h2></header>
++              <div className="tp-body">
+               {data.recommendation_id ? (
+                 <>
+                   <p>
+                     This run type maps to action_type <code>{actionType}</code>.
+                   </p>
+-                  <button
++                  <button className="tp-btn primary"
+                     onClick={() =>
+                       navigate('/actions/new', {
+                         state: { recommendationId: data.recommendation_id, actionType },
+@@ -119,14 +124,15 @@ export function RunDetailPage() {
+                   </button>
+                 </>
+               ) : (
+-                <p>No recommendation was recorded for this run — nothing to act on.</p>
++                <Empty title="No recommendation recorded">There is nothing to act on from this run.</Empty>
+               )}
++              </div>
+             </section>
+           )}
+         </>
+       )}
+ 
+-      <Link to="/runs">Back to runs</Link>
+-    </div>
++      <p><Link to="/runs">Back to runs</Link></p>
++    </>
+   )
+ }
+diff --git a/services/tempo-console/src/pages/RunsList.tsx b/services/tempo-console/src/pages/RunsList.tsx
+index 38f18cf..a156c8c 100644
+--- a/services/tempo-console/src/pages/RunsList.tsx
++++ b/services/tempo-console/src/pages/RunsList.tsx
+@@ -1,6 +1,6 @@
+ import { useState } from 'react'
+ import { Link, useNavigate } from 'react-router-dom'
+-import { ErrorBanner } from '../components/ErrorBanner'
++import { Banner, Empty, PageHead, Skeleton } from '../components/ui'
+ import { StatusBadge } from '../components/StatusBadge'
+ import { useTempoContext } from '../context/TempoContextProvider'
+ import { useApi } from '../hooks/useApi'
+@@ -31,16 +31,15 @@ export function RunsListPage() {
+   }
+ 
+   return (
+-    <div className="page">
+-      <div className="page-header">
+-        <h1>Runs</h1>
+-        <Link className="button" to="/runs/new">
+-          New run
+-        </Link>
+-      </div>
++    <>
++      <PageHead title="Optimisation Studio" sub="Advanced run history and comparisons. Everyday planning should start from Demand and Roster Planner.">
++        <Link className="tp-btn primary" style={{ textDecoration: 'none' }} to="/runs/new">New run</Link>
++      </PageHead>
+ 
+-      <div className="filters">
+-        <label>
++      <section className="tp-card">
++        <header><h2>Run history</h2><button className="tp-btn" onClick={reload}>Refresh</button></header>
++        <div className="tp-body tp-row">
++        <label className="tp-field">
+           Run type
+           <select
+             value={runType}
+@@ -57,7 +56,7 @@ export function RunsListPage() {
+             ))}
+           </select>
+         </label>
+-        <label>
++        <label className="tp-field">
+           Status
+           <select
+             value={status}
+@@ -72,17 +71,16 @@ export function RunsListPage() {
+             <option value="failed">failed</option>
+           </select>
+         </label>
+-        <button onClick={reload}>Refresh</button>
+-        <button disabled={selected.length < 2} onClick={() => navigate('/runs/compare', { state: { runIds: selected } })}>
++        <button className="tp-btn" disabled={selected.length < 2} onClick={() => navigate('/runs/compare', { state: { runIds: selected } })}>
+           Compare selected ({selected.length})
+         </button>
+-      </div>
++        </div>
+ 
+-      <ErrorBanner error={error} />
+-      {loading && <p>Loading...</p>}
+-      {data && data.runs.length === 0 && <p>No runs yet — create one to get started.</p>}
++      {error ? <div className="tp-body"><Banner tone="bad" title="Could not load runs">{error instanceof Error ? error.message : String(error)}</Banner></div> : null}
++      {loading && <div className="tp-body"><Skeleton h={180} /></div>}
++      {data && data.runs.length === 0 && <Empty title="No runs yet">Create one from here only for advanced diagnostics; core roster generation lives in Roster Planner.</Empty>}
+       {data && data.runs.length > 0 && (
+-        <table>
++        <table className="tp-table">
+           <thead>
+             <tr>
+               <th></th>
+@@ -119,8 +117,8 @@ export function RunsListPage() {
+         </table>
+       )}
+ 
+-      <div className="pager">
+-        <button disabled={history.length === 0} onClick={() => {
++      <div className="tp-body tp-row">
++        <button className="tp-btn" disabled={history.length === 0} onClick={() => {
+           const prev = [...history]
+           const last = prev.pop()
+           setHistory(prev)
+@@ -128,7 +126,7 @@ export function RunsListPage() {
+         }}>
+           Previous
+         </button>
+-        <button
++        <button className="tp-btn"
+           disabled={!data?.next_cursor}
+           onClick={() => {
+             if (!data?.next_cursor) return
+@@ -139,6 +137,7 @@ export function RunsListPage() {
+           Next
+         </button>
+       </div>
+-    </div>
++      </section>
++    </>
+   )
+ }
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 0000000..be256a5
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,8 @@
++# Agent instructions for Tempo
++
++- Treat `docs/roadmap.md` as the current scope authority. `docs/build-progress.md` is historical unless a statement is reconciled there.
++- Preserve the React/TypeScript console and Python/FastAPI/PostgreSQL stack. Do not rebuild Tempo as a separate website.
++- Follow `docs/ui-design-system.md` for all UI work. Use shared tokens and components in `services/tempo-console/src/design/` and `services/tempo-console/src/components/`.
++- Keep UI claims honest: shells, simulated data, pending credentials, unknown writeback outcomes and indicative prices must be labelled as such.
++- Kiosk work must keep the device surface separate from the customer administration shell.
++- Do not mark roadmap milestones accepted unless the acceptance evidence in `docs/roadmap.md` has actually been demonstrated.
+diff --git a/docs/ui-design-system.md b/docs/ui-design-system.md
+new file mode 100644
+index 0000000..2d723ab
+--- /dev/null
++++ b/docs/ui-design-system.md
+@@ -0,0 +1,128 @@
++# Tempo UI design system
++
++Updated: 2 October 2026
++
++This guide is the standard for future Tempo UI work. It extends the product roadmap and does not mark any roadmap milestone as accepted.
++
++## Product posture
++
++Tempo is a warehouse labour planning, roster, attendance and reporting SaaS. Interfaces should feel calm, precise and operational. Prioritise clear data provenance, fast scanning and low-friction daily work over decorative dashboards.
++
++Do not fabricate working payments, live vendor connections, confirmed writebacks or customer records. Synthetic data must be labelled synthetic or simulated. A polished shell is still a shell until the API contract and acceptance evidence exist.
++
++## Tokens
++
++Use `services/tempo-console/src/design/tokens.css` for colour, spacing, radius, type, shadows and breakpoints. The Tempo brand source is the supplied logo set under `services/tempo-console/public/brand/`.
++
++- Chrome: charcoal tokens (`--tp-charcoal*`).
++- Operational states: green, amber and red from `Tempo Traffic Light.png`.
++- Status must be icon plus text. Never rely on colour alone.
++- Surfaces use white or near-neutral panels on `--tp-canvas`; avoid decorative gradients.
++- Cards use `--tp-radius-m` (8px). Reserve cards for repeated items, panels, tools and modals.
++
++## Components
++
++Use `src/components/ui.tsx` before adding page-specific widgets:
++
++- `PageHead` for title, site/date context and primary actions.
++- `Banner` for warning, error and information states.
++- `Status` for badges with icon and label.
++- `KpiCard` for metrics with definitions.
++- `FreshnessBanner` and `SourcePills` for data provenance.
++- `Drawer` for focused detail and decisions.
++- `RosterSteps` for draft -> submitted -> approved -> published states.
++- `Empty`, `Skeleton` and error banners for every async region.
++
++Tables use `tp-table`: sticky headers, tabular numerals where useful, readable row labels, finite filters and explicit export permissions. Forms use `tp-field`, visible labels, disabled states and server error display.
++
++## Shells and navigation
++
++The customer shell lives in `AppShell`. Navigation must be permission-aware and reflect current product scope. Keep advanced or unfinished modules secondary.
++
++Dedicated surfaces:
++
++- `/kiosk`: full-screen device shell, no admin navigation.
++- `/platform`: platform operator shell. Support access must be visibly distinct from customer login.
++- `/billing`: commercial configuration shell only until entitlement and payment APIs exist.
++- `/help`: help library and API reference discovery.
++
++Kiosk and account/login routes must not inherit customer administration navigation.
++
++## Page states
++
++Every page and major panel should account for:
++
++- Loading.
++- Empty or not configured.
++- Error and retry where practical.
++- Partial data.
++- Stale data.
++- Synthetic or simulated data.
++- Success after server acknowledgement.
++
++Withhold misleading totals when required data is missing. Use "No verified data" or "Not configured" instead of zero.
++
++## Core workflows
++
++Roster Planner:
++
++- Worker, date, time, coverage and conflicts must be easy to scan.
++- Preserve keyboard/form editing alongside drag-and-drop.
++- Distinguish draft, submitted, approved, published and reconciled.
++- Hard conflicts block submit/publish and are explained in business language.
++
++Attendance:
++
++- Separate scheduled time, original punches, corrections, worked hours and approved payable hours.
++- Corrections must preserve originals and require authorised approval.
++- Open, late, absent, unrostered and pending states need clear labels.
++
++Demand and reports:
++
++- Show period, units, source, freshness and forecast basis.
++- Distinguish supplied forecasts, Tempo model forecasts and manual adjustments.
++- Label planned, estimated and confirmed figures.
++
++Data and connections:
++
++- CSV flow is upload -> map -> validate/preview -> confirm -> results.
++- API flow is credential -> submit with idempotency -> receipt/status -> row errors.
++- Connection health states include configured, syncing, stale, failed and verified.
++
++## Responsive and kiosk rules
++
++Verify desktop, narrow laptop, tablet and mobile layouts. Roster grids may scroll on desktop; mobile should offer readable list/timeline alternatives rather than a squeezed grid.
++
++Kiosk:
++
++- Large touch targets and readable text.
++- Numeric PIN entry, masked identity and unmistakable confirmation.
++- Safe-area support, portrait/landscape handling and virtual keyboard tolerance.
++- Repeated taps and loading states must not duplicate punches.
++- Online-only scope: show explicit outage message and supervisor route.
++- Success appears only after server acknowledgement.
++
++Future mobile delivery path: keep the browser kiosk app-like and packageable. A web wrapper is the smallest maintainable next step while Tempo remains online-only. A separate native client should wait for offline signed capture, device management or hardware integrations that the wrapper cannot satisfy.
++
++For the first mobile packaging step, prefer a thin Capacitor-style web wrapper around the tested kiosk route. That keeps one React codebase, preserves the current online-only server acknowledgement model, and allows managed app distribution later without introducing a separate native feature backlog. Move to a native client only if offline signed capture, hardware NFC/biometric integration, managed device APIs, or background sync become accepted release requirements.
++
++## Accessibility checklist
++
++- Visible focus on every interactive control.
++- Labels for inputs, filters, status and icon-only controls.
++- Contrast meets WCAG AA for core text and controls.
++- Status has non-colour cues.
++- Dialogs/drawers trap focus and close with Escape.
++- Tables have meaningful headers and captions where needed.
++- Dynamic updates use `aria-live` only where useful.
++
++## Extending unfinished areas
++
++When preparing a shell, include:
++
++- What is ready.
++- What is not configured or coming later.
++- The next API contract required.
++- Links to the working adjacent route.
++
++Do not expose many unfinished pages in primary navigation just because a shell exists. Add routes only when they reduce confusion or establish an approved product path.
+diff --git a/docs/ui-route-checklist.md b/docs/ui-route-checklist.md
+new file mode 100644
+index 0000000..7a71bd1
+--- /dev/null
++++ b/docs/ui-route-checklist.md
+@@ -0,0 +1,47 @@
++# Tempo UI route checklist
++
++Updated: 2 October 2026
++
++Scope: `services/tempo-console` on `build/tempo-standalone-gate1`. This checklist records visual/interaction status only; roadmap acceptance still follows `docs/roadmap.md`.
++
++| Route | Current condition | Required visual / interaction changes | Status | Browser evidence | Remaining dependencies |
++|---|---|---|---|---|---|
++| `/` Overview | Uses shared shell, KPI cards, source freshness, chart, heatmap, attention queue and drawers. | Keep source freshness visible and avoid misleading zeroes. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Customer data validation and accepted source definitions. |
++| `/demand` Demand | Uses shared header, charts, tables, readiness and override panels. | Maintain forecast provenance and override approval clarity. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Customer samples, supplied forecast acceptance, broader work-standard setup. |
++| `/roster` Roster Planner | Shared workflow controls, version steps, board, conflicts, drawer editing and publish/approval actions. | Continue improving narrow/mobile list behavior; keep keyboard form route. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Overnight/break rule completion and realistic-volume UAT. |
++| `/live` Live Operations | Shared live KPIs, timeline, exceptions, source freshness and detail drawer. | Preserve stale-source suppression and clear owner/resolution states. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Real connector freshness and operational alert policies. |
++| `/attendance` Attendance | Shared KPI strip, filters, timesheet table, correction/approval drawer and export action. | Keep original punches separate from corrections and payable hours. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Complete break/missed-punch policies and payroll export agreement. |
++| `/approvals` Approvals | Shared approval inbox, roster steps and decision drawers. | Maintain requester/approver segregation and impact diff clarity. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Broader approval types and source drift revalidation. |
++| `/reports` Reports | Shared KPI cards, metric definitions, source freshness and detailed table. | Keep planned/estimated/confirmed labels and future-day dashes. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Customer validation of cost/payable-time policies. |
++| `/data` Data | Shared tabs for checklist, upload, history, status and API credentials. | Keep CSV/API state flow explicit and errors recoverable. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Background jobs, availability/rate imports and source-system reconciliation. |
++| `/onboarding` Connections | Reworked to shared cards, tables, pending-credentials banners and kiosk credential enrolment. | Distinguish registration from verified/live sync. | Enhanced shell | Blocked: local Chromium crashes at launch in this sandbox. | Deputy credentials/mapping/sync and second vendor selection. |
++| `/providers` Team & Skills | Reworked to shared page shell, provider table, scoped supplied-worker table and certification forms. | Keep provider scheduling read-only. | Enhanced shell | Blocked: local Chromium crashes at launch in this sandbox. | Full worker directory, availability, rates and offboarding. |
++| `/admin` Administration | Shared device and user admin sections. | Continue separating device enrolment from customer admin. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Branding, policies and full tenant admin module. |
++| `/billing` Plans & Billing | Shell added with indicative plan model and no live payment claims. | Add entitlement and payment API once built. | Shell only | Blocked: local Chromium crashes at launch in this sandbox. | Approved pricing, Stripe products, manual entitlement records. |
++| `/help` Help Library | Shell added with task links and API reference discovery. | Add article content as workflows stabilize. | Shell only | Blocked: local Chromium crashes at launch in this sandbox. | Full help content and environment-specific OpenAPI links. |
++| `/platform` Platform Administration | Shell added with platform boundary and support-access guidance. | Keep platform identity visibly distinct from customer login. | Shell only | Blocked: local Chromium crashes at launch in this sandbox. | Platform tenant APIs, support-grant use path and billing ops. |
++| `/account` Account | Shared account page for password and MFA setup. | Keep password/MFA states clear and recoverable. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Email provider for self-service reset. |
++| `/invite` Invite | Shared card style for invite acceptance. | Preserve expiry and password rule messaging. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Email delivery provider. |
++| `/login` Login | Shared login card, password/MFA/dev-local paths and dev auth warning. | Keep production auth configuration explicit. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Real IdP selection. |
++| `/kiosk` Kiosk | Dedicated full-screen device surface, large numeric PIN, timeout, outage state and server-ack success. | Added responsive/touch classes and explicit disabled break placeholder. | Enhanced | Blocked: local Chromium and headless shell crash at launch in this sandbox. | Break capture, missed-punch workflow, offline capture decision and app packaging. |
++| `/runs` Optimisation Studio | Reworked to shared shell, filters, status table, empty/loading/error states. | Keep advanced functionality secondary to core planning. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | More tailored business forms per model. |
++| `/runs/new` New Run | Reworked to shared form card and advanced-run framing. | Keep normal roster generation in Roster Planner. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Async worker and final run catalogue UX. |
++| `/runs/:id` Run Detail | Reworked to shared evidence cards and code blocks. | Reduce raw JSON once business result components mature. | Enhanced shell | Blocked: local Chromium crashes at launch in this sandbox. | Business-form result views for every model. |
++| `/runs/compare` Compare Runs | Reworked to shared selection form and KPI table. | Keep permission-gated KPIs hidden. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Saved comparison views. |
++| `/actions` Actions | Reworked to shared action-history table and status badges. | Keep writeback state honest. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Real vendor writeback connectors. |
++| `/actions/new` New Action | Reworked to shared validation/execution cards with honest overlay warning. | Avoid making unknown outcomes look confirmed. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Vendor writeback implementation and reconciliation scope. |
++| `/actions/:id` Action Detail | Reworked to shared evidence/reconciliation card. | Keep unknown/partial outcomes prominent. | Enhanced | Blocked: local Chromium crashes at launch in this sandbox. | Vendor outcome reconciliation with real connectors. |
++
++## Browser verification plan
++
++Use the isolated local dev stack (`127.0.0.1:5174` and API `127.0.0.1:8017`) with the Playwright Chromium executable already cached at `/home/opc/.cache/ms-playwright/chromium-1234/chrome-linux/chrome`. Do not reset the live tenant database.
++
++Required screenshot sizes:
++
++- Desktop 1440 x 900.
++- Narrow desktop 1280 x 800.
++- Tablet portrait 834 x 1112.
++- Tablet landscape 1112 x 834.
++- Mobile 390 x 844.
++
++Record screenshots under `docs/screenshots/ui-2026-10-02/` and update this checklist with the actual filenames and any defects found. In this sandbox, both cached Chromium binaries failed before page creation (`chrome`: `setsockopt: Operation not permitted`; `headless_shell`: `sandbox_host_linux.cc ... Operation not permitted`), so screenshots must be captured in an authorised environment that permits Chromium process sandbox/socket setup.
+diff --git a/services/tempo-console/src/pages/Billing.tsx b/services/tempo-console/src/pages/Billing.tsx
+new file mode 100644
+index 0000000..c519f14
+--- /dev/null
++++ b/services/tempo-console/src/pages/Billing.tsx
+@@ -0,0 +1,50 @@
++import { PageHead, Status } from '../components/ui'
++
++const TIERS = [
++  ['Essentials', 'A$1,500 / site / month', 'Focused planning and native attendance foundation.'],
++  ['Optimise', 'A$3,500 / site / month', 'Adds optimisation workflows and richer reporting.'],
++  ['Orchestrate', 'A$6,500 / site / month', 'For multi-site orchestration and advanced controls.'],
++  ['Network', 'Custom', 'Negotiated network and enterprise arrangements.'],
++]
++
++export default function BillingPage() {
++  return (
++    <>
++      <PageHead title="Plans & billing" sub="Commercial model shell: site-based plans, workforce allowances and unlimited platform users. Prices are indicative until approved." />
++      <section className="tp-card" style={{ marginBottom: 16 }}>
++        <header><h2>Plan model</h2><Status tone="risk">Configuration pending</Status></header>
++        <div className="tp-body">
++          <div className="tp-tilegrid">
++            {TIERS.map(([name, price, note]) => (
++              <div className="tp-tile" key={name}>
++                <b>{name}</b>
++                <span className="tp-num">{price}</span>
++                <small>{note}</small>
++              </div>
++            ))}
++          </div>
++        </div>
++      </section>
++      <div className="tp-cols2">
++        <section className="tp-card">
++          <header><h2>Workforce allowance</h2></header>
++          <div className="tp-body">
++            <table className="tp-table">
++              <thead><tr><th>Band</th><th>Status</th></tr></thead>
++              <tbody>
++                {['Up to 250 active workers', '251-500 active workers', '501-1,000 active workers', '1,000+ active workers'].map((band) => <tr key={band}><td>{band}</td><td><Status tone="neutral">Defined, not billed</Status></td></tr>)}
++              </tbody>
++            </table>
++          </div>
++        </section>
++        <section className="tp-card">
++          <header><h2>Payment readiness</h2><Status tone="neutral">No live Stripe products</Status></header>
++          <div className="tp-body tp-stack">
++            <p className="tp-muted">Tempo must support self-service Stripe signup and platform-created tenants without Stripe, but this UI pass does not create products, charge customers or claim payment integration is complete.</p>
++            <p className="tp-muted">Next implementation step: add plan/version APIs, entitlement checks, measured active-worker counts and manual entitlement records before enabling payment capture.</p>
++          </div>
++        </section>
++      </div>
++    </>
++  )
++}
+diff --git a/services/tempo-console/src/pages/Help.tsx b/services/tempo-console/src/pages/Help.tsx
+new file mode 100644
+index 0000000..7935f64
+--- /dev/null
++++ b/services/tempo-console/src/pages/Help.tsx
+@@ -0,0 +1,49 @@
++import { Link } from 'react-router-dom'
++import { PageHead, Status } from '../components/ui'
++
++const ARTICLES = [
++  ['First roster readiness', 'Organisation, site, staff, workload and attendance choices before generating a draft.', '/data'],
++  ['CSV import flow', 'Upload, map, validate, preview, confirm and download rejected rows without developer intervention.', '/data?tab=upload'],
++  ['API ingestion', 'Scoped service credentials, idempotency keys, batch limits and row-level errors.', '/data?tab=api'],
++  ['Roster states', 'Draft, submitted, approved, published and reconciled, including why edits invalidate approval.', '/roster'],
++  ['Attendance corrections', 'Original punches, requested corrections, second approval and payable hours.', '/attendance'],
++  ['Kiosk recovery', 'Device enrolment, online-only clocking, repeated taps, refresh and supervisor route during outages.', '/kiosk'],
++]
++
++export default function HelpPage() {
++  return (
++    <>
++      <PageHead title="Help library" sub="Operational guidance linked to the working Tempo pages. The API reference remains discoverable for integration teams." />
++      <div className="tp-grid">
++        <section className="tp-card">
++          <header><h2>Customer tasks</h2><Status tone="neutral">Shell prepared</Status></header>
++          <div className="tp-body">
++            <div className="tp-tilegrid">
++              {ARTICLES.map(([title, body, href]) => (
++                <Link key={title} className="tp-tile" to={href}>
++                  <b>{title}</b>
++                  <span>{body}</span>
++                </Link>
++              ))}
++            </div>
++          </div>
++        </section>
++        <aside className="tp-stack">
++          <section className="tp-card">
++            <header><h2>API reference</h2><Status tone="risk">Environment dependent</Status></header>
++            <div className="tp-body">
++              <p className="tp-muted">Swagger/OpenAPI is served by the API in development and UAT. Use it with the same tenant permissions and service credentials described in Data.</p>
++              <a className="tp-btn" href="/docs" target="_blank" rel="noreferrer">Open API docs</a>
++            </div>
++          </section>
++          <section className="tp-card">
++            <header><h2>Contextual help standard</h2></header>
++            <div className="tp-body">
++              <p className="tp-muted">Future pages should link here for metric definitions, setup prerequisites and recovery steps. Help must describe source, freshness and authority, not marketing promises.</p>
++            </div>
++          </section>
++        </aside>
++      </div>
++    </>
++  )
++}
+diff --git a/services/tempo-console/src/pages/PlatformAdmin.tsx b/services/tempo-console/src/pages/PlatformAdmin.tsx
+new file mode 100644
+index 0000000..b94a5c8
+--- /dev/null
++++ b/services/tempo-console/src/pages/PlatformAdmin.tsx
+@@ -0,0 +1,50 @@
++import { Link } from 'react-router-dom'
++import { PageHead, Status } from '../components/ui'
++import { useTempoContext } from '../context/TempoContextProvider'
++
++const ROWS = [
++  ['Tenant lifecycle', 'Create, suspend and review tenants through platform APIs.', 'Partial backend groundwork'],
++  ['Plans and entitlements', 'Assign plan, site count, workforce band and negotiated terms.', 'API contract needed'],
++  ['Integration health', 'Review connection freshness, failed rows, retries and reconnect instructions.', 'Customer pages partial'],
++  ['Support access', 'Use time-boxed grants with reason, step-up and audit trail.', 'Use path still open'],
++  ['Billing operations', 'Stripe signup and manual entitlement support.', 'Not integrated'],
++]
++
++export default function PlatformAdminPage() {
++  const { access } = useTempoContext()
++  return (
++    <>
++      <PageHead title="Platform administration" sub="Distinct operator surface for tenant management, support and commercial operations." />
++      {!access?.platform_admin ? (
++        <section className="tp-card"><div className="tp-body"><Status tone="bad">Platform administrator required</Status><p className="tp-muted">This route is visible only to platform operators in normal navigation. Direct links still rely on API permissions for any future data.</p></div></section>
++      ) : (
++        <div className="tp-grid">
++          <section className="tp-card">
++            <header><h2>Operator workspace</h2><Status tone="risk">Shell prepared</Status></header>
++            <div className="tp-body">
++              <table className="tp-table">
++                <thead><tr><th>Area</th><th>Purpose</th><th>Current state</th></tr></thead>
++                <tbody>{ROWS.map(([area, purpose, state]) => <tr key={area}><td><b>{area}</b></td><td>{purpose}</td><td><Status tone={state.includes('Not') || state.includes('needed') ? 'risk' : 'neutral'}>{state}</Status></td></tr>)}</tbody>
++              </table>
++            </div>
++          </section>
++          <aside className="tp-stack">
++            <section className="tp-card">
++              <header><h2>Support boundary</h2></header>
++              <div className="tp-body">
++                <p className="tp-muted">Entering a customer environment must show the tenant, reason, approver and expiry. It must never look like an ordinary customer login.</p>
++                <Link className="tp-btn" to="/audit">Open global/customer audit</Link>
++              </div>
++            </section>
++            <section className="tp-card">
++              <header><h2>Next API contract</h2></header>
++              <div className="tp-body">
++                <p className="tp-muted">Add platform tenant list/detail, support-grant use, entitlement configuration, integration-health rollups and billing event records. Keep support diagnostics impersonation-free.</p>
++              </div>
++            </section>
++          </aside>
++        </div>
++      )}
++    </>
++  )
++}

@@ -180,3 +180,24 @@ Detail and the full evidence/gap table: `docs/mobile/STATUS.md`. Not a milestone
 * **Manager web controls:** invite/remove app access (Badges & PINs), Shift offers, Leave requests, Mobile notifications (Administration), roster shift break and instructions, help articles.
 * **Defects found and fixed on the way:** a throttled sign-in returned a server error instead of a refusal; re-inviting a person after removing their access would have failed (duplicate account); the e2e check for an employee reaching manager data had passed vacuously (404s).
 * **Not done / external:** push delivery (no Expo/Apple/Google credentials), real SMS provider, store accounts, signing, icon art, real-device and accessibility testing, OS-level kiosk lockdown (document only), offline clocking (out of scope), data export/deletion for employees (M6-OPS).
+
+## Outgoing email / SMTP (4 Oct 2026) — status: **built and unit-tested with a fake mail server; delivery to a real mailbox is verified only if recorded in `docs/DEPLOYMENT.md`**
+* **Platform-level account**, configured in the Platform console → **Email** (host, port, STARTTLS/SSL/none, username, password, from address and name, on/off). The password is encrypted at rest with the same key material as the other stored secrets, is write-only (no API returns it; a blank field keeps it), and changes need the administrator's fresh two-step verification. Every change is audited. Migration `f8a9b0c1d2e3` (`smtp_config`, `email_message`).
+* **Test connection** signs in without sending anything; **Send test email** sends one short message to an address the administrator types. Neither runs unprompted.
+* **Invitations** (platform admin, new tenant's first administrator, extra tenant administrator, tenant users, password reset, employee app invite when the person has an email) are emailed best-effort. The one-time link is still shown on screen, and the console says plainly whether the email was sent, failed or email is off. A failed or unconfigured mail server never blocks an invitation.
+* **Log** (`email_message`): who, kind, subject, result, error. **Message bodies are never stored** because invitation emails carry one-time links. The app role cannot delete log rows.
+* **Operator seeding:** `python -m app.cli set-smtp --host … --username … --from-email … --password-stdin --operator …` (password from stdin, never an argument or file in the repo). Link base: `TEMPO_PUBLIC_APP_URL`.
+* **Not built:** bounce/complaint handling, delivery receipts, per-tenant sender domains, SPF/DKIM guidance for a custom domain (the sender is whatever the mailbox provider permits), email for shift notifications (employee notifications use push; SMS interface is separate).
+
+## UI/UX foundation pass (2 Oct 2026) — status: **partial, not accepted**
+
+Implemented a shared SaaS UI foundation across the console without changing production deployment or claiming functional acceptance:
+
+- Added `docs/ui-design-system.md` and root `AGENTS.md` so future work follows the Tempo tokens, shell conventions, table/form/status patterns, responsive rules and kiosk/mobile guidance.
+- Added customer Help, Plans & billing and Platform administration shells. These are honest shells: billing remains indicative and not connected to Stripe; platform support access is described as requiring time-boxed grants; API contracts are recorded as next steps.
+- Reworked Connections & onboarding into the shared Tempo component system, with clear Deputy/second-vendor status and pending-credentials wording.
+- Tightened shared CSS so the new shell is not constrained by legacy global `main`/`form` rules, added reusable tile grids and mobile layout refinements, and kept cards at the design-system radius.
+- Added a visible platform-operator session banner in the application shell.
+- Continued the pass across the remaining legacy routes: Team & Skills, Optimisation Studio, Runs, Actions and Kiosk now use the shared shell/components/status styles. Added `docs/ui-route-checklist.md` for route-by-route status, dependencies and browser evidence tracking.
+
+Verification: `npm test` and `npm run build` pass; `npm run lint` exits 0 with existing warnings. Browser/e2e screenshots remain blocked in this sandbox: cached Chromium starts but exits before page creation with `setsockopt: Operation not permitted`, and cached `headless_shell` fails at sandbox host shutdown with `Operation not permitted`. Capture screenshots and rerun Playwright in an authorised environment that permits Chromium process setup before treating the UX foundation as accepted.
