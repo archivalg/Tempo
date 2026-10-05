@@ -13,6 +13,8 @@ import ReportsPage from './pages/Reports'
 import AccountPage from './pages/Account'
 import InvitePage from './pages/Invite'
 import { KioskPage } from './pages/Kiosk'
+import LandingPage from './pages/Landing'
+import Landing2Page from './pages/Landing2'
 import { LabourProvidersPage } from './pages/LabourProviders'
 import LiveOperationsPage from './pages/LiveOperations'
 import { NewActionPage } from './pages/NewAction'
@@ -36,6 +38,8 @@ function App() {
       <BrowserRouter>
         <Routes>
           {/* Kiosk is a device surface: no session, no navigation. */}
+          <Route path="/landing" element={<LandingPage />} />
+          <Route path="/landing2" element={<Landing2Page />} />
           <Route path="/kiosk" element={<KioskPage />} />
           <Route path="/invite" element={<InvitePage />} />
           {/* Team members: their own roster, offers, leave and clockings on the web. A separate surface from the manager shell. */}
