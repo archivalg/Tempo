@@ -51,8 +51,18 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
     dc = batch.data_class
     if dc == "master" and batch.entity == "workers":
         result = _apply_workers(db, ctx, good)
-    elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates"):
-        result = {"sites": _apply_sites, "customers": _apply_customers, "availability": _apply_availability, "rates": _apply_rates}[batch.entity](db, ctx, batch, good)
+    elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
+                                              "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
+                                              "fill_priorities", "absenteeism", "equipment", "headcount_limits",
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements"):
+        result = {"sites": _apply_sites, "customers": _apply_customers, "availability": _apply_availability, "rates": _apply_rates,
+                  "zones": _apply_zones, "activity_roles": _apply_activity_roles, "operating_calendar": _apply_operating_calendar,
+                  "shift_templates": _apply_shift_templates, "shift_breaks": _apply_shift_breaks,
+                  "process_templates": _apply_process_templates, "process_steps": _apply_process_steps, "orders": _apply_orders,
+                  "worker_activity_rates": _apply_worker_activity_rates, "unit_conversions": _apply_unit_conversions,
+                  "fill_priorities": _apply_fill_priorities, "absenteeism": _apply_absenteeism, "equipment": _apply_equipment,
+                  "headcount_limits": _apply_headcount_limits, "grade_rates": _apply_grade_rates, "productivity_loss": _apply_productivity_loss,
+                  "staging_capacity": _apply_staging_capacity, "staging_movements": _apply_staging_movements}[batch.entity](db, ctx, batch, good)
     elif dc == "master":
         result = _apply_standards(db, ctx, good)
     elif dc == "forecast":
@@ -158,6 +168,343 @@ def _apply_rates(db: Session, ctx: RequestContext, batch: ImportBatch, good: lis
             updated += 1
         r.applied = True
     return {"created": created, "updated": updated, "unchanged": same}
+
+
+def _apply_zones(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.directory import Zone
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        z = db.get(Zone, (ctx.tenant_id, n["site"], n["zone_id"]))
+        if z is None:
+            db.add(Zone(tenant_id=ctx.tenant_id, site_id=n["site"], zone_id=n["zone_id"], name=n["zone_name"]))
+            created += 1
+        else:
+            z.name = n["zone_name"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_activity_roles(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.canonical import ActivityRoleZoneMap
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        m = db.scalar(select(ActivityRoleZoneMap).where(ActivityRoleZoneMap.tenant_id == ctx.tenant_id, ActivityRoleZoneMap.site_id == n["site"],
+                                                        ActivityRoleZoneMap.activity == n["activity"], ActivityRoleZoneMap.role == n["role"], ActivityRoleZoneMap.zone == n["zone_id"]))
+        if m is None:
+            db.add(ActivityRoleZoneMap(tenant_id=ctx.tenant_id, site_id=n["site"], activity=n["activity"], role=n["role"], zone=n["zone_id"], weight=n["weight"]))
+            created += 1
+        else:
+            m.weight = n["weight"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_operating_calendar(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.scheduling import OperatingCalendarDay
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        c = db.scalar(select(OperatingCalendarDay).where(OperatingCalendarDay.tenant_id == ctx.tenant_id, OperatingCalendarDay.site_id == n["site"], OperatingCalendarDay.weekday == n["weekday"]))
+        vals = dict(is_24h=n["is_24h"], is_closed=n["is_closed"], open_time=n["open_time"], close_time=n["close_time"])
+        if c is None:
+            db.add(OperatingCalendarDay(tenant_id=ctx.tenant_id, site_id=n["site"], weekday=n["weekday"], **vals))
+            created += 1
+        else:
+            for k, v in vals.items():
+                setattr(c, k, v)
+            c.updated_at = _now()
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_shift_templates(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.scheduling import ShiftTemplate
+    created = changed = same = 0
+    for r in good:
+        n = r.normalised
+        start = parse_local_date(n["effective_from"])
+        cur = db.scalar(select(ShiftTemplate).where(ShiftTemplate.tenant_id == ctx.tenant_id, ShiftTemplate.site_id == n["site"], ShiftTemplate.shift_code == n["shift_code"], ShiftTemplate.effective_to.is_(None)))
+        if cur is not None and (cur.start_time, cur.end_time, cur.weekdays) == (n["start_time"], n["end_time"], n["weekdays"]):
+            same += 1
+            continue
+        if cur is not None:
+            if cur.effective_from >= start:
+                cur.start_time, cur.end_time, cur.weekdays = n["start_time"], n["end_time"], n["weekdays"]  # same-day correction, no new row
+                changed += 1
+                r.applied = True
+                continue
+            cur.effective_to = start
+            changed += 1
+        else:
+            created += 1
+        db.add(ShiftTemplate(tenant_id=ctx.tenant_id, site_id=n["site"], shift_code=n["shift_code"], start_time=n["start_time"], end_time=n["end_time"], weekdays=n["weekdays"], effective_from=start))
+        r.applied = True
+    return {"created": created, "changed": changed, "unchanged": same}
+
+
+def _apply_shift_breaks(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.scheduling import ShiftBreak, ShiftTemplate
+    created = updated = same = 0
+    for r in good:
+        n = r.normalised
+        tmpl = db.scalar(select(ShiftTemplate).where(ShiftTemplate.tenant_id == ctx.tenant_id, ShiftTemplate.site_id == n["site"], ShiftTemplate.shift_code == n["shift_code"], ShiftTemplate.effective_to.is_(None)))
+        if tmpl is None:
+            raise ImportProblem(f"shift_code '{n['shift_code']}' at site '{n['site']}' is no longer an active template")
+        b = db.scalar(select(ShiftBreak).where(ShiftBreak.tenant_id == ctx.tenant_id, ShiftBreak.shift_template_id == tmpl.id,
+                                               ShiftBreak.starts_after_minutes == n["starts_after_minutes"], ShiftBreak.duration_minutes == n["duration_minutes"]))
+        if b is None:
+            db.add(ShiftBreak(tenant_id=ctx.tenant_id, shift_template_id=tmpl.id, starts_after_minutes=n["starts_after_minutes"], duration_minutes=n["duration_minutes"], is_paid=n["is_paid"]))
+            created += 1
+        elif b.is_paid == n["is_paid"]:
+            same += 1
+            continue
+        else:
+            b.is_paid = n["is_paid"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated, "unchanged": same}
+
+
+def _apply_process_templates(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.orders import ProcessTemplate
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        t = db.scalar(select(ProcessTemplate).where(ProcessTemplate.tenant_id == ctx.tenant_id, ProcessTemplate.site_id == n["site"],
+                                                     ProcessTemplate.process_code == n["process_code"], ProcessTemplate.customer_id == n["customer_id"]))
+        if t is None:
+            db.add(ProcessTemplate(tenant_id=ctx.tenant_id, site_id=n["site"], process_code=n["process_code"], customer_id=n["customer_id"]))
+            created += 1
+        else:
+            updated += 1  # nothing else to change — identity is the key itself
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_process_steps(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.orders import ProcessStep, ProcessTemplate
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        tmpl = db.scalar(select(ProcessTemplate).where(ProcessTemplate.tenant_id == ctx.tenant_id, ProcessTemplate.site_id == n["site"], ProcessTemplate.process_code == n["process_code"]))
+        if tmpl is None:
+            raise ImportProblem(f"process_code '{n['process_code']}' at site '{n['site']}' no longer exists")
+        step = db.scalar(select(ProcessStep).where(ProcessStep.tenant_id == ctx.tenant_id, ProcessStep.process_template_id == tmpl.id, ProcessStep.sequence == n["sequence"]))
+        if step is None:
+            db.add(ProcessStep(tenant_id=ctx.tenant_id, process_template_id=tmpl.id, sequence=n["sequence"], activity=n["activity"], lag_minutes=n["lag_minutes"]))
+            created += 1
+        else:
+            step.activity, step.lag_minutes = n["activity"], n["lag_minutes"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_orders(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.orders import Order, ProcessTemplate
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        tmpl = db.scalar(select(ProcessTemplate).where(ProcessTemplate.tenant_id == ctx.tenant_id, ProcessTemplate.site_id == n["site"], ProcessTemplate.process_code == n["process_code"]))
+        if tmpl is None:
+            raise ImportProblem(f"process_code '{n['process_code']}' at site '{n['site']}' no longer exists")
+        o = db.scalar(select(Order).where(Order.tenant_id == ctx.tenant_id, Order.site_id == n["site"], Order.order_ref == n["order_id"]))
+        vals = dict(customer_id=n["customer_id"], order_received=datetime.fromisoformat(n["order_received"]), despatch_due=datetime.fromisoformat(n["despatch_due"]),
+                    units=n["units"], lines=n["lines"], unit=n["unit"], process_template_id=tmpl.id)
+        if o is None:
+            db.add(Order(tenant_id=ctx.tenant_id, site_id=n["site"], order_ref=n["order_id"], **vals))
+            created += 1
+        else:
+            for k, v in vals.items():
+                setattr(o, k, v)
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_worker_activity_rates(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.orders import WorkerActivityRate
+    refs = {w.source_ref: w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
+    created = changed = same = 0
+    for r in good:
+        n = r.normalised
+        wid, start = refs[n["worker_ref"]], parse_local_date(n["effective_from"])
+        cur = db.scalar(select(WorkerActivityRate).where(WorkerActivityRate.tenant_id == ctx.tenant_id, WorkerActivityRate.worker_id == wid,
+                                                         WorkerActivityRate.activity == n["activity"], WorkerActivityRate.effective_to.is_(None)))
+        if cur is not None and abs(cur.rate_per_hour - n["rate_per_hour"]) < 1e-9 and cur.unit == n["unit"]:
+            same += 1
+            continue
+        if cur is not None:
+            if cur.effective_from >= start:
+                cur.rate_per_hour, cur.unit = n["rate_per_hour"], n["unit"]  # same-day correction, no new row
+                changed += 1
+                r.applied = True
+                continue
+            cur.effective_to = start
+            changed += 1
+        else:
+            created += 1
+        db.add(WorkerActivityRate(tenant_id=ctx.tenant_id, worker_id=wid, activity=n["activity"], unit=n["unit"], rate_per_hour=n["rate_per_hour"], effective_from=start))
+        r.applied = True
+    return {"created": created, "changed": changed, "unchanged": same}
+
+
+def _apply_unit_conversions(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.orders import UnitConversion
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        c = db.scalar(select(UnitConversion).where(UnitConversion.tenant_id == ctx.tenant_id, UnitConversion.activity == n.get("activity"),
+                                                    UnitConversion.from_unit == n["from_unit"], UnitConversion.to_unit == n["to_unit"]))
+        if c is None:
+            db.add(UnitConversion(tenant_id=ctx.tenant_id, activity=n.get("activity"), from_unit=n["from_unit"], to_unit=n["to_unit"], factor=n["factor"]))
+            created += 1
+        else:
+            c.factor = n["factor"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_fill_priorities(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.constraints import FillPriority
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        p = db.scalar(select(FillPriority).where(FillPriority.tenant_id == ctx.tenant_id, FillPriority.scope == n["scope"], FillPriority.value == n["value"]))
+        if p is None:
+            db.add(FillPriority(tenant_id=ctx.tenant_id, scope=n["scope"], value=n["value"], priority=n["priority"]))
+            created += 1
+        else:
+            p.priority = n["priority"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_absenteeism(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.constraints import AbsenteeismRule
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        a = db.scalar(select(AbsenteeismRule).where(AbsenteeismRule.tenant_id == ctx.tenant_id, AbsenteeismRule.site_id == n["site"],
+                                                     AbsenteeismRule.activity == n.get("activity"), AbsenteeismRule.weekday == n.get("weekday"), AbsenteeismRule.shift_code == n.get("shift_code")))
+        if a is None:
+            db.add(AbsenteeismRule(tenant_id=ctx.tenant_id, site_id=n["site"], activity=n.get("activity"), weekday=n.get("weekday"), shift_code=n.get("shift_code"), absence_pct=n["absence_pct"]))
+            created += 1
+        else:
+            a.absence_pct = n["absence_pct"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_equipment(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.constraints import Equipment
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        e = db.scalar(select(Equipment).where(Equipment.tenant_id == ctx.tenant_id, Equipment.site_id == n["site"], Equipment.equipment_id == n["equipment_id"]))
+        if e is None:
+            db.add(Equipment(tenant_id=ctx.tenant_id, site_id=n["site"], equipment_id=n["equipment_id"], description=n["description"], quantity_available=n["quantity_available"]))
+            created += 1
+        else:
+            e.description, e.quantity_available = n["description"], n["quantity_available"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_headcount_limits(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.constraints import HeadcountLimit
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        h = db.scalar(select(HeadcountLimit).where(HeadcountLimit.tenant_id == ctx.tenant_id, HeadcountLimit.site_id == n["site"],
+                                                    HeadcountLimit.activity == n["activity"], HeadcountLimit.shift_code == n.get("shift_code")))
+        if h is None:
+            db.add(HeadcountLimit(tenant_id=ctx.tenant_id, site_id=n["site"], activity=n["activity"], shift_code=n.get("shift_code"), min_headcount=n["min_headcount"], max_headcount=n["max_headcount"]))
+            created += 1
+        else:
+            h.min_headcount, h.max_headcount = n["min_headcount"], n["max_headcount"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_grade_rates(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.canonical import LabourCostRule
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        c = db.scalar(select(LabourCostRule).where(LabourCostRule.tenant_id == ctx.tenant_id, LabourCostRule.labour_type == n["employment_type"], LabourCostRule.role == n["role"],
+                                                    LabourCostRule.position_grade == n.get("position_grade"), LabourCostRule.provider_id == n.get("provider_id"),
+                                                    LabourCostRule.effective_from == datetime.fromisoformat(n["effective_from"]).replace(tzinfo=timezone.utc)))
+        vals = dict(rate=f"{n['hourly_rate']:.2f}", overtime_multiplier=None if n["overtime_multiplier"] is None else f"{n['overtime_multiplier']:g}",
+                    surcharge=None if n["surcharge"] is None else f"{n['surcharge']:.2f}", currency=n["currency"],
+                    effective_to=datetime.fromisoformat(n["effective_to"]).replace(tzinfo=timezone.utc) if n.get("effective_to") else None)
+        if c is None:
+            db.add(LabourCostRule(tenant_id=ctx.tenant_id, labour_type=n["employment_type"], role=n["role"], position_grade=n.get("position_grade"), provider_id=n.get("provider_id"),
+                                  effective_from=datetime.fromisoformat(n["effective_from"]).replace(tzinfo=timezone.utc), **vals))
+            created += 1
+        else:
+            for k, v in vals.items():
+                setattr(c, k, v)
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_productivity_loss(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.stage4 import ProductivityLoss
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        p = db.scalar(select(ProductivityLoss).where(ProductivityLoss.tenant_id == ctx.tenant_id, ProductivityLoss.site_id == n["site"], ProductivityLoss.loss_type == n["type"],
+                                                      ProductivityLoss.activity == n.get("activity"), ProductivityLoss.weekday == n.get("weekday"), ProductivityLoss.shift_code == n.get("shift_code")))
+        vals = dict(percent_loss=n["percent_loss"], off_task_hours=n["off_task_hours"])
+        if p is None:
+            db.add(ProductivityLoss(tenant_id=ctx.tenant_id, site_id=n["site"], loss_type=n["type"], activity=n.get("activity"), weekday=n.get("weekday"), shift_code=n.get("shift_code"), **vals))
+            created += 1
+        else:
+            for k, v in vals.items():
+                setattr(p, k, v)
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_staging_capacity(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.stage4 import StagingCapacity
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        c = db.scalar(select(StagingCapacity).where(StagingCapacity.tenant_id == ctx.tenant_id, StagingCapacity.site_id == n["site"], StagingCapacity.zone_id == n["zone_id"]))
+        if c is None:
+            db.add(StagingCapacity(tenant_id=ctx.tenant_id, site_id=n["site"], zone_id=n["zone_id"], capacity=n["capacity"], unit=n["unit"]))
+            created += 1
+        else:
+            c.capacity, c.unit = n["capacity"], n["unit"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_staging_movements(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.stage4 import StagingMovement
+    created = 0
+    for r in good:
+        n = r.normalised
+        db.add(StagingMovement(tenant_id=ctx.tenant_id, site_id=n["site"], zone_id=n["zone_id"], occurred_at=datetime.fromisoformat(n["occurred_at"]),
+                               movement_type=n["movement_type"], quantity=n["quantity"], unit=n["unit"]))
+        created += 1
+        r.applied = True
+    return {"created": created}
 
 
 def _apply_availability(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:

@@ -226,6 +226,13 @@ class LabourCostRule(Base):
     overtime_multiplier: Mapped[str | None] = mapped_column(String, nullable=True)
     surcharge: Mapped[str | None] = mapped_column(String, nullable=True)
     currency: Mapped[str] = mapped_column(String, default="AUD")
+    # Order-driven-planning Stage 4: a rule may be narrowed to one grade/provider and one effective
+    # period, so a grade- or provider-specific rate can coexist with a general (labour_type, role)
+    # rate. Null means "applies regardless" — never a wildcard that silently outranks a specific row.
+    position_grade: Mapped[str | None] = mapped_column(String, nullable=True)
+    provider_id: Mapped[str | None] = mapped_column(String, ForeignKey("labour_provider.provider_id"), nullable=True)
+    effective_from: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class SellRateContract(Base):

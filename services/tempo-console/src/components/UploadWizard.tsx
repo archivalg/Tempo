@@ -4,10 +4,33 @@ import { Banner, Status } from './ui'
 import { fmtNum } from '../lib/format'
 
 const key = (c: ContractDef) => `${c.data_class}|${c.entity ?? ''}`
-const ORDER = ['master|sites', 'master|customers', 'master|workers', 'master|availability', 'master|work_standards', 'master|rates', 'forecast|', 'bulk|', 'transactions|']
+const ORDER = ['master|sites', 'master|zones', 'master|customers', 'master|workers', 'master|availability', 'master|work_standards', 'master|activity_roles', 'master|worker_activity_rates', 'master|rates',
+  'master|operating_calendar', 'master|shift_templates', 'master|shift_breaks', 'master|unit_conversions', 'master|process_templates', 'master|process_steps', 'master|orders',
+  'master|fill_priorities', 'master|absenteeism', 'master|equipment', 'master|headcount_limits',
+  'master|grade_rates', 'master|productivity_loss', 'master|staging_capacity', 'master|staging_movements',
+  'forecast|', 'bulk|', 'transactions|']
 const HINT: Record<string, string> = {
-  'master|sites': 'Your warehouses. Needs an administrator.', 'master|customers': 'The customers whose work you handle.', 'master|availability': 'Leave, days off and times people cannot work. Upload staff first.',
-  'master|rates': 'Hourly cost per employment type and role, for planned cost.', 'master|workers': 'Start here: who works for you.', 'master|work_standards': 'Needed before any workload can name an activity.', 'forecast|': 'What you expect to be processed.',
+  'master|sites': 'Your warehouses. Needs an administrator.', 'master|zones': 'Named areas within a site (pick, pack, stage). Upload sites first.', 'master|customers': 'The customers whose work you handle.',
+  'master|availability': 'Leave, days off and times people cannot work. Upload staff first.',
+  'master|rates': 'Hourly cost per employment type and role, for planned cost.', 'master|workers': 'Start here: who works for you.', 'master|work_standards': 'Needed before any workload can name an activity.',
+  'master|activity_roles': 'Which role works an activity in which zone. Upload zones and work standards first.',
+  'master|worker_activity_rates': 'A person’s own rate for one activity, overriding the activity standard for them. Upload staff and work standards first.',
+  'master|operating_calendar': 'Your site’s open hours by weekday, used to check shift templates against real operating hours.',
+  'master|shift_templates': 'Named shifts (start/end time, weekdays). Upload the operating calendar first for conflict checks.',
+  'master|shift_breaks': 'Scheduled breaks within a shift template. Upload shift templates first.',
+  'master|unit_conversions': 'Factors to convert one unit into another, such as lines to units.',
+  'master|process_templates': 'A named sequence of activities an order must pass through before despatch (pick, pack, dispatch).',
+  'master|process_steps': 'The activities in a process template, in order. Upload the process template first.',
+  'master|orders': 'Known outbound orders with a received time and a despatch deadline. Upload process templates first.',
+  'master|fill_priorities': 'The order to fill labour gaps when not everything can be covered.',
+  'master|absenteeism': 'Expected absence rate by site, activity, weekday and shift.',
+  'master|equipment': 'Shared equipment pools (such as high-reach trucks) that limit concurrent activity.',
+  'master|headcount_limits': 'Minimum and maximum people allowed on one activity at once.',
+  'master|grade_rates': 'An hourly rate narrowed to one position grade or labour provider.',
+  'master|productivity_loss': 'An explicit congestion rate reduction or off-task hours reduction. Never a crowding curve.',
+  'master|staging_capacity': 'Maximum concurrent occupancy for a zone, in an explicit unit. Upload zones first.',
+  'master|staging_movements': 'Arrivals, departures and initial occupancy for a staging zone. Upload its Staging capacity first.',
+  'forecast|': 'What you expect to be processed.',
   'bulk|': 'Daily or hourly totals of what was processed.', 'transactions|': 'One row per event, when your system can send them.',
 }
 

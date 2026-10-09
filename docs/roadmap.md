@@ -24,7 +24,7 @@ Owner direction on 1 October 2026:
 - Price by plan, sites and workforce bands with unlimited platform users; retain Arch's proposed figures as indicative until commercially approved.
 - Separate app.tempo.* and api.tempo.* origins, provide platform administration with controlled tenant support access, and deliver a full customer help library and Swagger/OpenAPI reference.
 
-This roadmap replaces the older integration-led roadmap as the delivery priority. The product blueprint remains a source of detailed requirements, but its broader portal, advanced module and architecture expansion must follow this focused release scope. Prime integration, a separate Maestro service, new solver families and advanced enterprise portals are outside the first release. Existing connector code under `app/maestro` may be reused inside Tempo without requiring another customer product.
+This roadmap replaces the older integration-led roadmap as the delivery priority. The product blueprint remains a source of detailed requirements, but its broader portal, advanced module and architecture expansion must follow this focused release scope. Prime integration, a separate Maestro service and advanced enterprise portals are outside the first release. Existing connector code under `app/maestro` may be reused inside Tempo without requiring another customer product. Order-driven extensions to the existing warehouse labour solver (process templates, task dependencies, equipment, indirect coverage, congestion/staging) are in scope under M3 — see [Order-driven labour planning](order-driven-planning.md) — and are not the "new solver families" deferred below.
 
 ## 2. Current baseline and truthful status
 
@@ -166,6 +166,24 @@ Acceptance: real-device/browser tests cover clock/break cycles, overnight work, 
 - Validate forecast error on held-out periods/rolling history. Synthetic demonstrations do not establish customer savings or accuracy.
 
 Acceptance: a warehouse manager completes a weekly plan and daily attendance review without raw payloads; shift/report totals reconcile; hard conflicts prevent publication; representative team size meets an agreed measured performance target.
+
+### M3 extension — order-driven labour planning (9 Oct 2026, supersedes/expands the above)
+
+Plan labour from known orders, tasks, deadlines, real shifts and available people, while retaining
+forecast-only planning and the cost/reporting items above. Staged delivery (Stage 0 code assessment
+complete; Stage 1–2 are the first operational increment; Stage 3–4 follow once demonstrated):
+
+| Stage | Scope | Status |
+|---|---|---|
+| 0 | Code assessment and versioned data-contract design | **Accepted** |
+| 1 | Import foundation, operating calendars, versioned shift templates/breaks, availability | **Partial** |
+| 2 | Order/process-template workload, personal activity rates, indirect headcount coverage, unit conversion | **Partial** |
+| 3 | Priorities, absenteeism (in the core plan), equipment pools, dependencies, headcount limits | **Partial** |
+| 4 | Congestion/off-task loss, staging capacity, grade-aware costing, forecasting improvements | **Partial** |
+
+Full scope, the Stage 0 field-support matrix, and the Stage 1–2 implementation approach are recorded in
+[Order-driven labour planning](order-driven-planning.md). Do not mark any stage accepted without the
+acceptance scenarios in that document demonstrated and evidenced, per this roadmap's status rules.
 
 ## 8. M4 and M5 — two external workforce connections
 
@@ -357,7 +375,7 @@ Do not stop independent work while a vendor decision is pending. Do not invent c
 
 ## 12. Deferred scope and roadmap maintenance
 
-Deferred: new solver families, complex approval hierarchies, advanced provider/customer portals, a generic integration builder, broad BI studio, full payroll/award processing, biometrics, native mobile apps, offline kiosk capture unless required, Prime integration and mandatory extraction of a separate Maestro service.
+Deferred: wholly new solver products unrelated to warehouse labour planning, complex approval hierarchies, advanced provider/customer portals, a generic integration builder, broad BI studio, full payroll/award processing, biometrics, native mobile apps, offline kiosk capture unless required, Prime integration and mandatory extraction of a separate Maestro service. Order-driven extensions to the existing labour solver are in scope — see the M3 extension in §7 and [order-driven-planning.md](order-driven-planning.md).
 
 Existing advanced solvers remain available behind the core product; expand their UI only when a customer task justifies it.
 
@@ -366,6 +384,7 @@ Track each delivery item using the milestone ID plus task suffix (for example M1
 Update this file when scope or milestone status changes. Mark accepted only after browser/API or real-connector evidence for the relevant customer journey. Automated unit tests alone do not establish customer readiness.
 
 References:
+- [Order-driven labour planning (M3 extension)](order-driven-planning.md)
 - [Build progress and historical evidence](build-progress.md)
 - [Product blueprint and detailed requirements](Tempo_Product_Build_Blueprint.md)
 - [PostgreSQL decision](adr/0011-postgresql-rls.md)

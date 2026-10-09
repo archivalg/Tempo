@@ -28,4 +28,18 @@ class SolverOutcome:
 class InsufficientData(Exception):
     """Raised when a solver has no usable canonical input at all — maps to
     TEMPO-DATA-004 (§8.6) rather than proceeding with an empty result.
+    Never persists a run row: the request never produced anything worth
+    auditing as an attempted plan.
     """
+
+
+class SolverInfeasible(Exception):
+    """Raised when a solver genuinely attempted to solve (CBC/CP-SAT or
+    equivalent returned a non-OPTIMAL/FEASIBLE status) and concluded no
+    assignment satisfies the hard constraints — distinct from
+    InsufficientData, which means there was nothing to attempt at all.
+    Unlike InsufficientData, this DOES persist a terminal run (status
+    "failed", Feasibility "infeasible") so a genuinely infeasible run is
+    never indistinguishable from one that never happened (order-driven-
+    planning Stage 0 finding: both previously collapsed into the same
+    rolled-back, unrecorded outcome)."""

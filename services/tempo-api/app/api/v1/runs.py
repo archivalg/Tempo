@@ -48,15 +48,16 @@ from app.models.runs import (
     Recommendation,
     SourceVersionWatermark,
 )
-from app.schemas.runs import IMPLEMENTED_RUN_TYPES, RunRequest, RunResponse
+from app.schemas.runs import IMPLEMENTED_RUN_TYPES, ConfidenceComponents, RunRequest, RunResponse
 from app.schemas.tenancy import RequestContext
-from app.solvers.base import InsufficientData, SolverOutcome
+from app.solvers.base import InsufficientData, SolverInfeasible, SolverOutcome
 from app.solvers.demand_forecast import forecast_demand
 from app.solvers.labour_requirement import translate_labour_requirement
 from app.solvers.intraday_reallocation import solve_intraday_reallocation
 from app.solvers.leave_rdo import solve_leave_rdo
 from app.solvers.margin_3pl import solve_margin_3pl
 from app.solvers.named_roster import solve_named_roster
+from app.solvers.order_workload import solve_order_fulfillment
 from app.solvers.scenario import solve_scenario
 from app.solvers.team_composition import solve_team_composition
 from app.solvers.training_coverage import solve_training_coverage
@@ -75,6 +76,7 @@ _RUN_TYPE_TO_MODEL = {
     "team_composition": ("team_composition", "1.0.0", "milp-cbc"),
     "margin_3pl": ("margin_3pl", "1.0.0", "milp-cbc"),
     "scenario": ("scenario", "1.0.0", "monte-carlo"),
+    "order_fulfillment": ("order_driven_deadline_scheduling", "1.0.0", "deterministic"),
 }
 
 _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcome]] = {
@@ -88,6 +90,7 @@ _SOLVERS: dict[str, Callable[[Session, str, list[str], RunRequest], SolverOutcom
     "team_composition": solve_team_composition,
     "margin_3pl": solve_margin_3pl,
     "scenario": solve_scenario,
+    "order_fulfillment": solve_order_fulfillment,
 }
 
 _FINANCE_RESTRICTED_RUN_TYPES = {"margin_3pl"}
@@ -199,6 +202,36 @@ def create_run(
         # request never produced a snapshot worth auditing as a run; the
         # whole transaction (including the run row above) rolls back.
         raise DataNotReady(str(exc)) from exc
+    except SolverInfeasible as exc:
+        # The solver genuinely attempted this scope/window and concluded no assignment satisfies its
+        # hard constraints — unlike InsufficientData, this IS a real, auditable run outcome: persist it
+        # as "failed" with the reason, rather than rolling back to an indistinguishable non-event
+        # (order-driven-planning Stage 0 finding — see docs/order-driven-planning.md).
+        confidence = compute_confidence(
+            ConfidenceComponents(completeness=0, freshness=0, mapping_quality=0, forecast_validation=0, constraint_coverage=0, solution_quality=0),
+            reasons=[str(exc)], weights=policy.weights,
+        )
+        explanation = {
+            "baseline": {}, "proposed": {}, "delta": {}, "dollar_value": None, "confidence": confidence.model_dump(),
+            "primary_drivers": [str(exc)], "alternatives": [], "data_lineage": {"snapshot_id": snapshot_id, "source_systems": ["tempo_native"]},
+            "freshness": {"source_max_age_seconds": 0}, "missing_evidence": [], "assumptions": [], "feasibility": "infeasible",
+            "evidence_ref": f"evi_{uuid.uuid4().hex[:20]}",
+        }
+        lifecycle.require_transition(run.status, "failed")
+        run.status = "failed"
+        run.explanation = explanation
+        run.lineage = {"snapshot_id": snapshot_id, "source_systems": ["tempo_native"], "policy_version": policy.policy_version}
+        run.completed_at = datetime.now(timezone.utc)
+        db.flush()
+        event_bus.publish(db, context.tenant_id, "run.failed", {"run_id": run_id, "reason": str(exc)}, subject=run_id, correlation_id=context.correlation_id)
+        write_audit(db, context, request_name=endpoint, outcome="failed", parameters={"run_type": run_type, "scope": payload["scope"]}, run_id=run_id, evidence_ref=explanation["evidence_ref"])
+        response = RunResponse(
+            run_id=run_id, run_type=run_type, status=run.status, created_at=run.created_at,
+            links={"self": f"/v1/runs/{run_id}", "cancel": f"/v1/runs/{run_id}/cancel"},
+            input_snapshot_id=snapshot_id, effective_scope=request.scope, warnings=[str(exc)], recommendation_id=None,
+        )
+        idempotency_store.store(context.tenant_id, endpoint, idempotency_key, payload, response.model_dump(mode="json"))
+        return response
 
     warnings = list(outcome.missing_evidence)
     confidence = compute_confidence(
@@ -366,7 +399,7 @@ def get_run(
     run = _get_owned_run(db, context, run_id)
     if run.run_type in _FINANCE_RESTRICTED_RUN_TYPES and not context.has_permission("labour.margin.read"):
         raise AuthForbidden(f"caller lacks labour.margin.read permission required to view run_type '{run.run_type}'")
-    if lifecycle.is_terminal(run.status) and run.status in {"completed", "completed_with_warnings"}:
+    if lifecycle.is_terminal(run.status) and run.status in {"completed", "completed_with_warnings", "failed"}:
         recommendation = db.scalar(select(Recommendation).where(Recommendation.run_id == run.run_id))
         return {
             "run_id": run.run_id,

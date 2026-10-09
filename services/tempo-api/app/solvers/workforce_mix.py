@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.policy import resolve_policy
 from app.models.canonical import LabourCostRule, SkillCertification, Worker
 from app.schemas.runs import ConfidenceComponents, RunRequest
-from app.solvers.base import InsufficientData, SolverOutcome
+from app.solvers.base import InsufficientData, SolverInfeasible, SolverOutcome
 from app.solvers.labour_requirement import translate_labour_requirement
 
 INTERNAL_TYPES = {"permanent", "part_time", "casual"}  # everyone except labour_hire counts as internal
@@ -152,7 +152,8 @@ def solve_workforce_mix(db: Session, tenant_id: str, site_ids: list[str], reques
     solver.Minimize(sum(coeff * var for var, coeff in objective_terms))
     status = solver.Solve()
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
-        raise InsufficientData("workforce mix MILP did not return a usable solution")
+        status_name = {pywraplp.Solver.INFEASIBLE: "infeasible", pywraplp.Solver.UNBOUNDED: "unbounded", pywraplp.Solver.ABNORMAL: "abnormal"}.get(status, str(status))
+        raise SolverInfeasible(f"workforce mix MILP returned {status_name} — the internal/hire ratio constraints cannot be met alongside required coverage for this scope and window")
 
     assignments = []
     total_labour_cost = 0.0

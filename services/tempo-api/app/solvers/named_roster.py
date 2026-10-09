@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.policy import resolve_policy
 from app.models.canonical import Availability, LabourCostRule, ShiftAssignment as ShiftAssignmentRow, SkillCertification, Worker
 from app.schemas.runs import ConfidenceComponents, RunRequest
-from app.solvers.base import InsufficientData, SolverOutcome
+from app.solvers.base import InsufficientData, SolverInfeasible, SolverOutcome
 from app.solvers.shifts import calendar_from_constraints, shift_bounds_utc, split_headcount
 from app.solvers.workforce_mix import solve_workforce_mix
 
@@ -212,7 +212,8 @@ def solve_named_roster(db: Session, tenant_id: str, site_ids: list[str], request
     solver.parameters.num_search_workers = 4
     status = solver.Solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        raise InsufficientData("named roster CP-SAT model did not return a usable solution within the time limit")
+        status_name = {cp_model.INFEASIBLE: "infeasible", cp_model.UNKNOWN: "unknown (time limit reached before any solution)", cp_model.MODEL_INVALID: "model_invalid"}.get(status, str(status))
+        raise SolverInfeasible(f"named roster CP-SAT model returned {status_name} — hard constraints (rest, availability, certification, eligibility, max hours) cannot all be satisfied for this scope and window")
 
     assignments = []
     total_cost = 0.0

@@ -18,6 +18,7 @@ RunType = Literal[
     "team_composition",
     "margin_3pl",
     "scenario",
+    "order_fulfillment",
 ]
 ObjectiveProfile = Literal["lowest_cost", "best_service", "balanced", "lowest_risk", "custom_policy"]
 ConfidenceBand = Literal["high", "medium", "low", "insufficient_evidence"]
@@ -51,6 +52,7 @@ IMPLEMENTED_RUN_TYPES: set[str] = {
     "team_composition",
     "margin_3pl",
     "scenario",
+    "order_fulfillment",
 }
 
 

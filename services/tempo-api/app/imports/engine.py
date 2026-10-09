@@ -42,6 +42,9 @@ def _aware(d: datetime) -> datetime:
 
 # --------------------------------------------------------------------------------------------------------------------- lookups
 def lookups(db: Session, ctx: RequestContext) -> V.Lookups:
+    from app.models.directory import Zone
+    from app.models.scheduling import ShiftTemplate
+    from app.solvers.shifts import shift_elapsed_minutes
     sites = {s.site_id: ZoneInfo(s.timezone) for s in db.scalars(select(Site).where(Site.tenant_id == ctx.tenant_id)) if s.site_id in ctx.site_ids}
     now = _now()
     acts = {w.activity for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id)) if w.effective_to is None or _aware(w.effective_to) > now}
@@ -49,7 +52,21 @@ def lookups(db: Session, ctx: RequestContext) -> V.Lookups:
     refs = {w.source_ref: w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
     existing = {x.site_id: x.timezone for x in db.scalars(select(Site).where(Site.tenant_id == ctx.tenant_id))}
     wsite = {w.source_ref: w.home_site for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
-    return V.Lookups(sites=sites, activities=acts, customers=customers, workers_by_ref=refs, existing_sites=existing, worker_site=wsite)
+    zone_ids = {(z.site_id, z.zone_id) for z in db.scalars(select(Zone).where(Zone.tenant_id == ctx.tenant_id))}
+    from app.models.scheduling import OperatingCalendarDay
+    cal = {(c.site_id, c.weekday): {"is_24h": c.is_24h, "is_closed": c.is_closed, "open_time": c.open_time, "close_time": c.close_time}
+           for c in db.scalars(select(OperatingCalendarDay).where(OperatingCalendarDay.tenant_id == ctx.tenant_id))}
+    tmpl = {(t.site_id, t.shift_code): {"elapsed_minutes": shift_elapsed_minutes(t.start_time, t.end_time)}
+            for t in db.scalars(select(ShiftTemplate).where(ShiftTemplate.tenant_id == ctx.tenant_id, ShiftTemplate.effective_to.is_(None)))}
+    from app.models.orders import ProcessTemplate
+    proc = {(p.site_id, p.process_code) for p in db.scalars(select(ProcessTemplate).where(ProcessTemplate.tenant_id == ctx.tenant_id))}
+    from app.models.canonical import LabourProvider
+    providers = {p.provider_id for p in db.scalars(select(LabourProvider).where(LabourProvider.tenant_id == ctx.tenant_id))}
+    from app.models.stage4 import StagingCapacity
+    staging_units = {(c.site_id, c.zone_id): c.unit for c in db.scalars(select(StagingCapacity).where(StagingCapacity.tenant_id == ctx.tenant_id))}
+    return V.Lookups(sites=sites, activities=acts, customers=customers, workers_by_ref=refs, existing_sites=existing, worker_site=wsite,
+                      zone_ids=zone_ids, operating_calendar=cal, shift_templates=tmpl, process_templates=proc,
+                      labour_providers=providers, staging_units=staging_units)
 
 
 # --------------------------------------------------------------------------------------------------------------------- options
@@ -154,8 +171,98 @@ def _good(store: list[ImportRow]) -> list[ImportRow]:
 
 
 def _master_preview(db: Session, ctx: RequestContext, entity: str, good: list[ImportRow], lk: V.Lookups, s: dict) -> None:
-    from app.models.canonical import Availability, LabourCostRule
-    if entity == "sites":
+    from app.models.canonical import ActivityRoleZoneMap, Availability, LabourCostRule
+    from app.models.directory import Zone
+    from app.models.scheduling import OperatingCalendarDay, ShiftTemplate
+    if entity == "zones":
+        have = {(z.site_id, z.zone_id) for z in db.scalars(select(Zone).where(Zone.tenant_id == ctx.tenant_id))}
+        for r in good:
+            s["updates" if (r.normalised["site"], r.normalised["zone_id"]) in have else "creates"] += 1
+    elif entity == "activity_roles":
+        have = {(m.site_id, m.activity, m.role, m.zone) for m in db.scalars(select(ActivityRoleZoneMap).where(ActivityRoleZoneMap.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["site"], n["activity"], n["role"], n["zone_id"]) in have else "creates"] += 1
+    elif entity == "operating_calendar":
+        have = {(c.site_id, c.weekday) for c in db.scalars(select(OperatingCalendarDay).where(OperatingCalendarDay.tenant_id == ctx.tenant_id))}
+        for r in good:
+            s["updates" if (r.normalised["site"], r.normalised["weekday"]) in have else "creates"] += 1
+    elif entity == "shift_templates":
+        have = {(t.site_id, t.shift_code) for t in db.scalars(select(ShiftTemplate).where(ShiftTemplate.tenant_id == ctx.tenant_id, ShiftTemplate.effective_to.is_(None)))}
+        for r in good:
+            s["updates" if (r.normalised["site"], r.normalised["shift_code"]) in have else "creates"] += 1
+    elif entity == "shift_breaks":
+        s["creates"] = len(good)  # breaks are keyed by (shift, offset, duration); re-uploading an identical file is a no-op via content-hash dedup, not row-level matching
+    elif entity == "process_templates":
+        from app.models.orders import ProcessTemplate
+        have = {(p.site_id, p.process_code, p.customer_id) for p in db.scalars(select(ProcessTemplate).where(ProcessTemplate.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["site"], n["process_code"], n["customer_id"]) in have else "creates"] += 1
+    elif entity == "process_steps":
+        from app.models.orders import ProcessStep, ProcessTemplate
+        tmpl_ids = {(t.site_id, t.process_code): t.id for t in db.scalars(select(ProcessTemplate).where(ProcessTemplate.tenant_id == ctx.tenant_id))}
+        have = {(s2.process_template_id, s2.sequence) for s2 in db.scalars(select(ProcessStep).where(ProcessStep.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            tid = tmpl_ids.get((n["site"], n["process_code"]))
+            s["updates" if (tid, n["sequence"]) in have else "creates"] += 1
+    elif entity == "orders":
+        from app.models.orders import Order
+        have = {o.order_ref for o in db.scalars(select(Order).where(Order.tenant_id == ctx.tenant_id))}
+        for r in good:
+            s["updates" if r.normalised["order_id"] in have else "creates"] += 1
+    elif entity == "worker_activity_rates":
+        s["creates"] = len(good)  # keyed by (worker, activity, effective_from); a same-day correction is detected at apply time
+    elif entity == "unit_conversions":
+        from app.models.orders import UnitConversion
+        have = {(c.activity, c.from_unit, c.to_unit) for c in db.scalars(select(UnitConversion).where(UnitConversion.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n.get("activity"), n["from_unit"], n["to_unit"]) in have else "creates"] += 1
+    elif entity == "fill_priorities":
+        from app.models.constraints import FillPriority
+        have = {(p.scope, p.value) for p in db.scalars(select(FillPriority).where(FillPriority.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["scope"], n["value"]) in have else "creates"] += 1
+    elif entity == "absenteeism":
+        from app.models.constraints import AbsenteeismRule
+        have = {(a.site_id, a.activity, a.weekday, a.shift_code) for a in db.scalars(select(AbsenteeismRule).where(AbsenteeismRule.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["site"], n.get("activity"), n.get("weekday"), n.get("shift_code")) in have else "creates"] += 1
+    elif entity == "equipment":
+        from app.models.constraints import Equipment
+        have = {(e.site_id, e.equipment_id) for e in db.scalars(select(Equipment).where(Equipment.tenant_id == ctx.tenant_id))}
+        for r in good:
+            s["updates" if (r.normalised["site"], r.normalised["equipment_id"]) in have else "creates"] += 1
+    elif entity == "headcount_limits":
+        from app.models.constraints import HeadcountLimit
+        have = {(h.site_id, h.activity, h.shift_code) for h in db.scalars(select(HeadcountLimit).where(HeadcountLimit.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["site"], n["activity"], n.get("shift_code")) in have else "creates"] += 1
+    elif entity == "grade_rates":
+        from app.models.canonical import LabourCostRule
+        have = {(c.labour_type, c.role, c.position_grade, c.provider_id) for c in db.scalars(select(LabourCostRule).where(LabourCostRule.tenant_id == ctx.tenant_id, LabourCostRule.position_grade.isnot(None) | LabourCostRule.provider_id.isnot(None)))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["employment_type"], n["role"], n.get("position_grade"), n.get("provider_id")) in have else "creates"] += 1
+    elif entity == "productivity_loss":
+        from app.models.stage4 import ProductivityLoss
+        have = {(p.site_id, p.loss_type, p.activity, p.weekday, p.shift_code) for p in db.scalars(select(ProductivityLoss).where(ProductivityLoss.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["site"], n["type"], n.get("activity"), n.get("weekday"), n.get("shift_code")) in have else "creates"] += 1
+    elif entity == "staging_capacity":
+        from app.models.stage4 import StagingCapacity
+        have = {(c.site_id, c.zone_id) for c in db.scalars(select(StagingCapacity).where(StagingCapacity.tenant_id == ctx.tenant_id))}
+        for r in good:
+            s["updates" if (r.normalised["site"], r.normalised["zone_id"]) in have else "creates"] += 1
+    elif entity == "staging_movements":
+        s["creates"] = len(good)  # append-only event log; keyed by (site, zone, occurred_at, movement_type)
+    elif entity == "sites":
         if not ctx.has_permission("labour.configure"):
             s["blocking"].append("Adding or changing sites needs the configure permission (a tenant administrator).")
         have = lk.existing_sites
@@ -189,7 +296,10 @@ def _preview(db: Session, ctx: RequestContext, batch: ImportBatch, contract: Con
         for r in good:
             s["updates" if r.normalised["worker_ref"] in lk.workers_by_ref else "creates"] += 1
         s["unknown_skill_note"] = "Skills are added to the person; none are removed."
-    elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates"):
+    elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
+                                              "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
+                                              "fill_priorities", "absenteeism", "equipment", "headcount_limits",
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements"):
         _master_preview(db, ctx, batch.entity, good, lk, s)
     elif dc == "master":
         cur = {w.activity: w for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id, WorkStandard.effective_to.is_(None)))}

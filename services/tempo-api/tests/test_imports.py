@@ -78,6 +78,12 @@ def test_every_template_example_row_passes_its_own_validator(client):
     lk.sites["mel_dc_01"] = lk.sites[MEL]
     lk.customers.add("cust_A")
     lk.worker_site["E1042"] = MEL
+    lk.workers_by_ref["E1042"] = "wrk_placeholder"
+    lk.zone_ids.add(("mel_dc_01", "PICK"))
+    lk.shift_templates[("mel_dc_01", "night")] = {"elapsed_minutes": 480}
+    lk.process_templates.add(("mel_dc_01", "outbound_standard"))
+    lk.zone_ids.add(("mel_dc_01", "STAGE"))
+    lk.staging_units[("mel_dc_01", "STAGE")] = "pallets"
     for key, c in CONTRACTS.items():
         row = next(csv.DictReader(io.StringIO(template_csv(c))))
         n, msgs = V.validate_row(c, row, lk)

@@ -73,6 +73,38 @@ def shift_bounds_utc(day_iso: str, shift: ShiftDefinition, tz_name: str) -> tupl
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
+def hhmm_to_minutes(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def shift_elapsed_minutes(start_time: str, end_time: str) -> int:
+    """Minutes from start_time to end_time, crossing midnight when end <= start (equal start/end means a
+    full 24-hour shift, matching `ShiftDefinition.hours`)."""
+    span = (hhmm_to_minutes(end_time) - hhmm_to_minutes(start_time)) % 1440
+    return span or 1440
+
+
+@dataclass(frozen=True)
+class BreakDefinition:
+    starts_after_minutes: int
+    duration_minutes: int
+    is_paid: bool
+
+
+def shift_hours(elapsed_minutes: int, breaks: list[BreakDefinition]) -> dict[str, float]:
+    """Elapsed/paid/productive hours for a shift (brief Appendix C): paid time excludes unpaid breaks;
+    productive time additionally excludes paid breaks. Paid breaks still cost money (paid_hours reflects
+    that), but no break counts as working time."""
+    unpaid_minutes = sum(b.duration_minutes for b in breaks if not b.is_paid)
+    all_break_minutes = sum(b.duration_minutes for b in breaks)
+    return {
+        "elapsed_hours": elapsed_minutes / 60,
+        "paid_hours": (elapsed_minutes - unpaid_minutes) / 60,
+        "productive_hours": (elapsed_minutes - all_break_minutes) / 60,
+    }
+
+
 def split_headcount(total: int, calendar: list[ShiftDefinition]) -> dict[str, int]:
     """Allocate a day's headcount across shifts: by configured share (largest-remainder rounding) or, with no
     shares configured, evenly (the original behaviour)."""
