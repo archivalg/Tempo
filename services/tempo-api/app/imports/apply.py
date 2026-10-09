@@ -54,7 +54,7 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
     elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                                               "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                                               "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements"):
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount"):
         result = {"sites": _apply_sites, "customers": _apply_customers, "availability": _apply_availability, "rates": _apply_rates,
                   "zones": _apply_zones, "activity_roles": _apply_activity_roles, "operating_calendar": _apply_operating_calendar,
                   "shift_templates": _apply_shift_templates, "shift_breaks": _apply_shift_breaks,
@@ -62,7 +62,7 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
                   "worker_activity_rates": _apply_worker_activity_rates, "unit_conversions": _apply_unit_conversions,
                   "fill_priorities": _apply_fill_priorities, "absenteeism": _apply_absenteeism, "equipment": _apply_equipment,
                   "headcount_limits": _apply_headcount_limits, "grade_rates": _apply_grade_rates, "productivity_loss": _apply_productivity_loss,
-                  "staging_capacity": _apply_staging_capacity, "staging_movements": _apply_staging_movements}[batch.entity](db, ctx, batch, good)
+                  "staging_capacity": _apply_staging_capacity, "staging_movements": _apply_staging_movements, "indirect_headcount": _apply_indirect_headcount}[batch.entity](db, ctx, batch, good)
     elif dc == "master":
         result = _apply_standards(db, ctx, good)
     elif dc == "forecast":
@@ -296,10 +296,11 @@ def _apply_process_steps(db: Session, ctx: RequestContext, batch: ImportBatch, g
             raise ImportProblem(f"process_code '{n['process_code']}' at site '{n['site']}' no longer exists")
         step = db.scalar(select(ProcessStep).where(ProcessStep.tenant_id == ctx.tenant_id, ProcessStep.process_template_id == tmpl.id, ProcessStep.sequence == n["sequence"]))
         if step is None:
-            db.add(ProcessStep(tenant_id=ctx.tenant_id, process_template_id=tmpl.id, sequence=n["sequence"], activity=n["activity"], lag_minutes=n["lag_minutes"]))
+            db.add(ProcessStep(tenant_id=ctx.tenant_id, process_template_id=tmpl.id, sequence=n["sequence"], activity=n["activity"], lag_minutes=n["lag_minutes"],
+                               equipment_id=n.get("equipment_id"), zone_id=n.get("zone_id")))
             created += 1
         else:
-            step.activity, step.lag_minutes = n["activity"], n["lag_minutes"]
+            step.activity, step.lag_minutes, step.equipment_id, step.zone_id = n["activity"], n["lag_minutes"], n.get("equipment_id"), n.get("zone_id")
             updated += 1
         r.applied = True
     return {"created": created, "updated": updated}
@@ -505,6 +506,24 @@ def _apply_staging_movements(db: Session, ctx: RequestContext, batch: ImportBatc
         created += 1
         r.applied = True
     return {"created": created}
+
+
+def _apply_indirect_headcount(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.indirect import IndirectHeadcountRequirement
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        h = db.scalar(select(IndirectHeadcountRequirement).where(IndirectHeadcountRequirement.tenant_id == ctx.tenant_id, IndirectHeadcountRequirement.site_id == n["site"],
+                                                                 IndirectHeadcountRequirement.role == n["role"], IndirectHeadcountRequirement.weekday == n["weekday"],
+                                                                 IndirectHeadcountRequirement.start_time == n["start_time"], IndirectHeadcountRequirement.end_time == n["end_time"]))
+        if h is None:
+            db.add(IndirectHeadcountRequirement(tenant_id=ctx.tenant_id, site_id=n["site"], role=n["role"], weekday=n["weekday"], start_time=n["start_time"], end_time=n["end_time"], headcount=n["headcount"]))
+            created += 1
+        else:
+            h.headcount = n["headcount"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
 
 
 def _apply_availability(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:

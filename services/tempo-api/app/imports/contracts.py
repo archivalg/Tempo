@@ -6,7 +6,7 @@ import csv
 import io
 from dataclasses import dataclass, field
 
-CONTRACT_VERSION = "1.4"  # 1.4 adds grade_rates/productivity_loss/staging_capacity/staging_movements (additive; earlier contracts are unchanged)
+CONTRACT_VERSION = "1.5"  # 1.5 adds indirect_headcount and optional equipment_id/zone_id on process_steps (additive; earlier contracts are unchanged)
 MAX_ROWS = 20_000          # synchronous limit; larger files must be split (a background worker does not exist yet)
 MAX_BYTES = 8 * 1024 * 1024
 
@@ -128,6 +128,8 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("sequence", "int", True, "Order this step runs in (1, 2, 3, ...).", "1", synonyms=("step", "order")),
         Field("activity", "text", True, "Activity for this step; must already have a work standard.", "picking", synonyms=("task",)),
         Field("lag_minutes", "int", False, "Minimum gap after the previous step finishes before this one may start (defaults to 0).", "0", synonyms=("lag",)),
+        Field("equipment_id", "text", False, "Leave blank if this step needs no shared equipment; otherwise an equipment_id already set up at this site.", "", synonyms=("equipment",)),
+        Field("zone_id", "text", False, "Leave blank if this step's output does not enter a staging zone; otherwise a zone_id already set up at this site.", "", synonyms=("zone",)),
     )),
     Contract("master", "orders", "Orders (master data)", "A known outbound order: when it was received, when it must be despatched, and how much work it needs.", ("site_id", "order_id"), (
         SITE,
@@ -213,6 +215,14 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("quantity", "number", True, "Quantity moved, in the zone's capacity unit.", "20"),
         Field("unit", "text", True, "Must match the zone's Staging capacity unit exactly.", "pallets"),
     )),
+    Contract("master", "indirect_headcount", "Indirect headcount (master data)", "A fixed headcount required for a role at a site/weekday/time window, independent of direct-work volume (supervisors, inventory control, etc.).", ("site_id", "role", "weekday", "start_time", "end_time"), (
+        SITE,
+        Field("role", "text", True, "Role required; matched against a worker's skills/certifications.", "supervisor", synonyms=("skill",)),
+        Field("weekday", "enum", True, "Day of the week.", "monday", ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")),
+        Field("start_time", "text", True, "Start time, 24-hour HH:MM site-local.", "06:00"),
+        Field("end_time", "text", True, "End time, 24-hour HH:MM site-local.", "14:00"),
+        Field("headcount", "int", True, "Number of people required, regardless of demand that day.", "3"),
+    ), notes=("Required even on a zero-volume day — indirect coverage is not derived from workload.",)),
     Contract("forecast", None, "Forecast workload", "Expected units per activity and period. Customer-supplied forecasts are versioned and shown with their origin.", ("site", "activity", "period_start", "grain"), (
         SITE, ACTIVITY, PERIOD_START, GRAIN,
         Field("units", "number", True, "Expected units in the period.", "26500", synonyms=("forecast", "volume", "quantity", "expected")),
@@ -249,7 +259,7 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
 DATA_CLASSES = {"master": ("workers", "work_standards", "sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                             "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                             "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                            "grade_rates", "productivity_loss", "staging_capacity", "staging_movements"),
+                            "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount"),
                  "forecast": (None,), "transactions": (None,), "bulk": (None,)}
 
 

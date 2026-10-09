@@ -63,6 +63,38 @@ def check_staging_capacity(points: list[StagingOccupancyPoint], capacity: float)
 
 
 @dataclass(frozen=True)
+class ProductivityLossRule:
+    site_id: str
+    loss_type: str  # congestion | off_task
+    activity: str | None
+    weekday: str | None
+    shift_code: str | None
+    percent_loss: float | None
+    off_task_hours: float | None
+
+    @property
+    def specificity(self) -> int:
+        return sum(1 for f in (self.activity, self.weekday, self.shift_code) if f is not None)
+
+
+class AmbiguousProductivityLossRule(ValueError):
+    pass
+
+
+def resolve_productivity_loss(rules: list[ProductivityLossRule], *, loss_type: str, site_id: str, activity: str, weekday: str, shift_code: str | None) -> ProductivityLossRule | None:
+    """Same most-specific-first resolution as absenteeism (app.solvers.constraints.resolve_absenteeism)."""
+    candidates = [r for r in rules if r.loss_type == loss_type and r.site_id == site_id and (r.activity is None or r.activity == activity)
+                  and (r.weekday is None or r.weekday == weekday) and (r.shift_code is None or r.shift_code == shift_code)]
+    if not candidates:
+        return None
+    best = max(c.specificity for c in candidates)
+    tied = [c for c in candidates if c.specificity == best]
+    if len(tied) > 1:
+        raise AmbiguousProductivityLossRule(f"{len(tied)} equally-specific {loss_type} rules match site '{site_id}' activity '{activity}' weekday '{weekday}' shift '{shift_code}'")
+    return tied[0]
+
+
+@dataclass(frozen=True)
 class CostRule:
     labour_type: str
     role: str

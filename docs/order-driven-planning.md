@@ -239,13 +239,86 @@ upgrades) remain **Open**, sequenced after Stage 1–2 land and are demonstrated
   `demand_forecast.py`'s existing WAPE ≈ 10% limitation (noted in `docs/build-progress.md`) stands.
 - Currency handling across mixed-currency grade/provider rates is not exercised by a test.
 
+## Integration increment — one coherent plan (9 Oct 2026)
+
+Stages 1–4 above each delivered data models, import, and tested *standalone* calculation functions,
+explicitly **not** wired into a real plan. This increment rewrites `solve_order_fulfillment`
+(`app/solvers/order_workload.py`) into a single greedy, interval-by-interval, shared-resource
+scheduler that actually consumes most of that earlier work together, so a constraint changing
+actually changes assignments/completion/cost — not just a number reported after the fact.
+
+New in this increment: `IndirectHeadcountRequirement` model/import (`app/models/indirect.py`,
+migration `d5e6f7a8b9c0`), `ProcessStep.equipment_id`/`zone_id` (additive columns + import fields),
+`Worker.position_grade` (additive column, no import path yet — see gaps below).
+
+### Capability matrix (supersedes the Stage 0 table above for everything it covers)
+
+Columns: **Imported** (a CSV path exists) · **Stored** (a model/table exists) · **Tested
+independently** (a unit/import test exercises it in isolation) · **Enforced by scheduler** (an actual
+`order_fulfillment` run changes its output because of it, proven by an integration test running the
+real `/v1/optimisations/order_fulfillment` → `/v1/runs/{id}` path).
+
+| Capability | Imported | Stored | Tested independently | Enforced by scheduler |
+|---|---|---|---|---|
+| Operating calendar (closed days) | Yes | Yes | Yes | **Yes** — closed weekdays produce zero shift instances |
+| Operating calendar (non-24h hours vs. shift conflict) | Yes (warned) | Yes | Yes | No — only checked at import time, not re-checked at solve time |
+| Shift templates, overnight handling | Yes | Yes | Yes | **Yes** — `_expand_shift_instances` drives real interval boundaries |
+| Shift breaks, paid vs. productive hours | Yes | Yes | Yes | **Yes** — integration-tested exactly (test 4) |
+| Availability (leave/unavailable/rdo) | Yes (pre-existing) | Yes | No (no dedicated unit test of the blocking logic) | **Yes** — blocked workers are excluded from every reservation/assignment |
+| Personal weekly pattern / start-finish window | No | No | — | No — **not modelled at all**; only point-in-time Availability rows exist |
+| Process dependencies (finish-to-start + lag) | Yes | Yes | Yes | **Yes** — integration-tested (test 5a) |
+| Release time / despatch deadline | Yes | Yes | Yes | **Yes** |
+| Personal activity rates (precedence) | Yes | Yes | Yes | **Yes** |
+| Unit conversions | Yes | Yes | Yes | **Yes** |
+| Equipment/zone on a process step | Yes (new) | Yes (new) | No (only via integration tests) | **Yes** — integration-tested (test 2b) |
+| Indirect headcount coverage | Yes (new) | Yes (new) | No (only via integration tests) | **Yes** — integration-tested (test 3); break-relief *shortfall* path is tested, the *relief-provided* path is not |
+| Fill priorities | Yes | Yes | Yes (Stage 3) | Partial — determines which **activity** is served first in an interval; does not yet reorder tasks *within* an activity (that's despatch-due order), and `customer`/`employment_type` scopes are stored but unused |
+| Absenteeism (scoped resolution) | Yes | Yes | Yes | **Yes** — integration-tested (test 4) |
+| Shared equipment pools | Yes | Yes | Yes (Stage 3) | **Yes** — integration-tested (test 2b), plus a sweep-line safety net over every assignment |
+| Concurrent headcount limits (max) | Yes | Yes | Yes (Stage 3) | **Yes** — integration-tested (test 1) |
+| Concurrent headcount limits (min) | Yes | Yes | Yes (Stage 3, import-time min>max check) | Partial — a below-minimum assignment is *detected and reported* (`headcount_violations`); no integration test proves it, and the scheduler does not refuse to run below minimum |
+| Congestion (rate reduction) | Yes | Yes | Yes (Stage 4) | Partial — applied in the rate calculation; **not exercised by an integration test** (only off-task was) |
+| Off-task hours (capacity reduction) | Yes | Yes | Yes (Stage 4) | **Yes** — integration-tested (test 4) |
+| Staging capacity/occupancy | Yes | Yes | Yes (Stage 4) | **Yes** — integration-tested (test 5b); violations are reported, not yet fed back to re-sequence work away from a full zone |
+| Grade/provider/effective-dated cost rate | Yes (`grade_rates`) | Yes | Yes (Stage 4) | Partial — `resolve_cost_rate` is called with the worker's `position_grade`/`provider_id`, but `position_grade` **has no import path**, so a CSV-only tenant cannot reach a grade-differentiated rate end-to-end yet |
+| Paid vs. productive hours, total cost | Yes | Yes | Yes | **Yes** — reported in `result.kpis`, integration-tested (test 4) |
+| Demand mode (forecast-only / known-orders / hybrid) | No | No | — | No — `order_fulfillment` remains a **separate run type**, never combined with `workforce_mix`/`named_roster`'s forecast-driven demand. This is the largest remaining gap: there is still no single run that plans known orders *and* forecast demand together. |
+
+### Explicitly not done
+
+- **No hybrid demand mode.** This was and remains the single biggest gap against the brief's original
+  ask ("plan labour from known orders... while retaining forecasting"). `order_fulfillment` is its own
+  run type with its own worker pool accounting; it does not know about `workforce_mix`'s forecast-driven
+  headcount, and vice versa — a site running both would double-count or under-count nobody-knows-which
+  workers if both were run for overlapping windows today. Treat them as mutually exclusive per window
+  until this is addressed.
+- **Personal weekly availability patterns** (earliest_start/latest_finish per weekday) are not modelled;
+  only point-in-time Availability (leave/unavailable/rdo) rows are. The brief's "a 06:00–14:00 personal
+  window cannot accept 14:00–22:00" scenario is not implemented.
+- **`position_grade` has no import path.** It can only be set by direct database access today, so
+  grade-differentiated costing is reachable in tests but not from a CSV upload.
+- **Fill priority** only orders which *activity* a shift's capacity serves first; it does not reorder
+  individual tasks within one activity (despatch-due order is used there) and the `customer`/
+  `employment_type` scopes are inert.
+- **Shortfall reason codes** are coarser than the brief's list: `missing_skill` / `no_equipment` /
+  `headcount_cap` / `deadline_breach` (the last used as the default/catch-all). There is no distinct
+  `insufficient_hours` or `unavailable_people` code.
+- **Staging violations do not feed back into scheduling** — a zone over capacity is reported, but the
+  scheduler does not hold back or reroute the work that caused it.
+- **Congestion** is applied in the rate math but has no integration test proving it changes a real run
+  (only `off_task` does).
+- The scheduler is a **greedy, non-MILP, interval-granularity** allocator: a dependent step cannot start
+  until the *next* shift instance even if its predecessor finishes with time to spare in the same
+  instance (documented simplification, not a bug — see `order_workload.py`'s module docstring).
+
 ## Ledger
 
 | Item | Status |
 |---|---|
 | Stage 0 code assessment | **Accepted** — this document, 9 Oct 2026 |
 | Roadmap M3 supersession | **Accepted** — `docs/roadmap.md` §7 updated 9 Oct 2026 |
-| Stage 1 (calendars/shifts/breaks/v1.1 import contracts) | **Partial** — data model, import, validation, paid/productive-hours calculation and tests delivered 9 Oct 2026; solver consumption of shift templates is Stage 2+ |
-| Stage 2 (orders/process templates/task rates/unit conversion) | **Partial** — deadline scheduling, personal rates, process precedence, unit conversion and the infeasible-run fix delivered 9 Oct 2026 as a standalone `order_fulfillment` run type; indirect headcount coverage and hybrid forecast+order demand mode are Stage 3+ |
-| Stage 3 (fill priorities/absenteeism/equipment/headcount limits/dependencies/indirect coverage) | **Partial** — fill priority, absenteeism, equipment and headcount-limit data models, import and pure calculation functions delivered 9 Oct 2026; none yet wired into a solver's actual plan, and indirect headcount coverage + dependency cycle detection remain open |
-| Stage 4 (congestion/staging/costing/forecast) | **Partial** — grade/provider/effective-dated costing, productivity-loss and staging-capacity data models/import/calculation delivered 9 Oct 2026; none yet wired into a solver's actual plan, and forecasting improvements are untouched |
+| Stage 1 (calendars/shifts/breaks/v1.1 import contracts) | **Partial** — now enforced by the scheduler (see capability matrix); non-24h operating-hours conflicts are still import-time-only |
+| Stage 2 (orders/process templates/task rates/unit conversion) | **Partial** — deadline scheduling, personal rates, process precedence, unit conversion, equipment/zone on steps and indirect coverage are now enforced by one scheduler; hybrid forecast+order demand mode remains open (the largest gap) |
+| Stage 3 (fill priorities/absenteeism/equipment/headcount limits/dependencies/indirect coverage) | **Partial** — absenteeism, equipment and max-headcount are enforced and integration-tested; fill priority only orders activities (not tasks within one), min-headcount is detected but untested, dependency cycle detection remains open |
+| Stage 4 (congestion/staging/costing/forecast) | **Partial** — off-task loss, staging capacity and paid/productive costing are enforced and integration-tested; congestion is enforced but untested, grade-aware costing has no import path for `position_grade`, forecasting improvements are untouched |
+| Integration increment (one coherent plan) | **Partial** — `tests/test_integration_order_schedule.py` (9 tests) proves constraint-driven changes, no double-booking of workers/equipment, indirect-coverage exclusivity, no double-deduction of losses, dependency/staging feasibility impact, clear warnings for missing inputs, and persisted infeasible runs — against the real run-creation path. Full backend suite re-verified green. Remaining gaps are listed above, not hidden. |

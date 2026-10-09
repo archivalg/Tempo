@@ -64,9 +64,11 @@ def lookups(db: Session, ctx: RequestContext) -> V.Lookups:
     providers = {p.provider_id for p in db.scalars(select(LabourProvider).where(LabourProvider.tenant_id == ctx.tenant_id))}
     from app.models.stage4 import StagingCapacity
     staging_units = {(c.site_id, c.zone_id): c.unit for c in db.scalars(select(StagingCapacity).where(StagingCapacity.tenant_id == ctx.tenant_id))}
+    from app.models.constraints import Equipment
+    equipment_ids = {(e.site_id, e.equipment_id) for e in db.scalars(select(Equipment).where(Equipment.tenant_id == ctx.tenant_id))}
     return V.Lookups(sites=sites, activities=acts, customers=customers, workers_by_ref=refs, existing_sites=existing, worker_site=wsite,
                       zone_ids=zone_ids, operating_calendar=cal, shift_templates=tmpl, process_templates=proc,
-                      labour_providers=providers, staging_units=staging_units)
+                      labour_providers=providers, staging_units=staging_units, equipment_ids=equipment_ids)
 
 
 # --------------------------------------------------------------------------------------------------------------------- options
@@ -262,6 +264,12 @@ def _master_preview(db: Session, ctx: RequestContext, entity: str, good: list[Im
             s["updates" if (r.normalised["site"], r.normalised["zone_id"]) in have else "creates"] += 1
     elif entity == "staging_movements":
         s["creates"] = len(good)  # append-only event log; keyed by (site, zone, occurred_at, movement_type)
+    elif entity == "indirect_headcount":
+        from app.models.indirect import IndirectHeadcountRequirement
+        have = {(h.site_id, h.role, h.weekday, h.start_time, h.end_time) for h in db.scalars(select(IndirectHeadcountRequirement).where(IndirectHeadcountRequirement.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["updates" if (n["site"], n["role"], n["weekday"], n["start_time"], n["end_time"]) in have else "creates"] += 1
     elif entity == "sites":
         if not ctx.has_permission("labour.configure"):
             s["blocking"].append("Adding or changing sites needs the configure permission (a tenant administrator).")
@@ -299,7 +307,7 @@ def _preview(db: Session, ctx: RequestContext, batch: ImportBatch, contract: Con
     elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                                               "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                                               "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements"):
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount"):
         _master_preview(db, ctx, batch.entity, good, lk, s)
     elif dc == "master":
         cur = {w.activity: w for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id, WorkStandard.effective_to.is_(None)))}

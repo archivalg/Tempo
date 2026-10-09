@@ -33,6 +33,7 @@ class Lookups:
     process_templates: set[tuple[str, str]] = field(default_factory=set)          # (site, process_code) that already exist
     labour_providers: set[str] = field(default_factory=set)                       # provider_id that already exist
     staging_units: dict[tuple[str, str], str] = field(default_factory=dict)       # (site, zone) → capacity unit
+    equipment_ids: set[tuple[str, str]] = field(default_factory=set)              # (site, equipment_id) that already exist
 
 
 def _msg(level: str, field_: str, code: str, text: str) -> dict:
@@ -450,11 +451,33 @@ def _process_steps(row, lk):
             raise ImportProblem(f"process_code '{c}' is not set up at site '{state['site']}'. Add it under Process templates first.")
         return {"process_code": c}
 
+    def equipment():
+        e = _g(row, "equipment_id")
+        if not e:
+            return {"equipment_id": None}
+        if "site" not in state:
+            raise ImportProblem("cannot read equipment_id until site is valid")
+        if (state["site"], e) not in lk.equipment_ids:
+            raise ImportProblem(f"equipment_id '{e}' is not set up at site '{state['site']}'. Add it under Equipment first.")
+        return {"equipment_id": e}
+
+    def zone():
+        z = _g(row, "zone_id")
+        if not z:
+            return {"zone_id": None}
+        if "site" not in state:
+            raise ImportProblem("cannot read zone_id until site is valid")
+        if (state["site"], z) not in lk.zone_ids:
+            raise ImportProblem(f"zone '{z}' is not set up at site '{state['site']}'. Add it under Zones first.")
+        return {"zone_id": z}
+
     yield "site", site
     yield "process_code", code
     yield "sequence", lambda: {"sequence": int(_num(_g(row, "sequence"), "sequence", minimum=1, maximum=100))}
     yield "activity", lambda: {"activity": _activity(_g(row, "activity"), lk)}
     yield "lag_minutes", lambda: {"lag_minutes": int(_num(_g(row, "lag_minutes"), "lag_minutes", minimum=0, maximum=10080)) if _g(row, "lag_minutes") else 0}
+    yield "equipment_id", equipment
+    yield "zone_id", zone
 
 
 def _orders(row, lk):
@@ -661,6 +684,15 @@ def _staging_movements(row, lk):
     yield "unit", unit
 
 
+def _indirect_headcount(row, lk):
+    yield "site", lambda: {"site": _site(_g(row, "site"), lk)[0]}
+    yield "role", lambda: {"role": _need(_g(row, "role"), "role").lower()[:80]}
+    yield "weekday", lambda: {"weekday": _enum(_g(row, "weekday").lower(), WEEKDAYS, "weekday")}
+    yield "start_time", lambda: {"start_time": _hhmm(_need(_g(row, "start_time"), "start_time"), "start_time")}
+    yield "end_time", lambda: {"end_time": _hhmm(_need(_g(row, "end_time"), "end_time"), "end_time")}
+    yield "headcount", lambda: {"headcount": int(_num(_g(row, "headcount"), "headcount", minimum=0, maximum=10000))}
+
+
 def _need(v: str, name: str) -> str:
     if not v:
         raise ImportProblem(f"{name} is required")
@@ -680,6 +712,7 @@ _VALIDATORS = {("master", "workers"): _workers, ("master", "work_standards"): _s
                ("master", "worker_activity_rates"): _worker_activity_rates, ("master", "unit_conversions"): _unit_conversions,
                ("master", "fill_priorities"): _fill_priorities, ("master", "absenteeism"): _absenteeism, ("master", "equipment"): _equipment, ("master", "headcount_limits"): _headcount_limits,
                ("master", "grade_rates"): _grade_rates, ("master", "productivity_loss"): _productivity_loss, ("master", "staging_capacity"): _staging_capacity, ("master", "staging_movements"): _staging_movements,
+               ("master", "indirect_headcount"): _indirect_headcount,
                ("forecast", None): _forecast, ("transactions", None): _transactions, ("bulk", None): _bulk}
 
 
@@ -698,7 +731,8 @@ def row_key(data_class: str, entity: str | None, n: dict) -> tuple:
                 "equipment": lambda: (n["site"], n["equipment_id"]), "headcount_limits": lambda: (n["site"], n["activity"], n.get("shift_code")),
                 "grade_rates": lambda: (n["employment_type"], n["role"], n.get("position_grade"), n.get("provider_id"), n["effective_from"]),
                 "productivity_loss": lambda: (n["site"], n["type"], n.get("activity"), n.get("weekday"), n.get("shift_code")),
-                "staging_capacity": lambda: (n["site"], n["zone_id"]), "staging_movements": lambda: (n["site"], n["zone_id"], n["occurred_at"], n["movement_type"])}[entity]()
+                "staging_capacity": lambda: (n["site"], n["zone_id"]), "staging_movements": lambda: (n["site"], n["zone_id"], n["occurred_at"], n["movement_type"]),
+                "indirect_headcount": lambda: (n["site"], n["role"], n["weekday"], n["start_time"], n["end_time"])}[entity]()
     if data_class == "transactions":
         return (n["source"], n["event_id"], n.get("revision"), n["action"])
     return (n["site"], n["activity"], n["bucket_start"], n["bucket_minutes"], n.get("customer"))

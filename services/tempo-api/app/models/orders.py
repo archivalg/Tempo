@@ -48,6 +48,11 @@ class ProcessStep(Base):
     sequence: Mapped[int] = mapped_column(Integer)
     activity: Mapped[str] = mapped_column(String)
     lag_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    # Integration increment: a step may consume a shared equipment pool (app.models.constraints.Equipment)
+    # and/or deposit its completed quantity into a staging zone (app.models.stage4.StagingCapacity).
+    # Both optional and nullable — existing steps without them are unaffected.
+    equipment_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    zone_id: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Order(Base):

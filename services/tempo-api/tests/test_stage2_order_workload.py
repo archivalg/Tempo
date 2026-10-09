@@ -180,12 +180,12 @@ def test_order_fulfillment_run_reports_deadline_shortfall_end_to_end(client):
 
     body = {
         "request_id": str(uuid.uuid4()), "scope": {"tenant_id": "ten_test", "site_ids": [MEL], "customer_ids": ["cust_A"]},
-        "planning_window": {"start": "2026-10-12T00:00:00Z", "end": "2026-10-13T00:00:00Z", "timezone": "Australia/Melbourne", "bucket_minutes": 60},
+        "planning_window": {"start": "2026-10-11T12:00:00Z", "end": "2026-10-13T12:00:00Z", "timezone": "Australia/Melbourne", "bucket_minutes": 60},
     }
     response = client.post("/v1/optimisations/order_fulfillment", json=body, headers=_headers())
     assert response.status_code == 202, response.text
     run = response.json()
-    assert run["status"] == "completed"
+    assert run["status"] in ("completed", "completed_with_warnings")  # the integrated scheduler now warns about missing shift templates/cost rates in this minimal fixture
     fetched = client.get(f"/v1/runs/{run['run_id']}", headers=context_header()).json()
     kpis = fetched["result"]["kpis"]
     assert kpis["total_shortfall_quantity"] == 0

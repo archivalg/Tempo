@@ -74,6 +74,8 @@ class Worker(Base):
     # every other employment_type, and every labour_hire worker ingested
     # before this existed, has no provider on file.
     provider_id: Mapped[str | None] = mapped_column(String, ForeignKey("labour_provider.provider_id"), nullable=True, index=True)
+    # Integration increment: resolves against LabourCostRule.position_grade for grade-aware costing.
+    position_grade: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class SkillCertification(Base):

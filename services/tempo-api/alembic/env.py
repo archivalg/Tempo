@@ -24,6 +24,7 @@ import app.models.scheduling  # noqa: E402,F401
 import app.models.orders  # noqa: E402,F401
 import app.models.constraints  # noqa: E402,F401
 import app.models.stage4  # noqa: E402,F401
+import app.models.indirect  # noqa: E402,F401
 from app.config import settings  # noqa: E402
 from app.db import Base  # noqa: E402
 

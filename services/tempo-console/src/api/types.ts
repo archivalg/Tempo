@@ -14,6 +14,7 @@ export const RUN_TYPES = [
   'team_composition',
   'margin_3pl',
   'scenario',
+  'order_fulfillment',
 ] as const
 export type RunType = (typeof RUN_TYPES)[number]
 

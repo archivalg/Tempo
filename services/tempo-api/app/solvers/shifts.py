@@ -14,7 +14,7 @@ tenant that has not configured one; a production tenant must configure its own.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -103,6 +103,17 @@ def shift_hours(elapsed_minutes: int, breaks: list[BreakDefinition]) -> dict[str
         "paid_hours": (elapsed_minutes - unpaid_minutes) / 60,
         "productive_hours": (elapsed_minutes - all_break_minutes) / 60,
     }
+
+
+def shift_template_bounds_utc(day: date, start_time: str, end_time: str, tz_name: str) -> tuple[datetime, datetime]:
+    """UTC start/end of a versioned ShiftTemplate (HH:MM strings) starting on local calendar `day` in
+    `tz_name`. Mirrors `shift_bounds_utc` for the minute-granular, imported-master-data shift model."""
+    tz = ZoneInfo(tz_name)
+    sh, sm = (int(x) for x in start_time.split(":"))
+    start_local = datetime(day.year, day.month, day.day, sh, sm, tzinfo=tz)
+    end_naive = datetime(day.year, day.month, day.day, sh, sm) + timedelta(minutes=shift_elapsed_minutes(start_time, end_time))
+    end_local = end_naive.replace(tzinfo=tz)
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
 def split_headcount(total: int, calendar: list[ShiftDefinition]) -> dict[str, int]:
