@@ -159,8 +159,11 @@ plan is complete.
 
 A version-aware (v1/v2) XLSX importer was added: `app/imports/xlsx.py` plus
 `POST /v1/imports/xlsx/inspect` and `POST /v1/imports/xlsx/stage` (`app/api/v1/imports.py`). It reuses
-the EXISTING staging/preview/apply pipeline unchanged — one `ImportBatch` per recognised sheet,
-previewed and applied through the same `/imports/batches/{id}/apply` endpoint a CSV upload uses.
+the EXISTING staging pipeline (`engine.stage`/`apply.apply_batch`) unchanged — one `ImportBatch` per
+recognised sheet. **Superseded by the sixth pass below**: `/stage` now applies each sheet atomically
+(not via a separate `/imports/batches/{id}/apply` call), and the layout/field handling described next
+was only a first cut later found to need per-sheet-category and per-version handling — see the sixth
+pass for the corrected design.
 
 - **Structural, not content-based, skip**: row 1 is the header; rows 2-4 are guidance/example content,
   always skipped by POSITION regardless of what they contain; real data begins at row 5 — built from
@@ -191,6 +194,118 @@ worker, indirect/direct, role or activity, start/end) specifically so this can b
 not inferred. `test_indirect_relief_worker_maintains_coverage_without_double_booking` now groups by
 worker, asserts exactly one worker did indirect work and a DIFFERENT one did direct work (disjoint
 sets), and asserts no single worker's own intervals ever overlap each other.
+
+## Sixth pass — focused release verification from `00dbdc8` (10 Oct 2026) — STATUS: see per-item notes below
+
+### Workbook compatibility — fixture-tested import SUPPORT only; actual source-file COMPATIBILITY remains explicitly unverified
+
+These two things are kept deliberately distinct in this section and in the tests: **fixture-tested
+import support** means the importer behaves as designed against a LOCAL file this programme built to
+match a stated fact. **Source-file compatibility** means it has been run against Arch's actual
+supplied v1/v2 workbook files. This session has still not been given those files at any point in this
+programme — nothing below should be read as the latter.
+
+The source-workbook review supplied concrete facts this pass builds from and tests against:
+
+- Ordinary data sheets: header row 1, metadata rows 2-3, example row 4, data from row 5 — the ONLY
+  layout the review confirmed with exact row numbers.
+- **Corrected after review feedback**: Rules and reference sheets (Day Rates, Award Rules, Award
+  Eligibility Restrictions, Fill Priorities, Headcount Limits, Unit Conversions, Grade Rates) are
+  known to need a DIFFERENT layout, but NOT one shared uniform layout — an earlier version of this
+  pass wrongly assumed "header row 1, data from row 2, no metadata or example rows" for all of them.
+  The review corrected this: each Rules sheet carries its OWN requirements, guidance and
+  instruction/example rows before the real entries, which this programme has not been given exact row
+  numbers for. `app/imports/xlsx.py` was changed accordingly: the wrong uniform assumption was
+  removed; `sheet_category()` still marks these sheets as "rules_reference" (so the distinction stays
+  visible in code), but `row_layout()` now falls every one of them back to the ONE layout actually
+  confirmed (the ordinary data-sheet layout) via an empty, extensible `_SHEET_SPECIFIC_LAYOUT` table —
+  a stated, acknowledged guess for these sheets, not a verified answer, pending real per-sheet row
+  numbers.
+- v1's activity-rate sheet uses `seconds_per_unit` (already Tempo's canonical field — no adapter
+  needed); v2 uses `standard_rate_per_hour`, a RATE rather than a per-unit TIME, converted via
+  `seconds_per_unit = 3600 / rate` (`_adapt_work_standards`) — a value transform, not just a header
+  rename, since simple column-header synonyms can't change units.
+- v1's worker qualification column is `skill_code`; v2's is `role`. Both are now recognised as aliases
+  for Tempo's `skills` field (`_FIELD_ALIASES`) and become `SkillCertification` rows the same way the
+  existing `skills` CSV column always has.
+- v1 names its shift sheet "Shift Patterns" (one sheet); v2 splits it into "Shift Templates" and
+  "Shift Breaks" (two sheets, matching Tempo's own two-entity model exactly). Both sheet names now map
+  to `shift_templates`. **Stated limitation, not guessed around**: if v1's "Shift Patterns" sheet
+  embeds break definitions inline (rather than as the separate concept v2's "Shift Breaks" sheet is),
+  those inline breaks are NOT extracted — the actual column layout of an inline-breaks scheme was not
+  stated and nothing was invented to fill the gap.
+- Cross-sheet references now resolve correctly WITHIN one workbook upload. Previously each sheet was
+  staged independently, so a later sheet referencing an entity an earlier sheet in the SAME file
+  defined (e.g. process steps naming a process template from an earlier sheet) would fail, because the
+  earlier sheet was only staged, not yet applied. `POST /v1/imports/xlsx/stage` now applies each sheet
+  immediately after staging it, in dependency order, inside ONE transaction — a later sheet's
+  validation sees the earlier sheet's rows as real. If ANY sheet fails (any rejected row, or an apply
+  error), the exception propagates and the whole transaction rolls back
+  (`app.dependencies.get_db`'s existing exception handling) — nothing from that workbook is left
+  applied, proven by uploading a workbook with one valid sheet and one invalid sheet and confirming
+  the valid sheet's rows are NOT present afterwards.
+
+Tests (`tests/test_xlsx_import.py`, 12 tests, ALL against local fixtures built to match the facts
+above — this is the fixture-tested-support/source-file-compatibility distinction in practice): row-
+4/metadata structural skip, cross-sheet reference resolution within one upload, no-partial-import-on-
+failure, the corrected rules/reference fallback behaviour (Day Rates and Award Rules sheets, proven to
+use the data-sheet layout, not the old wrong row-2 assumption), v1's `seconds_per_unit` used directly,
+v2's `standard_rate_per_hour` converted correctly, v1 `skill_code` and v2 `role` both producing the
+same `SkillCertification` row, and both "Shift Patterns" (v1) and "Shift Templates" (v2) recognised as
+the same entity.
+
+**Source-workbook compatibility remains explicitly unverified.** Every number and name above comes
+from the stated review, not from running against a real file — and the Rules-sheet layout correction
+above is itself evidence that a stated fact can still be incomplete until checked against the real
+thing. The specific places to check first once the actual v1/v2 files are available:
+`_DATA_SHEET_LAYOUT`/`_SHEET_SPECIFIC_LAYOUT` (row positions — especially each Rules sheet's own
+preamble length), `_SHEET_ALIASES` (sheet tab names), `_FIELD_ALIASES`/`_adapt_work_standards` (v1/v2
+column names and conversions) — all in `app/imports/xlsx.py`.
+
+### Committed allocations and backlog — CONFIRMED
+
+Distinguishing actual outstanding quantity from quantity available for additional planning, and the
+full commit/cancel/replace/repeat/overlap matrix, is now explicit and tested:
+
+- `GET /v1/orders/{order_id}` (new) returns BOTH numbers by name: `outstanding_quantity`
+  (`units − fulfilled_units` — what's not yet ACTUALLY done) and `available_for_planning`
+  (`units − max(committed_units, fulfilled_units)` — what's safe to schedule in a new run without
+  double-booking labour another plan already claims). They differ exactly when something is committed
+  but not yet confirmed done — demonstrated in
+  `test_get_order_distinguishes_outstanding_from_available_for_planning`.
+- **New**: `OrderCommitment` (migration `d8e9f0a1b2c3`) — a per-run ledger of exactly what each
+  committed run contributed to an order, so one run's contribution can be released independently of
+  any other run's. `solve_order_fulfillment` now accepts the caller's own `run_id` (passed by
+  `app.api.v1.runs`) and tags each commitment with it. **Regression found and fixed by the full
+  backend suite**: the first version of this wiring called `solve_order_fulfillment` directly instead
+  of through `_SOLVERS[run_type]`, which silently broke
+  `test_infeasible_order_fulfillment_run_persists_with_a_reason` — a test that replaces the solver
+  with `monkeypatch.setitem(_SOLVERS, "order_fulfillment", ...)` to force a controlled failure path.
+  Fixed by resolving the solver through `_SOLVERS[run_type]` as before and only passing `run_id` when
+  the resolved callable genuinely IS `solve_order_fulfillment` (an identity check), so a test's
+  monkeypatched replacement is still honoured correctly.
+- **New**: `POST /v1/runs/{run_id}/release-commitment` — cancellation/replacement of a committed plan.
+  Releases every order that specific run committed to (and ONLY that run's share), making the
+  unfinished work available again; a committed run for the same site/window that was previously
+  blocked (`_check_committed_conflict`) is now allowed once released. Idempotent — releasing an
+  already-released run is a harmless no-op, not an error.
+- Partial actual completion is additive and clamped to the order's own total
+  (`test_partial_actual_completion_is_additive_and_bounded`).
+- Repeated commit requests: the existing idempotency-key mechanism (unchanged) already prevents a
+  retried identical request from committing twice — now explicitly tested for `order_fulfillment`
+  specifically (`test_repeated_commit_request_with_same_idempotency_key_does_not_duplicate`).
+  Overlapping commitments are rejected (`_check_committed_conflict`, unchanged logic) and then
+  correctly ALLOWED once the blocking run's commitment is released
+  (`test_overlapping_commitment_rejected_then_allowed_after_release`).
+- **Actual completion remains unchanged by every planning action**: committing, releasing, and
+  re-committing a plan never move `fulfilled_units` — only the explicit completion endpoint does
+  (`test_actual_completion_unchanged_by_commit_release_or_replan`).
+- Automatic actuals correlation (matching imported `WorkloadEvent` actuals back to an order
+  automatically, instead of the explicit completion endpoint) remains documented as a future
+  enhancement, not built — it does not block this release, since explicit completion is usable and
+  verified end to end.
+
+Tests: `tests/test_committed_vs_fulfilled.py`, 12 tests covering every item above, all passing.
 
 ## Scope decision (9 Oct 2026)
 

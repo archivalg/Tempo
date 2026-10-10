@@ -29,7 +29,7 @@ from app.models.constraints import AwardEligibilityRestriction, AwardRule as Awa
 from app.models.constraints import Equipment as EquipmentModel
 from app.models.constraints import FillPriority, HeadcountLimit
 from app.models.indirect import IndirectHeadcountRequirement
-from app.models.orders import DayRate, Order, ProcessStep, UnitConversion, WorkerActivityRate
+from app.models.orders import DayRate, Order, OrderCommitment, ProcessStep, UnitConversion, WorkerActivityRate
 from app.models.scheduling import ShiftBreak, ShiftTemplate, OperatingCalendarDay, WEEKDAYS
 from app.models.stage4 import ProductivityLoss
 from app.models.stage4 import StagingCapacity as StagingCapacityModel
@@ -327,14 +327,19 @@ class _SyntheticDemand:
     unit: str = DEFAULT_TARGET_UNIT
 
 
-def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], request: RunRequest) -> SolverOutcome:
+def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], request: RunRequest, run_id: str | None = None) -> SolverOutcome:
     """One coherent plan: calendars/shifts/breaks, availability (dated and recurring weekly),
     dependencies/deadlines, personal rates/conversions, indirect coverage, fill priorities
     (activity and employment_type), absenteeism/equipment/headcount limits, congestion/off-task
     loss, staging capacity (which can delay a step's completion, not just report it afterwards),
     and grade-aware costing with paid-vs-productive hours all influence the same allocation.
     `demand_mode` lets known orders, forecast demand, or both (hybrid) share that same allocation —
-    see docs/order-driven-planning.md for the capability matrix and remaining simplifications."""
+    see docs/order-driven-planning.md for the capability matrix and remaining simplifications.
+
+    `run_id` (the caller's own OptimisationRun id, passed by app.api.v1.runs) tags each committed
+    run's contribution to `Order.committed_units` with an `OrderCommitment` ledger row, so that
+    specific contribution — and only it — can later be released (cancelled/superseded) without
+    touching any other run's commitment or any order's actual `fulfilled_units`."""
     site_id = site_ids[0]
     window = request.planning_window
     tz_name = _normalize_timezone_name(window.timezone)
@@ -836,6 +841,8 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             produced_through_last_step = max(0.0, state["quantity"] - last_step["remaining"])
             if produced_through_last_step > 1e-9:
                 order.committed_units = order.committed_units + produced_through_last_step
+                if run_id:
+                    db.add(OrderCommitment(tenant_id=tenant_id, order_id=order.id, run_id=run_id, quantity=produced_through_last_step))
 
     # "No plan found" (proven infeasibility — the scheduler never managed to put a single worker on
     # anything, direct or indirect) is distinct from "attempted and constrained to zero direct

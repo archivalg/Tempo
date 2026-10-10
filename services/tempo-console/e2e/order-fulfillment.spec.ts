@@ -1,4 +1,10 @@
 import { expect, test, type Page } from '@playwright/test'
+import { readFileSync } from 'fs'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
+
+const API_BASE = process.env.E2E_API_BASE_URL ?? 'http://127.0.0.1:8111/v1'
+const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // Order-driven-planning: upload process templates/steps/orders with a customer's own column names,
 // create an order_fulfillment run, and see a structured result — upload through to results, in a
@@ -89,4 +95,49 @@ test('order-driven order_fulfillment run: a constrained order produces an explai
   await expect(page.getByText(/E2E-SO-CONSTRAINED/)).toBeVisible()
   await expect(page.getByText(/feasible_with_slack/)).toBeVisible()  // not silently "feasible" — the shortfall is disclosed
   await page.screenshot({ path: '../../docs/screenshots/order-fulfillment-constrained-run.png', fullPage: true })
+})
+
+test('XLSX workbook upload and explicit order completion, through a real authenticated browser session', async ({ page }) => {
+  // Neither capability has dedicated console UI yet (a known, stated gap — see
+  // docs/order-driven-planning.md) — this proves both endpoints work end to end through the live
+  // server with the browser's own cookie session and CSRF token, not just pytest's TestClient.
+  await signIn(page, /Demo Tenant Admin/)
+  await page.goto('/data')  // establishes the session on the API's own origin (credentials: 'include')
+
+  const csrf = (await page.context().cookies(API_BASE)).find(c => c.name === 'tempo_csrf')?.value ?? ''
+  const workbook = readFileSync(join(__dirname, 'fixtures', 'workers-v1.xlsx'))
+
+  const staged = await page.request.post(`${API_BASE}/imports/xlsx/stage`, {
+    headers: { 'Content-Type': 'application/octet-stream', 'X-CSRF-Token': csrf },
+    data: workbook,
+  })
+  expect(staged.ok(), await staged.text()).toBeTruthy()
+  const stagedBody = await staged.json()
+  expect(stagedBody.skipped_sheets).toEqual([])
+  const workersSheet = stagedBody.applied.find((s: { entity: string }) => s.entity === 'workers')
+  expect(workersSheet.batch.ok_rows).toBe(1)  // only E2E-XLSX-1 (row 5) — E1042 on row 4 is the fixture's own guidance/example row, structurally ignored
+
+  // Explicit order completion: create a tiny order via the existing CSV path, then confirm it done.
+  await loadCsv(page, /Process templates/, 'process-templates-3.csv',
+    'site,process_code,customer_id\nmel_dc_01,e2e_complete,\n', /^Load \d+ rows?$/)
+  await loadCsv(page, /Process steps/, 'process-steps-3.csv',
+    'site,process_code,sequence,activity\nmel_dc_01,e2e_complete,1,picking\n', /^Load \d+ rows?$/)
+  const received = isoLocal(1, 1)
+  const due = isoLocal(1, 10)
+  await loadCsv(page, /^Orders/, 'orders-3.csv',
+    `site,order_id,order_received,despatch_due,units,process_code\nmel_dc_01,E2E-COMPLETE-1,${received},${due},40,e2e_complete\n`, /^Load \d+ rows?$/)
+
+  const complete = await page.request.post(`${API_BASE}/orders/E2E-COMPLETE-1/complete`, {
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+    data: { quantity: 40 },
+  })
+  expect(complete.ok(), await complete.text()).toBeTruthy()
+  const completeBody = await complete.json()
+  expect(completeBody.status).toBe('completed')
+  expect(completeBody.fulfilled_units).toBe(40)
+
+  const order = await page.request.get(`${API_BASE}/orders/E2E-COMPLETE-1`, { headers: { 'X-CSRF-Token': csrf } })
+  const orderBody = await order.json()
+  expect(orderBody.outstanding_quantity).toBe(0)
+  expect(orderBody.available_for_planning).toBe(0)
 })

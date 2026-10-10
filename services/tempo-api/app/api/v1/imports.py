@@ -164,11 +164,15 @@ async def inspect_xlsx(request: Request, ctx: RequestContext = Depends(import_co
 
 @router.post("/imports/xlsx/stage", status_code=201)
 async def stage_xlsx(request: Request, file_name: str = "upload.xlsx", ctx: RequestContext = Depends(import_context), db: Session = Depends(get_db)) -> dict:
-    """Stages every RECOGNISED sheet through the exact same `engine.stage` pipeline a CSV upload
-    uses — one ImportBatch per sheet, previewed and later applied through the existing
-    /imports/batches/{id}/apply endpoint, unchanged. Sheets are processed in dependency order (sites
-    before workers before orders, etc.) so a workbook that defines its own prerequisites earlier in
-    the same file does not need a second upload pass. An unrecognised sheet is reported, not dropped."""
+    """Stages AND applies every RECOGNISED sheet, in dependency order (sites before workers before
+    orders, etc.), through the exact same `engine.stage`/`apply.apply_batch` pipeline a CSV upload
+    uses — one ImportBatch per sheet. Each sheet is applied immediately after staging, inside this
+    SAME request's transaction, so a LATER sheet's cross-reference to an EARLIER sheet's rows (e.g.
+    process steps naming a process template defined earlier in the same workbook) resolves correctly
+    — the earlier sheet's rows are already real, not merely staged. If ANY recognised sheet fails to
+    stage cleanly (any error row) or fails to apply, an exception propagates and the whole request's
+    transaction rolls back (`app.dependencies.get_db`) — nothing from this workbook is left applied.
+    An unrecognised sheet is reported, never silently dropped."""
     body = await request.body()
     try:
         sheets = X.read_xlsx(body)
@@ -176,26 +180,29 @@ async def stage_xlsx(request: Request, file_name: str = "upload.xlsx", ctx: Requ
         raise _problem(e) from None
     recognised = [(name, X.sheet_entity(name), headers, rows) for name, (headers, rows) in sheets.items() if X.sheet_entity(name) is not None]
     recognised.sort(key=lambda t: X.processing_rank(t[1][1]))
-    staged, skipped = [], [name for name in sheets if X.sheet_entity(name) is None]
+    skipped = [name for name in sheets if X.sheet_entity(name) is None]
+    applied = []
     for name, (data_class, entity), headers, raw_rows in recognised:
         if not raw_rows:
-            staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": "no data rows (rows 2-4 are guidance, data starts at row 5) — nothing to stage"})
+            applied.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": "no data rows for this sheet's layout — nothing to stage"})
             continue
         c = _contract(data_class, entity)
         mapping = P.suggest_mapping(c, headers)
         missing = [f.name for f in c.fields if f.required and not mapping.get(f.name)]
         if missing:
-            staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": f"could not map required column(s): {', '.join(missing)}"})
-            continue
+            raise _problem(P.ImportProblem(f"sheet '{name}': could not map required column(s): {', '.join(missing)}")) from None
         rows = P.apply_mapping(c, mapping, raw_rows)
         sha = hashlib.sha256(body + name.encode() + b"xlsx-sheet").hexdigest()
         try:
             batch, replayed = E.stage(db, ctx, data_class=data_class, entity=entity, channel="xlsx", source_label=f"{file_name}:{name}", rows=rows, raw_sha=sha)
+            if batch.error_rows:
+                raise P.ImportProblem(f"sheet '{name}': {batch.error_rows} row(s) rejected — nothing in this workbook was applied. "
+                                      f"See the batch's own errors: GET /v1/imports/batches/{batch.id}/errors.csv")
+            A.apply_batch(db, ctx, batch)  # safe even if already applied (a replay) — apply_batch no-ops in that case
         except P.ImportProblem as e:
-            staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": str(e)})
-            continue
-        staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": view(batch, replayed=replayed, errors=_sample_errors(db, batch))})
-    return {"staged": staged, "skipped_sheets": skipped}
+            raise _problem(e) from None
+        applied.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": view(batch, replayed=replayed, errors=_sample_errors(db, batch))})
+    return {"applied": applied, "skipped_sheets": skipped}
 
 
 # ------------------------------------------------------------------------------------------------------------------ API channel

@@ -92,6 +92,24 @@ class Order(Base):
     fulfilled_units: Mapped[float] = mapped_column(Float, default=0.0)
 
 
+class OrderCommitment(Base):
+    """One committed run's contribution to an order's `committed_units` — an audit trail that makes
+    the contribution SEPARATELY RELEASABLE (brief: "cancellation/replacement of committed plans...
+    released reservations must make unfinished work available again"). Without this ledger,
+    `Order.committed_units` would be a single irreversible counter with no way to undo one run's
+    share of it when that run is cancelled or superseded."""
+
+    __tablename__ = "order_commitment"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("order_.id"), index=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    quantity: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OrderTask(Base):
     """A generated link from an order to one of its process steps, for traceability (brief: "Persist
     generated order-task links for traceability"). Timing is computed by the solver at run time, not

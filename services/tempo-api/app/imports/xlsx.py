@@ -2,23 +2,48 @@
 of it (brief: "retain CSV support without content-based row deletion").
 
 Arch's reviewed templates are multi-sheet workbooks where customers are told to upload the WHOLE
-file, not one sheet at a time, with a fixed structural layout per sheet: row 1 is the column header,
-rows 2-4 are guidance/example content (not data — a customer who leaves the example row untouched
-must not get it imported), and real data begins at row 5. This module was built from that literal,
-stated layout; it was not checked against an actual Arch source file, which this programme was never
-given access to (the original brief explicitly said not to block on that access — see
-docs/order-driven-planning.md). The skip is purely POSITIONAL (row 2, 3 and 4, always, regardless of
-what they contain) — never content-based, the same principle the CSV pipeline already follows (see
-the "preserve ignored example rows" finding in docs/order-driven-planning.md: a content-based guess
-risks discarding genuine customer data).
+file, not one sheet at a time. Per the source-workbook review:
+
+- Ordinary DATA sheets (workers, orders, process steps, ...): row 1 is the header, rows 2-3 are
+  metadata, row 4 is an example, and real data begins at row 5. This layout is the only one actually
+  confirmed by the review with exact row numbers.
+- RULES and REFERENCE sheets (day rates, award rules, fill priorities, headcount limits, unit
+  conversions, grade rates, award eligibility restrictions) are KNOWN to use a DIFFERENT layout, but
+  NOT a single shared one: the review found each Rules sheet carries its own requirements, guidance
+  and instruction/example rows before the actual entries — not a uniform "no metadata, data from row
+  2" shape. An earlier version of this module assumed exactly that uniform shape; it was WRONG and has
+  been removed. Correct handling needs sheet-specific row numbers this programme has not been given.
+  Until a real per-sheet layout is supplied, every rules/reference sheet FALLS BACK to the one layout
+  actually confirmed (the ordinary data-sheet layout above) via `_SHEET_SPECIFIC_LAYOUT` — a fallback
+  known to likely be wrong for some or all of these sheets, not a verified answer. `sheet_category()`
+  still distinguishes the two groups so the fallback (and its honesty) is visible in code, not folded
+  silently into "every sheet behaves the same".
+- v1 names the activity-rate sheet's own field `seconds_per_unit` (matches Tempo's WorkStandard
+  field directly) and the shift sheet "Shift Patterns"; a worker's qualification column is
+  `skill_code`.
+- v2 instead uses `standard_rate_per_hour` (a rate, not a per-unit time — converted to
+  `seconds_per_unit` = 3600 / rate before validation) and splits shifts into "Shift Templates" +
+  "Shift Breaks" sheets; a worker's qualification column is `role`.
+
+This was built from the literal, stated review above — it has NOT been tested against the actual
+supplied v1/v2 workbook files, which this session has still not been given at any point in this
+programme. Source-workbook compatibility is NOT marked confirmed, and must not be read as confirmed
+from the fact that tests pass: `tests/test_xlsx_import.py` verifies this module against LOCAL
+fixtures built to match the facts stated above, which is fixture-tested import SUPPORT, not source-
+file COMPATIBILITY — the two are kept explicitly distinct throughout this module's tests and in
+docs/order-driven-planning.md. One further known, stated limitation: if v1's "Shift Patterns" sheet
+embeds break definitions inline (rather than as a separate concept the way v2's "Shift Breaks" sheet
+is), those inline breaks are NOT extracted — only shift-template-shaped columns (site/shift_code/
+start_time/end_time/weekdays) are recognised from that sheet, since the actual column layout of an
+inline breaks scheme is not stated and was not guessed.
 
 Each recognised sheet is converted into the exact same (headers, rows) shape `read_csv` produces, then
 fed through the SAME staging pipeline (`app.imports.engine.stage`) as any CSV upload — one
-`ImportBatch` per sheet, previewed and applied through the existing endpoints, unchanged. "Version-
-aware v1/v2" is satisfied the same way the CSV contracts already are: every field this programme added
-(function/flow/required_skill, award, day_rates, award_rules, award_eligibility_restrictions, ...) is
-optional, so a v1 sheet missing those columns and a v2 sheet with them both validate against the one
-contract definition.
+`ImportBatch` per sheet. Sheets are staged AND applied together, in dependency order, inside ONE
+transaction (see `stage_and_apply_workbook`): a later sheet's cross-reference to an earlier sheet's
+rows (e.g. process steps naming a process template from an earlier sheet in the SAME file) resolves
+correctly because the earlier sheet's rows are already applied (not just staged) by the time the later
+sheet is validated — and if ANY sheet fails, the whole transaction aborts, leaving NO partial import.
 """
 from __future__ import annotations
 
@@ -28,13 +53,23 @@ from openpyxl import load_workbook
 
 from app.imports.parse import ImportProblem
 
-# Row 1 = header; rows 2-4 = guidance/example content, always skipped by position; data from row 5.
-HEADER_ROW = 1
-DATA_START_ROW = 5
+# The ONE layout actually confirmed by the source-workbook review, with exact row numbers: header
+# row 1, metadata rows 2-3, example row 4, data from row 5.
+_DATA_SHEET_LAYOUT = {"header_row": 1, "data_start_row": 5}
+
+# Per-ENTITY layout overrides for sheets confirmed to need sheet-specific handling (rules/reference
+# sheets — see module docstring). Empty until this programme is given the actual row numbers for each
+# specific Rules sheet; every entity not listed here (currently: every entity) falls back to
+# `_DATA_SHEET_LAYOUT`, a KNOWN-UNVERIFIED fallback for the rules/reference group, not a confirmed one.
+_SHEET_SPECIFIC_LAYOUT: dict[str, dict[str, int]] = {}
+
+
+def row_layout(entity: str) -> dict[str, int]:
+    return _SHEET_SPECIFIC_LAYOUT.get(entity, _DATA_SHEET_LAYOUT)
 
 # Sheet tab name (case/space-insensitive) -> (data_class, entity). Covers every CONTRACTS entry a
-# workbook upload could plausibly carry; a handful of the more likely v1/v2 naming variants are
-# included as synonyms, the same spirit as each Field's own `synonyms` for column headers.
+# workbook upload could plausibly carry; v1/v2 naming variants stated in the source-workbook review
+# are included explicitly (Shift Patterns / Shift Templates / Shift Breaks).
 _SHEET_ALIASES: dict[str, tuple[str, str]] = {
     "sites": ("master", "sites"), "warehouses": ("master", "sites"),
     "customers": ("master", "customers"),
@@ -45,8 +80,8 @@ _SHEET_ALIASES: dict[str, tuple[str, str]] = {
     "availability": ("master", "availability"), "leave": ("master", "availability"),
     "weekly availability": ("master", "weekly_availability"),
     "operating calendar": ("master", "operating_calendar"), "operating hours": ("master", "operating_calendar"),
-    "shift templates": ("master", "shift_templates"), "shifts": ("master", "shift_templates"),
-    "shift breaks": ("master", "shift_breaks"), "breaks": ("master", "shift_breaks"),
+    "shift templates": ("master", "shift_templates"), "shifts": ("master", "shift_templates"), "shift patterns": ("master", "shift_templates"),  # v1 (Shift Patterns) vs v2 (Shift Templates)
+    "shift breaks": ("master", "shift_breaks"), "breaks": ("master", "shift_breaks"),  # v2 only — v1's Shift Patterns has no separate breaks sheet (see module docstring)
     "equipment": ("master", "equipment"),
     "activity roles": ("master", "activity_roles"),
     "process templates": ("master", "process_templates"), "processes": ("master", "process_templates"),
@@ -66,6 +101,28 @@ _SHEET_ALIASES: dict[str, tuple[str, str]] = {
     "award rules": ("master", "award_rules"), "awards": ("master", "award_rules"),
     "award eligibility restrictions": ("master", "award_eligibility_restrictions"),
 }
+
+# Rules/reference sheets are KNOWN to need sheet-specific layouts this programme has not been given
+# (see module docstring) — kept as its own category so that fact stays visible in code, even though
+# `row_layout()` currently falls every one of them back to the same `_DATA_SHEET_LAYOUT` as "data"
+# sheets. Keyed by entity, not sheet name, since the alias table above already folds several sheet-
+# name spellings onto one entity.
+_RULES_REFERENCE_ENTITIES = {"day_rates", "award_rules", "award_eligibility_restrictions", "fill_priorities",
+                             "headcount_limits", "unit_conversions", "grade_rates"}
+
+
+def sheet_category(entity: str) -> str:
+    return "rules_reference" if entity in _RULES_REFERENCE_ENTITIES else "data"
+
+
+# v1/v2 field-name adapters, keyed by entity: canonical field name -> set of version-specific header
+# spellings to also recognise, beyond the field's own CSV synonyms (contracts.py). "seconds_per_unit"
+# needs no adapter — it already IS the v1 (and canonical) name. "standard_rate_per_hour" (v2) requires
+# a VALUE transform, not just a header rename, so it's handled separately in `_adapt_work_standards`.
+_FIELD_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "workers": {"skills": ("skill_code", "role")},  # v1: skill_code, v2: role — both treated as the worker's one qualification value
+}
+_V2_RATE_HEADER = "standard_rate_per_hour"
 
 # Dependency order for staging multiple sheets from ONE workbook in a single pass — NOT the same as
 # contracts.DATA_CLASSES's tuple, which is grouped for display, not safe processing order (e.g. it
@@ -98,17 +155,53 @@ def _cell_to_str(v) -> str:
     return str(v).strip()
 
 
+def _adapt_work_standards(headers: list[str], rows: list[dict[str, str]]) -> None:
+    """v2's `standard_rate_per_hour` is a RATE, not Tempo's canonical per-unit time — a VALUE
+    transform (3600 / rate), not just a header rename, so it can't be handled by header synonyms
+    alone. Mutates both `headers` (so `suggest_mapping` can find the new column) and `rows` in place,
+    adding a `seconds_per_unit` header/key; v1 sheets (which already use `seconds_per_unit` directly)
+    are untouched."""
+    norm_headers = {h.strip().lower().replace(" ", "_") for h in headers}
+    if "seconds_per_unit" in norm_headers or _V2_RATE_HEADER not in norm_headers:
+        return
+    rate_header = next(h for h in headers if h.strip().lower().replace(" ", "_") == _V2_RATE_HEADER)
+    headers.append("seconds_per_unit")
+    for r in rows:
+        raw = r.get(rate_header, "")
+        try:
+            rate = float(raw)
+        except ValueError:
+            continue
+        if rate > 0:
+            r["seconds_per_unit"] = str(round(3600 / rate, 4))
+
+
+def _apply_field_aliases(entity: str, headers: list[str]) -> list[str]:
+    """Renames a v1/v2-specific header (e.g. `skill_code` or `role`) to Tempo's canonical field name
+    (`skills`) so the ordinary header-synonym mapping (`app.imports.parse.suggest_mapping`) finds it —
+    column HEADER renames only; a VALUE transform (like the rate conversion above) needs its own
+    function since renaming alone can't convert units."""
+    aliases = _FIELD_ALIASES.get(entity, {})
+    rename = {alt: canonical for canonical, alts in aliases.items() for alt in alts}
+    norm = lambda h: h.strip().lower().replace(" ", "_")  # noqa: E731
+    return [rename.get(norm(h), h) for h in headers]
+
+
 def read_xlsx(data: bytes) -> dict[str, tuple[list[str], list[dict[str, str]]]]:
     """Every sheet in the workbook, each as (headers, rows) — the same shape `read_csv` returns, so
-    every downstream caller (mapping suggestion, `engine.stage`) is unchanged. Row 1 is the header;
-    rows 2-4 are skipped structurally regardless of content; data starts at row 5. A genuinely blank
-    data row (every cell empty) is skipped the same way `read_csv` skips one."""
+    every downstream caller (mapping suggestion, `engine.stage`) is unchanged. An ordinary data sheet
+    has its header on row 1 and data from row 5 (rows 2-4 are metadata/example, skipped by position);
+    a rules/reference sheet (`sheet_category`) has data from row 2. A genuinely blank data row (every
+    cell empty) is skipped the same way `read_csv` skips one. v1/v2 field-name differences are
+    resolved here too (see module docstring) before the row dicts are returned."""
     try:
         wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
     except Exception as exc:  # openpyxl raises several distinct exception types for a bad file
         raise ImportProblem("the file is not a readable .xlsx workbook") from exc
     sheets: dict[str, tuple[list[str], list[dict[str, str]]]] = {}
     for ws in wb.worksheets:
+        mapped = sheet_entity(ws.title)
+        data_start_row = row_layout(mapped[1])["data_start_row"] if mapped else _DATA_SHEET_LAYOUT["data_start_row"]
         rows_iter = ws.iter_rows(values_only=True)
         try:
             header_cells = next(rows_iter)
@@ -116,14 +209,18 @@ def read_xlsx(data: bytes) -> dict[str, tuple[list[str], list[dict[str, str]]]]:
             sheets[ws.title] = ([], [])
             continue
         headers = [_cell_to_str(h) for h in header_cells]
+        if mapped:
+            headers = _apply_field_aliases(mapped[1], headers)
         rows: list[dict[str, str]] = []
         for row_no, cells in enumerate(rows_iter, start=2):
-            if row_no < DATA_START_ROW:
-                continue  # rows 2-4: guidance/example content, skipped by position
+            if row_no < data_start_row:
+                continue  # metadata/example rows (data sheets only) — skipped by position, never by content
             values = [_cell_to_str(c) for c in cells]
             if not any(values):
                 continue  # a genuinely blank data row — same convention as read_csv
             rows.append({h: (values[i] if i < len(values) else "") for i, h in enumerate(headers) if h})
+        if mapped and mapped[1] == "work_standards":
+            _adapt_work_standards(headers, rows)
         sheets[ws.title] = (headers, rows)
     wb.close()
     return sheets

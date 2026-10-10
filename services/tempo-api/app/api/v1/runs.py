@@ -40,6 +40,7 @@ from app.core.idempotency import IdempotencyConflict, hash_payload, idempotency_
 from app.core.policy import resolve_policy
 from app.dependencies import get_db, get_request_context, require_idempotency_key
 from app.errors import AuthForbidden, DataNotReady, PolicyConflict, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
+from app.models.orders import Order, OrderCommitment
 from app.models.runs import (
     OptimisationRun,
     OptimisationRunCustomer,
@@ -125,6 +126,13 @@ def _check_committed_conflict(db: Session, context: RequestContext, run_type: st
     )):
         other_request = other.request or {}
         if not other_request.get("input", {}).get("committed"):
+            continue
+        # A committed run whose commitment has since been fully released (cancelled/superseded —
+        # POST /v1/runs/{run_id}/release-commitment) no longer blocks a new commitment for the same
+        # window. A run with no OrderCommitment rows at all (nothing was ever actually committed, or
+        # everything has been released) is treated the same way.
+        if db.scalar(select(OrderCommitment.id).where(OrderCommitment.tenant_id == context.tenant_id,
+                                                       OrderCommitment.run_id == other.run_id, OrderCommitment.released_at.is_(None)).limit(1)) is None:
             continue
         other_sites = set(db.scalars(select(OptimisationRunSite.site_id).where(OptimisationRunSite.run_id == other.run_id)))
         if not other_sites & set(request.scope.site_ids):
@@ -224,7 +232,16 @@ def create_run(
     run.status = "running"
 
     try:
-        outcome = _SOLVERS[run_type](db, context.tenant_id, request.scope.site_ids, request)
+        solver = _SOLVERS[run_type]
+        if solver is solve_order_fulfillment:
+            # Tags any committed allocation this run makes with its OWN run_id (app.models.orders.
+            # OrderCommitment), so it — and only it — can later be released via
+            # POST /v1/runs/{run_id}/release-commitment, without a generic solver signature change.
+            # Resolved through `_SOLVERS` (not called directly) so a test's `monkeypatch.setitem`
+            # replacement — a 4-argument callable with no `run_id` — is still honoured correctly.
+            outcome = solver(db, context.tenant_id, request.scope.site_ids, request, run_id=run_id)
+        else:
+            outcome = solver(db, context.tenant_id, request.scope.site_ids, request)
     except InsufficientData as exc:
         # No persisted "failed" run for a validation-time rejection — the
         # request never produced a snapshot worth auditing as a run; the
@@ -465,6 +482,32 @@ def cancel_run(
     run.status = target
     db.flush()
     return {"run_id": run.run_id, "status": run.status}
+
+
+@router.post("/runs/{run_id}/release-commitment")
+def release_commitment(
+    run_id: str,
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cancellation/replacement of a committed order_fulfillment plan: releases EVERY order this run
+    committed to, making that unfinished work available to a future run again (`Order.committed_units`
+    is reduced by exactly what this run added — never another run's share, and never
+    `Order.fulfilled_units`, which this never touches). A terminal, best-effort action, the same way
+    `cancel_run` is — a run already fully released is simply unchanged, not an error (idempotent: safe
+    to call twice)."""
+    if not context.has_permission("labour.plan"):
+        raise AuthForbidden("caller lacks labour.plan permission required to release a commitment")
+    run = _get_owned_run(db, context, run_id)
+    released = []
+    for c in db.scalars(select(OrderCommitment).where(OrderCommitment.tenant_id == context.tenant_id, OrderCommitment.run_id == run_id, OrderCommitment.released_at.is_(None))):
+        order = db.get(Order, c.order_id)
+        if order is not None:
+            order.committed_units = max(0.0, order.committed_units - c.quantity)  # ONLY committed_units — fulfilled_units and status are untouched, by design
+        c.released_at = datetime.now(timezone.utc)
+        released.append({"order_id": c.order_id, "quantity": c.quantity})
+    db.flush()
+    return {"run_id": run_id, "released": released}
 
 
 @router.post("/run-comparisons")

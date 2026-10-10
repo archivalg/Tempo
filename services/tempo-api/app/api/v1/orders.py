@@ -14,6 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app.dependencies import get_db, get_request_context
 from app.errors import AuthForbidden, OrderNotFound, ScopeError
@@ -29,10 +30,40 @@ class OrderCompletionRequest(BaseModel):
 
 
 def _get_owned_order(db: Session, context: RequestContext, order_id: str) -> Order:
+    """`order_id` accepts EITHER the opaque internal id OR the customer's own `order_ref` (scoped to
+    the caller's granted sites) — a customer-facing caller naturally has the order_ref it uploaded,
+    not Tempo's internal id, the same convention `source_ref` already gives workers."""
     order = db.get(Order, order_id)
+    if order is None:
+        order = db.scalar(select(Order).where(Order.tenant_id == context.tenant_id, Order.order_ref == order_id, Order.site_id.in_(context.site_ids)))
     if order is None or order.tenant_id != context.tenant_id or order.site_id not in context.site_ids:
         raise OrderNotFound(f"order '{order_id}' not found or not visible in caller scope")
     return order
+
+
+@router.get("/orders/{order_id}")
+def get_order(
+    order_id: str,
+    context: RequestContext = Depends(get_request_context),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Deliberately distinguishes two different numbers that are easy to conflate:
+    `outstanding_quantity` — how much of this order is NOT yet actually done, in the real world
+    (`units - fulfilled_units`); and `available_for_planning` — how much is still safe to schedule in
+    a NEW run without double-booking labour another plan already claims
+    (`units - max(committed_units, fulfilled_units)`). The two differ exactly when something has been
+    committed but not yet confirmed done — the common case for an order mid-shift."""
+    if not context.has_permission("labour.read"):
+        raise AuthForbidden("caller lacks labour.read permission")
+    order = _get_owned_order(db, context, order_id)
+    units = order.units
+    outstanding = None if units is None else round(max(0.0, units - order.fulfilled_units), 3)
+    available = None if units is None else round(max(0.0, units - max(order.committed_units, order.fulfilled_units)), 3)
+    return {
+        "order_ref": order.order_ref, "status": order.status, "units": units,
+        "committed_units": round(order.committed_units, 3), "fulfilled_units": round(order.fulfilled_units, 3),
+        "outstanding_quantity": outstanding, "available_for_planning": available,
+    }
 
 
 @router.post("/orders/{order_id}/complete")
