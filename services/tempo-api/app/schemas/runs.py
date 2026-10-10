@@ -77,6 +77,17 @@ class PlanningWindow(BaseModel):
 class RunInput(BaseModel):
     snapshot_mode: Literal["latest_accepted", "pinned"] = "latest_accepted"
     demand_forecast_run_id: str | None = None
+    # order_fulfillment only (order-driven-planning integration increment). "known_orders" (default)
+    # preserves prior behaviour. "hybrid" requires forecast_basis to say whether the forecast is the
+    # TOTAL expected demand (known orders are subtracted from it to avoid double-counting) or
+    # ADDITIONAL demand on top of known orders (added as-is, sharing the same worker/equipment pool).
+    demand_mode: Literal["forecast_only", "known_orders", "hybrid"] = "known_orders"
+    forecast_basis: Literal["total", "additional"] | None = None
+    # order_fulfillment only: a committed run checks for conflicting committed runs on the same
+    # site/overlapping window before solving (see app.api.v1.runs._check_committed_conflict). A
+    # draft (the default) never blocks and is never blocked — it may freely reuse resources another
+    # draft or committed run already claimed, since nothing is actually promised yet.
+    committed: bool = False
 
 
 class RunConfiguration(BaseModel):

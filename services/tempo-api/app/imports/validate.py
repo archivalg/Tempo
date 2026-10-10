@@ -124,6 +124,9 @@ def validate_row(contract: Contract, row: dict, lk: Lookups) -> tuple[dict | Non
     elif contract.entity == "headcount_limits" and "min_headcount" in out and "max_headcount" in out:
         if out["min_headcount"] > out["max_headcount"]:
             msgs.append(_msg("error", "min_headcount", "invalid", f"min_headcount ({out['min_headcount']}) exceeds max_headcount ({out['max_headcount']})"))
+    elif contract.entity == "weekly_availability" and "available" in out and "earliest_start" in out:
+        if not out["available"] and out["earliest_start"] is not None:
+            msgs.append(_msg("error", "earliest_start", "invalid", "earliest_start/latest_finish must be blank when available is false"))
     elif contract.entity == "productivity_loss" and "type" in out and "percent_loss" in out and "off_task_hours" in out:
         has_pct, has_hrs = out["percent_loss"] is not None, out["off_task_hours"] is not None
         if out["type"] == "congestion" and (not has_pct or has_hrs):
@@ -148,6 +151,8 @@ def _workers(row, lk):
     yield "status", lambda: {"status": _enum(_g(row, "status").lower() or "active", ("active", "inactive"), "status", {"yes": "active", "true": "active", "no": "inactive", "false": "inactive", "terminated": "inactive"})}
     yield "skills", lambda: {"skills": sorted({s.strip().lower() for s in _g(row, "skills").replace(",", ";").split(";") if s.strip()})}
     yield "employee_no", lambda: {"employee_no": _g(row, "employee_no") or None}
+    yield "position_grade", lambda: {"position_grade": _g(row, "position_grade")[:80] or None}
+    yield "award", lambda: {"award": _g(row, "award")[:80] or None}
 
 
 def _sites(row, lk):
@@ -217,6 +222,8 @@ def _standards(row, lk):
     yield "activity", lambda: {"activity": _need(_g(row, "activity"), "activity").lower()[:80]}
     yield "seconds_per_unit", lambda: {"seconds_per_unit": _num(_g(row, "seconds_per_unit"), "seconds_per_unit", minimum=0.1, maximum=86400)}
     yield "effective_from", lambda: {"effective_from": (parse_local_date(_g(row, "effective_from")) if _g(row, "effective_from") else datetime.now(timezone.utc).date()).isoformat()}
+    yield "function", lambda: {"function": _g(row, "function")[:80] or None}
+    yield "flow", lambda: {"flow": _g(row, "flow")[:80] or None}
 
 
 def _forecast(row, lk):
@@ -554,7 +561,13 @@ def _unit_conversions(row, lk):
 
 
 def _fill_priorities(row, lk):
-    yield "scope", lambda: {"scope": _enum(_g(row, "scope").lower(), ("activity", "customer", "employment_type"), "scope")}
+    def scope():
+        v = _g(row, "scope").lower()
+        if v == "customer":
+            raise ImportProblem("customer-scoped fill priority is not supported in this release — use activity or employment_type")
+        return {"scope": _enum(v, ("activity", "employment_type"), "scope")}
+
+    yield "scope", scope
     yield "value", lambda: {"value": _need(_g(row, "value"), "value")[:80]}
     yield "priority", lambda: {"priority": int(_num(_g(row, "priority"), "priority", minimum=0, maximum=10000))}
 
@@ -684,6 +697,39 @@ def _staging_movements(row, lk):
     yield "unit", unit
 
 
+def _weekly_availability(row, lk):
+    def ref():
+        r = _need(_g(row, "worker_ref"), "worker_ref")
+        if r not in lk.workers_by_ref:
+            raise ImportProblem(f"worker_ref '{r}' is not a person from your staff upload. Upload staff first.")
+        return {"worker_ref": r}
+
+    def times():
+        e, f = _g(row, "earliest_start"), _g(row, "latest_finish")
+        if bool(e) != bool(f):
+            raise ImportProblem("give both earliest_start and latest_finish, or neither")
+        if not e:
+            return {"earliest_start": None, "latest_finish": None}
+        return {"earliest_start": _hhmm(e, "earliest_start"), "latest_finish": _hhmm(f, "latest_finish")}
+
+    yield "worker_ref", ref
+    yield "weekday", lambda: {"weekday": _enum(_g(row, "weekday").lower(), WEEKDAYS, "weekday")}
+    yield "available", lambda: {"available": _bool(_g(row, "available")) if _g(row, "available") else True}
+    yield "earliest_start", times
+
+
+def _day_rates(row, lk):
+    yield "activity", lambda: {"activity": _activity(_g(row, "activity"), lk)}
+    yield "weekday", lambda: {"weekday": _enum(_g(row, "weekday").lower(), WEEKDAYS, "weekday")}
+    yield "rate_per_hour", lambda: {"rate_per_hour": _num(_g(row, "rate_per_hour"), "rate_per_hour", minimum=0.01, maximum=100000)}
+
+
+def _award_rules(row, lk):
+    yield "award_code", lambda: {"award_code": _need(_g(row, "award_code"), "award_code")[:80]}
+    yield "ordinary_hours_per_day", lambda: {"ordinary_hours_per_day": _num(_g(row, "ordinary_hours_per_day"), "ordinary_hours_per_day", minimum=0.1, maximum=24)}
+    yield "overtime_multiplier", lambda: {"overtime_multiplier": _num(_g(row, "overtime_multiplier"), "overtime_multiplier", minimum=1.0, maximum=5.0)}
+
+
 def _indirect_headcount(row, lk):
     yield "site", lambda: {"site": _site(_g(row, "site"), lk)[0]}
     yield "role", lambda: {"role": _need(_g(row, "role"), "role").lower()[:80]}
@@ -712,7 +758,8 @@ _VALIDATORS = {("master", "workers"): _workers, ("master", "work_standards"): _s
                ("master", "worker_activity_rates"): _worker_activity_rates, ("master", "unit_conversions"): _unit_conversions,
                ("master", "fill_priorities"): _fill_priorities, ("master", "absenteeism"): _absenteeism, ("master", "equipment"): _equipment, ("master", "headcount_limits"): _headcount_limits,
                ("master", "grade_rates"): _grade_rates, ("master", "productivity_loss"): _productivity_loss, ("master", "staging_capacity"): _staging_capacity, ("master", "staging_movements"): _staging_movements,
-               ("master", "indirect_headcount"): _indirect_headcount,
+               ("master", "indirect_headcount"): _indirect_headcount, ("master", "weekly_availability"): _weekly_availability,
+               ("master", "day_rates"): _day_rates, ("master", "award_rules"): _award_rules,
                ("forecast", None): _forecast, ("transactions", None): _transactions, ("bulk", None): _bulk}
 
 
@@ -732,7 +779,9 @@ def row_key(data_class: str, entity: str | None, n: dict) -> tuple:
                 "grade_rates": lambda: (n["employment_type"], n["role"], n.get("position_grade"), n.get("provider_id"), n["effective_from"]),
                 "productivity_loss": lambda: (n["site"], n["type"], n.get("activity"), n.get("weekday"), n.get("shift_code")),
                 "staging_capacity": lambda: (n["site"], n["zone_id"]), "staging_movements": lambda: (n["site"], n["zone_id"], n["occurred_at"], n["movement_type"]),
-                "indirect_headcount": lambda: (n["site"], n["role"], n["weekday"], n["start_time"], n["end_time"])}[entity]()
+                "indirect_headcount": lambda: (n["site"], n["role"], n["weekday"], n["start_time"], n["end_time"]),
+                "weekly_availability": lambda: (n["worker_ref"], n["weekday"]),
+                "day_rates": lambda: (n["activity"], n["weekday"]), "award_rules": lambda: (n["award_code"],)}[entity]()
     if data_class == "transactions":
         return (n["source"], n["event_id"], n.get("revision"), n["action"])
     return (n["site"], n["activity"], n["bucket_start"], n["bucket_minutes"], n.get("customer"))

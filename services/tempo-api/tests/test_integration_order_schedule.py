@@ -191,7 +191,9 @@ def test_pack_cannot_start_before_its_own_orders_pick_completes(client):
         assert pack["completed_at"] >= pick["completed_at"]
 
 
-def test_staging_capacity_violation_is_reported_and_affects_feasibility(client):
+def test_staging_capacity_with_no_relief_holds_the_order_back_entirely(client):
+    """A single-shot 100-unit completion into a 50-unit zone that never empties is never forced to
+    overflow — it is held back every time, so the whole order remains an honest, reported shortfall."""
     seed(client)
     h = admin()
     _staff(client, h, ["E1"])
@@ -203,27 +205,73 @@ def test_staging_capacity_violation_is_reported_and_affects_feasibility(client):
     _process(client, h, "p1", [(1, "packing", 0, "", "STAGE")])
     _order(client, h, "SO-1", "2026-10-12 09:00", "2026-10-12 12:00", 100, "p1")  # 100 units arrive into a 50-unit zone
     window = _window("2026-10-11T12:00:00Z", "2026-10-13T12:00:00Z")
-    body = _body(window)
-    run = _run(client, body)
-    result = _get(client, run["run_id"])
-    staging = result["result"]["staging"]["STAGE"]
-    assert staging["available"] is True
-    assert staging["violations"], "100 units into a 50-unit zone must be flagged"
-    assert result["explanation"]["feasibility"] == "feasible_with_slack"
+    result = _get(client, _run(client, _body(window))["run_id"])
+    assert result["result"]["staging_delays"], "the step must be held back, not force-completed into a full zone"
+    assert result["result"]["orders"][0]["shortfall_quantity"] == pytest.approx(100, abs=0.01)
+    assert result["explanation"]["feasibility"] == "feasible_with_slack"  # attempted (the worker was assigned), not "no plan found"
+
+
+def test_staging_capacity_delays_completion_until_a_departure_frees_room(client):
+    """Priority 3: staging capacity should delay upstream work and let it complete once room frees
+    up, rather than only ever reporting an unavoidable shortfall."""
+    seed(client)
+    h = admin()
+    _staff(client, h, ["E1"])
+    _rate(client, h, "E1", "packing", 1000)
+    zones = csv_text(["site", "zone_id", "zone_name"], [[MEL, "STAGE", "Staging"]])
+    apply(client, h, stage(client, h, "master", zones, entity="zones").json())
+    cap = csv_text(["site", "zone_id", "capacity", "unit"], [[MEL, "STAGE", "100", "units"]])
+    apply(client, h, stage(client, h, "master", cap, entity="staging_capacity").json())
+    movements = csv_text(["site", "zone_id", "occurred_at", "movement_type", "quantity", "unit"],
+                         [[MEL, "STAGE", "2026-10-11 00:00", "initial", "60", "units"], [MEL, "STAGE", "2026-10-12 10:30", "departure", "60", "units"]])
+    apply(client, h, stage(client, h, "master", movements, entity="staging_movements").json())
+    _process(client, h, "p1", [(1, "packing", 0, "", "STAGE")])
+    _order(client, h, "SO-1", "2026-10-12 09:00", "2026-10-12 12:00", 100, "p1")  # needs the full 100-unit zone; only free after the 10:30 departure
+    window = _window("2026-10-11T12:00:00Z", "2026-10-13T12:00:00Z")
+    result = _get(client, _run(client, _body(window))["run_id"])
+    assert result["result"]["staging_delays"], "earlier sub-intervals must be held back until the departure frees room"
+    assert result["result"]["orders"][0]["shortfall_quantity"] == pytest.approx(0, abs=0.01)  # but it completes once room frees up
+    assert result["result"]["orders"][0]["on_time"] is True
 
 
 # --------------------------------------------------------------------------------------------- 6. missing inputs produce clear warnings
-def test_no_eligible_worker_produces_clear_warning_and_shortfall_reason(client):
-    seed(client)  # "picking" has a work standard, but no worker at the site covers it at all
+def test_zero_workers_at_site_is_proven_infeasible_not_a_silent_warning(client):
+    """No worker exists at all, so the scheduler never manages to assign anyone to anything — this
+    is "no plan found", not an ordinary partial shortfall (priority 1)."""
+    seed(client)  # "picking" has a work standard, but there is no worker at the site at all
     h = admin()
     _process(client, h, "p1", [(1, "picking", 0, "", "")])
     _order(client, h, "SO-1", "2026-10-12 09:00", "2026-10-12 12:00", 100, "p1")
     window = _window("2026-10-11T12:00:00Z", "2026-10-13T12:00:00Z")
     run = _run(client, _body(window))
+    assert run["status"] == "failed"
+    result = _get(client, run["run_id"])
+    assert result["explanation"]["feasibility"] == "infeasible"
+    assert "no feasible allocation" in result["explanation"]["primary_drivers"][0]
+
+
+def test_one_order_blocked_by_configuration_warns_without_failing_the_whole_run(client):
+    """A second, unaffected order proves this is a clear, attributable warning on one demand line —
+    not every missing/blocking input makes the whole run infeasible (priority 1 vs. ordinary shortfall)."""
+    seed(client)
+    h = admin()
+    _staff(client, h, ["E1", "E2"])  # dedicated workers so neither activity contends with the other for the same person
+    _rate(client, h, "E1", "picking", 100)
+    _rate(client, h, "E2", "packing", 100)
+    hc = csv_text(["site", "activity", "min_headcount", "max_headcount"], [[MEL, "picking", "0", "0"]])  # explicitly configured to allow nobody
+    apply(client, h, stage(client, h, "master", hc, entity="headcount_limits").json())
+    _process(client, h, "p_pick", [(1, "picking", 0, "", "")])
+    _process(client, h, "p_pack", [(1, "packing", 0, "", "")])
+    _order(client, h, "SO-PICK", "2026-10-12 09:00", "2026-10-12 12:00", 100, "p_pick")
+    _order(client, h, "SO-PACK", "2026-10-12 09:00", "2026-10-12 12:00", 100, "p_pack")
+    window = _window("2026-10-11T12:00:00Z", "2026-10-13T12:00:00Z")
+    run = _run(client, _body(window))
     assert run["status"] == "completed_with_warnings"
     result = _get(client, run["run_id"])
-    assert any("no eligible worker" in m for m in result["explanation"]["missing_evidence"])
-    assert result["result"]["orders"][0]["steps"][0]["shortfall_reason"] == "missing_skill"
+    assert any("no capacity available for activity 'picking'" in m for m in result["explanation"]["missing_evidence"])
+    by_ref = {o["order_ref"]: o for o in result["result"]["orders"]}
+    assert by_ref["SO-PICK"]["steps"][0]["shortfall_reason"] in ("headcount_cap", "missing_skill")  # both are legitimate, reported reasons the cap produces across sub-intervals
+    assert by_ref["SO-PACK"]["on_time"] is True  # the other order is unaffected
 
 
 # --------------------------------------------------------------------------------------------- 7. infeasible runs persist with actionable reasons

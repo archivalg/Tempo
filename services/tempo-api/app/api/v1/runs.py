@@ -39,7 +39,7 @@ from app.core.events import event_bus
 from app.core.idempotency import IdempotencyConflict, hash_payload, idempotency_store
 from app.core.policy import resolve_policy
 from app.dependencies import get_db, get_request_context, require_idempotency_key
-from app.errors import AuthForbidden, DataNotReady, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
+from app.errors import AuthForbidden, DataNotReady, PolicyConflict, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
 from app.models.runs import (
     OptimisationRun,
     OptimisationRunCustomer,
@@ -112,6 +112,33 @@ def _enforce_scope(context: RequestContext, request: RunRequest) -> None:
         raise ScopeError("request scope must specify at least one site_id — solvers run per-site")
 
 
+def _check_committed_conflict(db: Session, context: RequestContext, run_type: str, request: RunRequest) -> None:
+    """A committed order_fulfillment run must not create a conflicting commitment alongside another
+    committed run for the same site with an overlapping planning window — draft (uncommitted) runs
+    never conflict with anything, since they promise nothing (order-driven-planning integration
+    increment, priority 4: "published/active plans must not create conflicting commitments")."""
+    if run_type != "order_fulfillment" or not request.input.committed:
+        return
+    for other in db.scalars(select(OptimisationRun).where(
+        OptimisationRun.tenant_id == context.tenant_id, OptimisationRun.run_type == "order_fulfillment",
+        OptimisationRun.status.in_(("completed", "completed_with_warnings")),
+    )):
+        other_request = other.request or {}
+        if not other_request.get("input", {}).get("committed"):
+            continue
+        other_sites = set(db.scalars(select(OptimisationRunSite.site_id).where(OptimisationRunSite.run_id == other.run_id)))
+        if not other_sites & set(request.scope.site_ids):
+            continue
+        other_window = other_request.get("planning_window") or {}
+        try:
+            other_start, other_end = datetime.fromisoformat(other_window["start"]), datetime.fromisoformat(other_window["end"])
+        except (KeyError, ValueError):
+            continue
+        if other_start < request.planning_window.end and request.planning_window.start < other_end:
+            raise PolicyConflict(f"run '{other.run_id}' is already a committed order_fulfillment plan for an overlapping window at this site — "
+                                 "supersede or cancel it before committing another plan for the same site/window")
+
+
 @router.post("/optimisations/{run_type}", response_model=RunResponse, status_code=202)
 def create_run(
     run_type: str,
@@ -138,6 +165,7 @@ def create_run(
         raise AuthForbidden(f"caller lacks labour.margin.read permission required for run_type '{run_type}'")
 
     _enforce_scope(context, request)
+    _check_committed_conflict(db, context, run_type, request)
 
     policy = resolve_policy(db, context.tenant_id, request.configuration.policy_version)
 

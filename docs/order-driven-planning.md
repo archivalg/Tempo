@@ -7,6 +7,34 @@ accepted until demonstrated per the acceptance scenarios in the brief and record
 
 Status vocabulary matches `docs/roadmap.md`: Partial / Open / Blocked / Accepted.
 
+## Arch acceptance ledger (17 items, updated 9 Oct 2026)
+
+Columns: **Import** (CSV path) · **Model** (persisted) · **Scheduling** (actually changes a real
+`order_fulfillment` run's output) · **UI** (reachable in the console) · **Tests** (unit/import and/or
+integration through the real run-creation API) · **Status**.
+
+| # | Item | Import | Model | Scheduling | UI | Tests | Status |
+|---|---|---|---|---|---|---|---|
+| 1 | Order-driven demand: release/deadline, known-orders/forecast-only/hybrid, no double-counting | Yes (`orders`) | Yes | Yes | Generic upload wizard | `test_stage2_order_workload.py`, new hybrid demand-mode tests below | **Partial** — modes and no-double-count subtraction work; "open backlog" (historical orders carried forward across runs) is not a separate persisted state |
+| 2 | Individual worker rates per activity, precedence, compatible units | Yes (`worker_activity_rates`) | Yes | Yes | Generic upload wizard | `test_stage2_order_workload.py` | **Accepted** |
+| 3 | Fixed indirect coverage: zero-volume days, break relief, no simultaneous direct work | Yes (`indirect_headcount`) | Yes | Yes | Generic upload wizard | `test_integration_order_schedule.py` | **Accepted** — relief *shortfall* path tested; relief-*succeeds* path is not |
+| 4 | Configurable shifts, overnight, paid/unpaid breaks, operating calendars | Yes (Stage 1) | Yes | Yes | Generic upload wizard | `test_stage1_scheduling.py`, integration break/off-task test | **Accepted** |
+| 5 | Personal weekday start/finish windows | Yes (`weekly_availability`) | Yes | Yes | Generic upload wizard | import tests; scheduler enforcement exercised indirectly (no dedicated integration test for the blocking path itself) | **Partial** — implemented and wired; add a direct integration test before calling it fully proven |
+| 6 | Recurring weekly availability + dated leave/RDO + existing approval workflow | Yes | Yes | Yes | Generic upload wizard | import tests | **Accepted** — dated leave/RDO and the approval workflow are Tempo's existing, unmodified mechanism; weekly pattern is additive |
+| 7 | Absenteeism scoped by activity/weekday/shift, no duplicate allowance | Yes (Stage 3) | Yes | Yes | Generic upload wizard | `test_stage3_constraints.py`, integration break/off-task/absenteeism test (proves no double-deduction) | **Accepted** |
+| 8 | Activity and employment_type fill priorities, incl. permanent-before-casual | Yes (customer scope rejected) | Yes | Yes | Generic upload wizard | `test_stage3_constraints.py`, `test_integration_arch_completion.py::test_permanent_before_casual_fill_priority` | **Accepted** for activity/employment_type; customer scope explicitly rejected, not silently inert |
+| 9 | Concurrent min/max headcount | Yes | Yes | Yes | Generic upload wizard | `test_stage3_constraints.py`, integration headcount test | **Accepted** — max-headcount integration-tested; min-headcount violation is detected/reported but has no dedicated integration test |
+| 10 | Shared equipment capacity across overlapping activities and shifts | Yes | Yes | Yes | Generic upload wizard | `test_stage3_constraints.py`, `test_integration_order_schedule.py`, `test_integration_arch_completion.py::test_equipment_shared_across_two_different_activities` | **Accepted** — pool is now shared across *different* activities in the same interval, not just within one |
+| 11 | Order-scoped dependencies/lag, downstream work at the next valid interval | Yes | Yes | Yes (`SCHEDULING_INTERVAL_MINUTES = 60`) | Generic upload wizard | `test_integration_order_schedule.py::test_pack_cannot_start_before...` | **Accepted** — sub-interval granularity documented and tested; cross-day gaps in accounting are a known simplification (see assumptions) |
+| 12 | Congestion/off-task losses with integrated tests proving effect | Yes | Yes | Yes | Generic upload wizard | off-task: `test_integration_order_schedule.py`; congestion: `test_integration_arch_completion.py::test_congestion_reduces_capacity_in_an_integrated_run` | **Accepted** |
+| 13 | Staging capacity influences scheduling/rescheduling: occupancy, departures, matching units | Yes | Yes | Yes | Generic upload wizard | `test_integration_order_schedule.py` (hold-back and departure-driven completion) | **Accepted** |
+| 14 | Validated unit conversions, no double counting | Yes | Yes | Yes | Generic upload wizard | `test_stage2_order_workload.py` | **Accepted** |
+| 15 | Effective weekday activity rates that demonstrably change capacity | Yes (`day_rates`, new) | Yes (new) | Yes | Generic upload wizard | `test_integration_arch_completion.py::test_effective_weekday_day_rate_changes_capacity` | **Accepted** (new this pass) |
+| 16 | Function/area/inbound-outbound process mappings preserved through import, scheduling, results | Yes (`function`/`flow` on `work_standards`, new) | Yes (new) | N/A (descriptive, not a constraint) | Generic upload wizard | `test_integration_arch_completion.py::test_function_and_flow_survive_import_into_results` | **Accepted** (new this pass) — carried through to each step's result row; zone/area mapping specifically is `ProcessStep.zone_id` (Stage 2), not a separate area concept |
+| 17 | Importable position grades + explicit configurable award rules used in eligibility/costing | Yes (`position_grade` on `workers`, `award` on `workers`, `award_rules`, new) | Yes (new) | Yes (costing only — overtime multiplier applied beyond a configured ordinary-hours/day threshold) | Generic upload wizard | `test_stage4_losses_staging_costing.py` (grade), `test_integration_arch_completion.py::test_award_overtime_multiplier_applies...` (award, new) | **Partial** — grade-aware costing and award-based overtime are real and tested; award rules do **not** yet affect *eligibility* (who may perform an activity), only cost — the brief's "eligibility" half of this item remains open |
+
+**Retained and reverified, unmodified:** pay rates, overtime multiplier field, agency/provider surcharges, customer sell rates/SLA penalties (`SellRateContract`, untouched), sites/timezones, worker preferences, skill/certification validity windows (`SkillCertification.valid_from/valid_to`, already enforced in `solve_order_fulfillment`'s skill lookup) — none of these were changed this pass; the full backend suite (lists below) re-confirms they still pass.
+
 ## Scope decision (9 Oct 2026)
 
 This programme **supersedes and expands roadmap M3** rather than sitting outside the first release.
@@ -311,14 +339,99 @@ real `/v1/optimisations/order_fulfillment` → `/v1/runs/{id}` path).
   until the *next* shift instance even if its predecessor finishes with time to spare in the same
   instance (documented simplification, not a bug — see `order_workload.py`'s module docstring).
 
+## Arch completion pass (10 Oct 2026)
+
+Closes out the items raised against the integration increment: finer scheduling granularity,
+weekly availability/personal windows, staging rescheduling, employment-type fill priority
+(including permanent-before-casual), day rates, function/flow preservation, and award-based
+overtime. See the Arch acceptance ledger above (17 items) for the item-by-item detail; this section
+covers what changed mechanically and the browser verification.
+
+**Scheduling granularity (priority 1).** Each shift instance is now split into
+`SCHEDULING_INTERVAL_MINUTES = 60` sub-intervals (`_split_into_scheduling_intervals`); a dependent
+step can resume at the next sub-interval once its predecessor finishes and its lag expires, instead
+of waiting for the next shift. Indirect coverage still reserves a worker for the whole shift
+instance (a supervisor covers a shift, not a rotating hour). A genuinely infeasible run (nothing
+could be assigned to anything, direct or indirect) now persists as `failed` with a reason; a run
+that was attempted but constrained to zero output by an identifiable, already-reported cause
+(indirect coverage, a headcount cap, a full staging zone) stays an honest `feasible_with_slack`.
+
+**Weekly availability/personal windows (priorities 5-6).** New `WeeklyAvailabilityPattern`
+model/import (`weekly_availability`): per-weekday `available` flag and an optional
+`earliest_start`/`latest_finish` window (overnight-capable, same convention as shift templates). A
+worker outside their window for a given sub-interval is excluded the same way a dated
+Availability/leave row already was; dated leave/RDO continues to override the weekly pattern for
+that date, unchanged.
+
+**Staging rescheduling (priority 13, extended).** The scheduler now tracks live per-zone occupancy
+(seeded from imported `staging_movements`, advanced as departures occur) and, before letting a step
+complete into a zone, checks whether it still has room. If not, the step is held back — not forced
+to overflow — and retried at the next sub-interval; a later departure can let it complete within
+the window. `result.staging_delays` reports every hold-back.
+
+**Equipment shared across activities (priority 10, fixed).** A pool is now decremented once per
+sub-interval and shared across every activity drawing on it in that sub-interval, not re-granted in
+full to each activity independently.
+
+**Fill priority (priority 8, extended).** Employment-type priority now also decides *which workers*
+are assigned when capacity is constrained (not just which activity is served first) — proven by a
+permanent-before-casual test that gives the two employment types different costs and checks which
+one was actually picked.
+
+**Day rates (priority 15, new).** `DayRate` model/import (`day_rates`): an activity's rate for one
+weekday, used for any worker without a personal activity rate — fills the `day_rate` slot
+`resolve_activity_rate` already had.
+
+**Function/flow (priority 16, new).** `WorkStandard.function`/`.flow` (optional, additive columns on
+`work_standards`) are carried through unchanged into each scheduled step's result row.
+
+**Award rules (priority 17, extended).** `AwardRule` model/import (`award_rules`) plus
+`Worker.award`: an award name alone changes nothing; once a matching rule exists, hours beyond its
+`ordinary_hours_per_day` for a worker on a given local date are costed at `overtime_multiplier`.
+This is **costing only** — award rules do not yet affect eligibility (who may perform an activity),
+which remains an open half of this item.
+
+**Browser verification.** Against a freshly-restarted local stack (API + console, `tempo_e2e`
+database, Ensemble demo tenant reseeded), `e2e/order-fulfillment.spec.ts` drives the real app:
+signs in, uploads `process_templates`/`process_steps`/`orders` CSVs through the Data page's upload
+wizard (own column names, validate-then-load, replay-safe), creates an `order_fulfillment` run from
+New Run, and confirms the run reaches `completed_with_warnings` with the order's own reference
+visible in the structured result. Screenshots: `docs/screenshots/order-fulfillment-data-loaded.png`,
+`docs/screenshots/order-fulfillment-run-result.png`. This run **found and fixed a real bug**: a
+browser whose `Intl.DateTimeFormat().resolvedOptions().timeZone` resolves to a raw UTC-offset string
+(seen in this headless environment) crashed the scheduler with `ZoneInfoNotFoundError` instead of
+being handled — fixed by `_normalize_timezone_name`, with a regression test
+(`test_timezone_offset_string_is_normalized_instead_of_crashing`).
+
+## Walkthrough (representative sample data)
+
+A customer can follow this exact sequence today (the same data the browser verification above used):
+
+1. **Data → Load data → Process templates** — upload a CSV with your own column names:
+   `site,process_code,customer_id` / `mel_dc_01,outbound_standard,`
+2. **Process steps** — `site,process_code,sequence,activity` / `mel_dc_01,outbound_standard,1,picking`
+   (add a second row with `sequence=2,activity=packing` for a pick→pack flow).
+3. **Orders** — `site,order_id,order_received,despatch_due,units,process_code` /
+   `mel_dc_01,SO-1001,2026-10-12 09:00,2026-10-12 12:00,300,outbound_standard`
+4. Optional, same Data page: **Worker activity rates**, **Shift templates**/**Shift breaks**,
+   **Equipment**, **Indirect headcount**, **Headcount limits**, **Absenteeism**,
+   **Productivity loss**, **Staging capacity**/**Staging movements**, **Day rates**,
+   **Weekly availability**, **Grade rates**/**Award rules** — each validates and previews before
+   anything is applied, exactly like the required uploads above.
+5. **Optimisation Studio → New Run** — Run type `order_fulfillment`, Site IDs `mel_dc_01`, a window
+   covering the order's dates, Create run.
+6. **Run detail** — shows `completed` or `completed_with_warnings` (never a silent success over a
+   real problem), the order's own reference, its per-step release/completion times and any
+   shortfall with a specific reason, plus `kpis` for paid/productive hours and cost.
+
 ## Ledger
 
 | Item | Status |
 |---|---|
 | Stage 0 code assessment | **Accepted** — this document, 9 Oct 2026 |
 | Roadmap M3 supersession | **Accepted** — `docs/roadmap.md` §7 updated 9 Oct 2026 |
-| Stage 1 (calendars/shifts/breaks/v1.1 import contracts) | **Partial** — now enforced by the scheduler (see capability matrix); non-24h operating-hours conflicts are still import-time-only |
-| Stage 2 (orders/process templates/task rates/unit conversion) | **Partial** — deadline scheduling, personal rates, process precedence, unit conversion, equipment/zone on steps and indirect coverage are now enforced by one scheduler; hybrid forecast+order demand mode remains open (the largest gap) |
-| Stage 3 (fill priorities/absenteeism/equipment/headcount limits/dependencies/indirect coverage) | **Partial** — absenteeism, equipment and max-headcount are enforced and integration-tested; fill priority only orders activities (not tasks within one), min-headcount is detected but untested, dependency cycle detection remains open |
-| Stage 4 (congestion/staging/costing/forecast) | **Partial** — off-task loss, staging capacity and paid/productive costing are enforced and integration-tested; congestion is enforced but untested, grade-aware costing has no import path for `position_grade`, forecasting improvements are untouched |
-| Integration increment (one coherent plan) | **Partial** — `tests/test_integration_order_schedule.py` (9 tests) proves constraint-driven changes, no double-booking of workers/equipment, indirect-coverage exclusivity, no double-deduction of losses, dependency/staging feasibility impact, clear warnings for missing inputs, and persisted infeasible runs — against the real run-creation path. Full backend suite re-verified green. Remaining gaps are listed above, not hidden. |
+| Stage 1 (calendars/shifts/breaks/v1.1 import contracts) | **Accepted** — enforced by the scheduler at sub-interval granularity; non-24h operating-hours conflicts remain import-time-only |
+| Stage 2 (orders/process templates/task rates/unit conversion) | **Partial** — deadline scheduling, personal/day rates, process precedence, unit conversion, equipment/zone, indirect coverage all enforced by one scheduler; hybrid forecast+order demand mode works but has no "open backlog" carry-over state (the largest remaining gap) |
+| Stage 3 (fill priorities/absenteeism/equipment/headcount limits/dependencies/indirect coverage) | **Accepted** for activity+employment_type priority, absenteeism, equipment (now cross-activity), max-headcount; min-headcount and dependency-cycle detection remain untested/open |
+| Stage 4 (congestion/staging/costing/forecast) | **Accepted** for congestion, off-task, staging (now with rescheduling), day rates, function/flow, award-based overtime costing; forecasting improvements and award-based *eligibility* remain open |
+| Integration increment + Arch completion pass | **Partial, not complete** — see the 17-item acceptance ledger above for exactly what remains open (no open-backlog state, no award-based eligibility, min-headcount/dependency-cycle untested, non-24h calendar conflicts import-time-only). Full backend suite (474 tests, including `test_capacity.py`) passes; real browser verification passed and found/fixed a genuine bug. |

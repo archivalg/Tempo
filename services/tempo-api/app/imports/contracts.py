@@ -6,7 +6,7 @@ import csv
 import io
 from dataclasses import dataclass, field
 
-CONTRACT_VERSION = "1.5"  # 1.5 adds indirect_headcount and optional equipment_id/zone_id on process_steps (additive; earlier contracts are unchanged)
+CONTRACT_VERSION = "1.7"  # 1.7 adds day_rates, award_rules, award on workers, function/flow on work_standards (additive; earlier contracts are unchanged)
 MAX_ROWS = 20_000          # synchronous limit; larger files must be split (a background worker does not exist yet)
 MAX_BYTES = 8 * 1024 * 1024
 
@@ -53,12 +53,16 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("status", "enum", False, "Defaults to active. Use inactive for people who have left (history is kept).", "active", ("active", "inactive"), ("active_flag",)),
         Field("skills", "list", False, "Skills or certifications, separated by semicolons. Listed skills are added; none are removed.", "picker;forklift", synonyms=("roles", "certifications", "licences")),
         Field("employee_no", "text", False, "Payroll number if different from worker_ref.", "104233", synonyms=("payroll_no", "payroll_number")),
-    ), notes=("Rows are matched on worker_ref, so the same person is updated, not duplicated.",)),
+        Field("position_grade", "text", False, "Leave blank if grade-specific rates do not apply; otherwise matched against Grade/provider rates.", "", synonyms=("grade",)),
+        Field("award", "text", False, "Leave blank if no award/agreement applies; otherwise matched against Award rules for overtime.", "", synonyms=("agreement",)),
+    ), notes=("Rows are matched on worker_ref, so the same person is updated, not duplicated.", "An award name alone sets nothing — upload a matching Award rule for it to affect costing.")),
     Contract("master", "work_standards", "Work standards (master data)", "Seconds of labour per unit of work, per activity. Needed before forecasts and actuals can name an activity.", ("activity",), (
         ACTIVITY,
         Field("seconds_per_unit", "number", True, "Standard labour seconds for one unit.", "45", synonyms=("seconds", "sec_per_unit", "time_per_unit", "standard")),
         Field("effective_from", "date", False, "Date the standard starts (defaults to today).", "2026-10-01", synonyms=("start_date", "from")),
-    ), notes=("A changed value closes the previous standard on the day the new one starts.",)),
+        Field("function", "text", False, "Leave blank if you do not group activities by function.", "", synonyms=("process_function",)),
+        Field("flow", "text", False, "Leave blank if you do not group activities by flow (for example inbound or outbound).", "", synonyms=("process_flow", "direction")),
+    ), notes=("A changed value closes the previous standard on the day the new one starts.", "function/flow are carried through to scheduling results unchanged.")),
     Contract("master", "sites", "Sites (master data)", "Create or update your sites. Needs the configure permission because it adds places people can be rostered.", ("site_id",), (
         Field("site_id", "text", True, "Your stable ID for the site; letters, numbers, underscore or hyphen.", "syd_dc_02", synonyms=("site", "id", "code", "site_code")),
         Field("name", "text", True, "Display name.", "Sydney DC", synonyms=("site_name", "warehouse")),
@@ -156,10 +160,10 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("factor", "number", True, "Multiply a from_unit quantity by this to get to_unit (for example 10 lines x 3.2 = 32 units).", "3.2"),
     ), notes=("An activity-specific conversion is used ahead of a global one for the same from_unit/to_unit pair.",)),
     Contract("master", "fill_priorities", "Fill priorities (master data)", "The order to fill labour gaps when not everything can be covered. Lower numbers fill first; equal numbers are equal priority.", ("scope", "value"), (
-        Field("scope", "enum", True, "What kind of thing this priority applies to.", "activity", ("activity", "customer", "employment_type")),
-        Field("value", "text", True, "The specific activity, customer or employment type this priority applies to.", "picking"),
+        Field("scope", "enum", True, "What kind of thing this priority applies to. 'customer' is not yet supported and is rejected, not silently accepted.", "activity", ("activity", "employment_type")),
+        Field("value", "text", True, "The specific activity or employment type this priority applies to.", "picking"),
         Field("priority", "int", True, "Lower fills first. Equal values are equal priority — never inferred as ranked.", "1"),
-    )),
+    ), notes=("Customer-scoped fill priority is explicitly out of scope for this release — upload rejects it rather than accepting an inert row.",)),
     Contract("master", "absenteeism", "Absenteeism (master data)", "Expected absence rate for a site, optionally narrowed by activity, weekday and shift. The most specific match is used; leave a field blank to make a rule broader.", ("site_id", "activity", "weekday", "shift_code"), (
         SITE,
         Field("activity", "text", False, "Leave blank to apply to every activity.", "", synonyms=("task",)),
@@ -223,6 +227,23 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("end_time", "text", True, "End time, 24-hour HH:MM site-local.", "14:00"),
         Field("headcount", "int", True, "Number of people required, regardless of demand that day.", "3"),
     ), notes=("Required even on a zero-volume day — indirect coverage is not derived from workload.",)),
+    Contract("master", "weekly_availability", "Weekly availability pattern (master data)", "A person's recurring default availability for one weekday, and the earliest/latest time they can work it. A dated leave/unavailable entry (Availability) always overrides this for that specific date.", ("worker_ref", "weekday"), (
+        Field("worker_ref", "text", True, "The worker_ref used in the staff upload.", "E1042", synonyms=("employee_id", "staff_id", "id", "worker_id")),
+        Field("weekday", "enum", True, "Day of the week.", "monday", ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")),
+        Field("available", "bool", False, "Defaults to true. False means unavailable this weekday regardless of times.", "true"),
+        Field("earliest_start", "text", False, "Earliest time this person can start, 24-hour HH:MM. Leave blank with latest_finish for no window (available all day).", "06:00"),
+        Field("latest_finish", "text", False, "Latest time this person can finish, 24-hour HH:MM. At or before earliest_start crosses midnight (an overnight window).", "14:00"),
+    ), notes=("A dated Availability entry (leave, unavailable, rdo) always overrides this pattern for that date.", "Give both earliest_start and latest_finish, or neither — one without the other is rejected.")),
+    Contract("master", "day_rates", "Day rates (master data)", "An activity's standard rate for one weekday, ranking above the plain activity standard for anyone without a personal rate.", ("activity", "weekday"), (
+        ACTIVITY,
+        Field("weekday", "enum", True, "Day of the week.", "monday", ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")),
+        Field("rate_per_hour", "number", True, "Units per hour on this weekday.", "90"),
+    ), notes=("Used only when a worker has no personal activity rate for that activity.",)),
+    Contract("master", "award_rules", "Award rules (master data)", "The actual ordinary-hours and overtime numbers behind an award/agreement name — an award name alone is never a complete rule.", ("award_code",), (
+        Field("award_code", "text", True, "The award/agreement identifier used on Staff uploads.", "retail_award_2024", synonyms=("award",)),
+        Field("ordinary_hours_per_day", "number", True, "Hours per day before overtime applies.", "8"),
+        Field("overtime_multiplier", "number", True, "Multiplier applied to hours beyond ordinary_hours_per_day.", "1.5"),
+    )),
     Contract("forecast", None, "Forecast workload", "Expected units per activity and period. Customer-supplied forecasts are versioned and shown with their origin.", ("site", "activity", "period_start", "grain"), (
         SITE, ACTIVITY, PERIOD_START, GRAIN,
         Field("units", "number", True, "Expected units in the period.", "26500", synonyms=("forecast", "volume", "quantity", "expected")),
@@ -259,7 +280,8 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
 DATA_CLASSES = {"master": ("workers", "work_standards", "sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                             "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                             "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                            "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount"),
+                            "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability",
+                            "day_rates", "award_rules"),
                  "forecast": (None,), "transactions": (None,), "bulk": (None,)}
 
 

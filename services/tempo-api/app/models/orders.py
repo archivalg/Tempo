@@ -119,3 +119,16 @@ class UnitConversion(Base):
     from_unit: Mapped[str] = mapped_column(String)
     to_unit: Mapped[str] = mapped_column(String)
     factor: Mapped[float] = mapped_column(Float)
+
+
+class DayRate(Base):
+    """An activity's standard rate for one weekday, ranking above the plain activity standard but
+    below any personal rate (brief Appendix A: Day Rates; resolve_activity_rate's "day_rate" slot)."""
+
+    __tablename__ = "day_rate"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    activity: Mapped[str] = mapped_column(String)
+    weekday: Mapped[str] = mapped_column(String)
+    rate_per_hour: Mapped[float] = mapped_column(Float)

@@ -71,3 +71,18 @@ class HeadcountLimit(Base):
     shift_code: Mapped[str | None] = mapped_column(String, nullable=True)
     min_headcount: Mapped[int] = mapped_column(Integer)
     max_headcount: Mapped[int] = mapped_column(Integer)
+
+
+class AwardRule(Base):
+    """A tenant-configured award/agreement rule: a named identifier plus the actual numbers used in
+    costing (ordinary daily hours before overtime, and the overtime multiplier). The award name
+    alone is never enough — eligibility/costing only use what this row actually specifies
+    (priority 17)."""
+
+    __tablename__ = "award_rule"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    award_code: Mapped[str] = mapped_column(String)
+    ordinary_hours_per_day: Mapped[float] = mapped_column(Float)
+    overtime_multiplier: Mapped[float] = mapped_column(Float)

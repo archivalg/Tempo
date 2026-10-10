@@ -54,7 +54,7 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
     elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                                               "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                                               "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount"):
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability", "day_rates", "award_rules"):
         result = {"sites": _apply_sites, "customers": _apply_customers, "availability": _apply_availability, "rates": _apply_rates,
                   "zones": _apply_zones, "activity_roles": _apply_activity_roles, "operating_calendar": _apply_operating_calendar,
                   "shift_templates": _apply_shift_templates, "shift_breaks": _apply_shift_breaks,
@@ -62,7 +62,8 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
                   "worker_activity_rates": _apply_worker_activity_rates, "unit_conversions": _apply_unit_conversions,
                   "fill_priorities": _apply_fill_priorities, "absenteeism": _apply_absenteeism, "equipment": _apply_equipment,
                   "headcount_limits": _apply_headcount_limits, "grade_rates": _apply_grade_rates, "productivity_loss": _apply_productivity_loss,
-                  "staging_capacity": _apply_staging_capacity, "staging_movements": _apply_staging_movements, "indirect_headcount": _apply_indirect_headcount}[batch.entity](db, ctx, batch, good)
+                  "staging_capacity": _apply_staging_capacity, "staging_movements": _apply_staging_movements, "indirect_headcount": _apply_indirect_headcount,
+                  "weekly_availability": _apply_weekly_availability, "day_rates": _apply_day_rates, "award_rules": _apply_award_rules}[batch.entity](db, ctx, batch, good)
     elif dc == "master":
         result = _apply_standards(db, ctx, good)
     elif dc == "forecast":
@@ -84,12 +85,13 @@ def _apply_workers(db: Session, ctx: RequestContext, good: list[ImportRow]) -> d
         n = r.normalised
         w = db.scalar(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import", Worker.source_ref == n["worker_ref"]))
         if w is None:
-            w = Worker(tenant_id=ctx.tenant_id, employment_type=n["employment_type"], home_site=n["site"], status=n["status"], source_system="tempo_import", source_ref=n["worker_ref"])
+            w = Worker(tenant_id=ctx.tenant_id, employment_type=n["employment_type"], home_site=n["site"], status=n["status"], source_system="tempo_import", source_ref=n["worker_ref"],
+                      position_grade=n.get("position_grade"), award=n.get("award"))
             db.add(w)
             db.flush()
             created += 1
         else:
-            w.employment_type, w.home_site, w.status = n["employment_type"], n["site"], n["status"]
+            w.employment_type, w.home_site, w.status, w.position_grade, w.award = n["employment_type"], n["site"], n["status"], n.get("position_grade"), n.get("award")
             updated += 1
         p = db.get(WorkerPerson, w.worker_id)
         if p is None:
@@ -508,6 +510,58 @@ def _apply_staging_movements(db: Session, ctx: RequestContext, batch: ImportBatc
     return {"created": created}
 
 
+def _apply_weekly_availability(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.availability_pattern import WeeklyAvailabilityPattern
+    refs = {w.source_ref: w.worker_id for w in db.scalars(select(Worker).where(Worker.tenant_id == ctx.tenant_id, Worker.source_system == "tempo_import")) if w.source_ref}
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        wid = refs[n["worker_ref"]]
+        p = db.scalar(select(WeeklyAvailabilityPattern).where(WeeklyAvailabilityPattern.tenant_id == ctx.tenant_id, WeeklyAvailabilityPattern.worker_id == wid, WeeklyAvailabilityPattern.weekday == n["weekday"]))
+        vals = dict(available=n["available"], earliest_start=n["earliest_start"], latest_finish=n["latest_finish"])
+        if p is None:
+            db.add(WeeklyAvailabilityPattern(tenant_id=ctx.tenant_id, worker_id=wid, weekday=n["weekday"], **vals))
+            created += 1
+        else:
+            for k, v in vals.items():
+                setattr(p, k, v)
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_day_rates(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.orders import DayRate
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        d = db.scalar(select(DayRate).where(DayRate.tenant_id == ctx.tenant_id, DayRate.activity == n["activity"], DayRate.weekday == n["weekday"]))
+        if d is None:
+            db.add(DayRate(tenant_id=ctx.tenant_id, activity=n["activity"], weekday=n["weekday"], rate_per_hour=n["rate_per_hour"]))
+            created += 1
+        else:
+            d.rate_per_hour = n["rate_per_hour"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
+def _apply_award_rules(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.constraints import AwardRule
+    created = updated = 0
+    for r in good:
+        n = r.normalised
+        a = db.scalar(select(AwardRule).where(AwardRule.tenant_id == ctx.tenant_id, AwardRule.award_code == n["award_code"]))
+        if a is None:
+            db.add(AwardRule(tenant_id=ctx.tenant_id, award_code=n["award_code"], ordinary_hours_per_day=n["ordinary_hours_per_day"], overtime_multiplier=n["overtime_multiplier"]))
+            created += 1
+        else:
+            a.ordinary_hours_per_day, a.overtime_multiplier = n["ordinary_hours_per_day"], n["overtime_multiplier"]
+            updated += 1
+        r.applied = True
+    return {"created": created, "updated": updated}
+
+
 def _apply_indirect_headcount(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
     from app.models.indirect import IndirectHeadcountRequirement
     created = updated = 0
@@ -548,12 +602,12 @@ def _apply_standards(db: Session, ctx: RequestContext, good: list[ImportRow]) ->
         n = r.normalised
         start = datetime.fromisoformat(n["effective_from"]).replace(tzinfo=timezone.utc)
         cur = db.scalar(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id, WorkStandard.activity == n["activity"], WorkStandard.effective_to.is_(None)))
-        if cur is not None and abs(cur.time_per_unit_seconds - n["seconds_per_unit"]) < 1e-9:
+        if cur is not None and abs(cur.time_per_unit_seconds - n["seconds_per_unit"]) < 1e-9 and cur.function == n.get("function") and cur.flow == n.get("flow"):
             same += 1
             continue
         if cur is not None:
             if _aware(cur.effective_from) >= start:
-                cur.time_per_unit_seconds = n["seconds_per_unit"]  # same-day correction, no new row
+                cur.time_per_unit_seconds, cur.function, cur.flow = n["seconds_per_unit"], n.get("function"), n.get("flow")  # same-day correction, no new row
                 changed += 1
                 r.applied = True
                 continue
@@ -561,7 +615,7 @@ def _apply_standards(db: Session, ctx: RequestContext, good: list[ImportRow]) ->
             changed += 1
         else:
             created += 1
-        db.add(WorkStandard(tenant_id=ctx.tenant_id, activity=n["activity"], time_per_unit_seconds=n["seconds_per_unit"], effective_from=start))
+        db.add(WorkStandard(tenant_id=ctx.tenant_id, activity=n["activity"], time_per_unit_seconds=n["seconds_per_unit"], effective_from=start, function=n.get("function"), flow=n.get("flow")))
         r.applied = True
     return {"created": created, "changed": changed, "unchanged": same}
 

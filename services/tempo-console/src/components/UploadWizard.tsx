@@ -7,7 +7,7 @@ const key = (c: ContractDef) => `${c.data_class}|${c.entity ?? ''}`
 const ORDER = ['master|sites', 'master|zones', 'master|customers', 'master|workers', 'master|availability', 'master|work_standards', 'master|activity_roles', 'master|worker_activity_rates', 'master|rates',
   'master|operating_calendar', 'master|shift_templates', 'master|shift_breaks', 'master|unit_conversions', 'master|process_templates', 'master|process_steps', 'master|orders',
   'master|fill_priorities', 'master|absenteeism', 'master|equipment', 'master|headcount_limits',
-  'master|grade_rates', 'master|productivity_loss', 'master|staging_capacity', 'master|staging_movements', 'master|indirect_headcount',
+  'master|grade_rates', 'master|productivity_loss', 'master|staging_capacity', 'master|staging_movements', 'master|indirect_headcount', 'master|weekly_availability', 'master|day_rates', 'master|award_rules',
   'forecast|', 'bulk|', 'transactions|']
 const HINT: Record<string, string> = {
   'master|sites': 'Your warehouses. Needs an administrator.', 'master|zones': 'Named areas within a site (pick, pack, stage). Upload sites first.', 'master|customers': 'The customers whose work you handle.',
@@ -31,6 +31,7 @@ const HINT: Record<string, string> = {
   'master|staging_capacity': 'Maximum concurrent occupancy for a zone, in an explicit unit. Upload zones first.',
   'master|staging_movements': 'Arrivals, departures and initial occupancy for a staging zone. Upload its Staging capacity first.',
   'master|indirect_headcount': 'A fixed headcount required for a role at a site/weekday/time window, regardless of demand.',
+  'master|weekly_availability': 'A person’s recurring weekly availability and earliest-start/latest-finish window. Upload staff first.',
   'forecast|': 'What you expect to be processed.',
   'bulk|': 'Daily or hourly totals of what was processed.', 'transactions|': 'One row per event, when your system can send them.',
 }

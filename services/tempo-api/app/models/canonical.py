@@ -76,6 +76,9 @@ class Worker(Base):
     provider_id: Mapped[str | None] = mapped_column(String, ForeignKey("labour_provider.provider_id"), nullable=True, index=True)
     # Integration increment: resolves against LabourCostRule.position_grade for grade-aware costing.
     position_grade: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Identifier only — resolves against AwardRule for the actual ordinary-hours/overtime numbers
+    # used in costing (priority 17); never interpreted on its own.
+    award: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class SkillCertification(Base):
@@ -195,6 +198,10 @@ class WorkStandard(Base):
     time_per_unit_seconds: Mapped[float] = mapped_column(Float)
     effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     effective_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Preserved from the brief's Activities sheet (function/flow groupings) so they survive import,
+    # scheduling and results rather than being dropped at the door (priority 16).
+    function: Mapped[str | None] = mapped_column(String, nullable=True)
+    flow: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ActivityRoleZoneMap(Base):
