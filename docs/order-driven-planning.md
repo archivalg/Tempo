@@ -40,6 +40,28 @@ integration through the real run-creation API) · **Status**.
 - `required_skill` and `award_eligibility_restrictions` gate direct-work eligibility; indirect-coverage role matching continues to use `SkillCertification` only (unchanged, and out of this pass's scope).
 - Hybrid demand mode's forecast/known-order split still uses local-calendar-day buckets (a documented approximation, unchanged this pass).
 
+## Original data issues — verified against real imports and runs (10 Oct 2026, third pass)
+
+The brief named specific data-quality scenarios observed in Arch's own source files. Each is now
+verified through the real import/run APIs in `tests/test_original_data_issues.py`, and one was
+found to be a genuine gap and fixed, not just documented:
+
+| Issue | Finding | Fix / evidence |
+|---|---|---|
+| Mismatched task names between sheets (casing) | **Genuine gap, fixed.** `unit` was already matched case-insensitively everywhere, but a process step's `activity` was compared to Work standards with exact case — "Picking" vs "picking" was rejected as a spelling error. | `_activity()` in `app/imports/validate.py` now lowercases before comparing, matching `unit`'s existing convention. `test_activity_name_casing_mismatch_across_sheets_is_normalised_not_rejected` |
+| Unit casing ("Units"/"units"/"UNITS") | Already correct — every unit field is lowercased on import. | `test_activity_name_casing_mismatch_across_sheets_is_normalised_not_rejected` (covers the same normalisation path) |
+| Duplicate area/zone names | Already correct — `zone_id` is the real key; `zone_name` is cosmetic and may repeat. | `test_duplicate_zone_names_import_as_distinct_zones` — two zones named identically import as two distinct zones |
+| Unqualified supervisor (indirect-coverage role nobody holds) | Already correct — reported as `indirect_coverage_gaps` with `missing_qualified_workers`, never silently picks an unqualified worker. | `test_unqualified_supervisor_requirement_reports_a_coverage_gap_not_a_silent_pick` |
+| Inappropriate/invented unit conversions | Already correct — a missing conversion path raises rather than guessing (`resolve_order_quantity`); factors are bounded at import (`1e-4`–`1e6`). | `test_stage2_order_workload.py` (existing); `app/imports/validate.py` factor bounds |
+| Empty optional sheets | Already correct — a header-only upload is rejected at inspect time with an actionable message ("the file has a header but no data rows"), never a 500 or a silent no-op. | `test_empty_optional_sheet_upload_is_rejected_cleanly_not_crashed` |
+| Dates outside the planning horizon | Already correct — an order whose window doesn't overlap the run's planning window is excluded from that run's `orders`, not silently scheduled or erroring. | `test_order_outside_planning_horizon_is_excluded_not_silently_scheduled` |
+| v1 compatibility (older sheets without this programme's new optional columns) | Already correct — `function`/`flow`/`required_skill` are all optional; a v1-shaped `work_standards` file with neither still imports cleanly. | `test_v1_shaped_work_standards_csv_still_imports_without_the_new_optional_columns` |
+| Preserve ignored example rows | **Investigated; content-based auto-detection explicitly rejected as unsafe, not implemented.** A first attempt made `stage()` discard any row matching a contract's example values exactly. It broke three EXISTING, legitimate tests in this same suite (`test_work_standards_close_the_old_one...`, `test_worker_activity_rate_and_unit_conversion_import`, `test_fill_priority_import_round_trip`) because their real data (plausible activity names, round numbers, common dates) coincidentally matched every example value — proving a real customer row can be indistinguishable from an unedited template by content alone. Silently discarding it would be worse than the problem it solves. | Reverted. The actual safeguard already in place: a template's example row is an ordinary valid row (`test_every_template_example_row_passes_its_own_validator`) that, like every other staged row, only becomes real data if a person reviews the staged preview and explicitly applies it — `test_template_example_row_requires_an_explicit_apply_before_becoming_real_data` confirms staging alone leaves the batch in `validated`, never `applied` |
+
+The one genuine fix (activity casing) is a general import-pipeline fix — it applies to every
+master-data entity that cross-references an activity, not only the order-driven ones, since
+`_activity()` is shared code.
+
 ## Scope decision (9 Oct 2026)
 
 This programme **supersedes and expands roadmap M3** rather than sitting outside the first release.

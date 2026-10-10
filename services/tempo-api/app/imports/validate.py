@@ -64,11 +64,14 @@ def _site(v: str, lk: Lookups) -> tuple[str, ZoneInfo]:
 
 
 def _activity(v: str, lk: Lookups) -> str:
-    a = v.strip()
+    """Matched case-insensitively against Work standards, the same way `unit` is normalised
+    elsewhere — a customer's own sheets routinely differ only in case ("Picking" vs "picking"), and
+    that must not be treated as two different activities or as a spelling error to fix."""
+    a = v.strip().lower()
     if not a:
         raise ImportProblem("activity is required")
     if a not in lk.activities:
-        raise ImportProblem(f"activity '{a}' has no work standard. Add it under Work standards first (or correct the spelling).")
+        raise ImportProblem(f"activity '{v.strip()}' has no work standard. Add it under Work standards first (or correct the spelling).")
     return a
 
 
