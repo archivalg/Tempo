@@ -15,9 +15,9 @@ integration through the real run-creation API) · **Status**.
 
 | # | Item | Import | Model | Scheduling | UI | Tests | Status |
 |---|---|---|---|---|---|---|---|
-| 1 | Order-driven demand: release/deadline, known-orders/forecast-only/hybrid, no double-counting, open backlog carried forward | Yes (`orders`) | Yes (`order_.fulfilled_units`, new) | Yes | Generic upload wizard | `test_integration_arch_completion.py::test_committed_run_carries_open_backlog_forward_without_duplication`, `::test_draft_run_never_persists_backlog_or_completes_an_order` | **Accepted** — a COMMITTED run persists how much of an order it actually finished (through the order's last step) and never reschedules that portion; a draft/scenario run never writes it. Verified: two committed runs in sequence sum to the order's exact quantity with zero duplication, and a draft leaves `fulfilled_units` at 0 regardless of what it scheduled on paper |
+| 1 | Order-driven demand: release/deadline, known-orders/forecast-only/hybrid, no double-counting, open backlog carried forward | Yes (`orders`) | Yes (`order_.committed_units` and `order_.fulfilled_units`, corrected — see fifth-pass note below) | Yes | Generic upload wizard | `tests/test_committed_vs_fulfilled.py` (new), `test_integration_arch_completion.py::test_committed_run_carries_open_backlog_forward_without_duplication`, `::test_draft_run_never_persists_backlog_or_completes_an_order` | **Accepted, corrected** — a COMMITTED run persists a PLANNED allocation (`committed_units`), never a confirmation of actual completion; `fulfilled_units` (real completion) is written only by an explicit `POST /v1/orders/{id}/complete` confirmation or, in future, a correlated actuals import. See "Fifth pass" below — this corrects a conflation in the second completion pass, found by the user's own review, not by this programme's own testing |
 | 2 | Individual worker rates per activity, precedence, compatible units | Yes (`worker_activity_rates`) | Yes | Yes | Generic upload wizard | `test_stage2_order_workload.py` | **Accepted** |
-| 3 | Fixed indirect coverage: zero-volume days, break relief, no simultaneous direct work | Yes (`indirect_headcount`) | Yes | Yes | Generic upload wizard | `test_integration_order_schedule.py` (shortfall path), `test_integration_arch_completion.py::test_indirect_relief_worker_maintains_coverage_without_double_booking` (relief *succeeds* path, new) | **Accepted** — both the gap path and the relief-succeeds path are now integration-tested; the relief worker is proven free to do direct work in the same interval the primary indirect worker is reserved for, with `indirect_paid_hours` confirming exactly one worker's shift was reserved, not two |
+| 3 | Fixed indirect coverage: zero-volume days, break relief, no simultaneous direct work | Yes (`indirect_headcount`) | Yes | Yes | Generic upload wizard | `test_integration_order_schedule.py` (shortfall path), `test_integration_arch_completion.py::test_indirect_relief_worker_maintains_coverage_without_double_booking` (relief *succeeds* path, strengthened with direct per-worker interval assertions — see fifth pass) | **Accepted** — both the gap path and the relief-succeeds path are now integration-tested; non-overlap is now asserted directly against each worker's own recorded assignment intervals (`result.worker_assignments`), not only inferred from aggregate hours |
 | 4 | Configurable shifts, overnight, paid/unpaid breaks, operating calendars, revalidated at scheduling time | Yes (Stage 1) | Yes | Yes | Generic upload wizard | `test_stage1_scheduling.py`, integration break/off-task test, `test_integration_arch_completion.py::test_operating_hours_conflict_excludes_shift_but_preserves_compliant_capacity`, `::test_overnight_operating_hours_admit_a_matching_shift_and_exclude_a_conflicting_one` (both new) | **Accepted** — operating hours (including non-24h sites and the overnight-boundary case) are now revalidated at SCHEDULING time, every run, not only at shift-template import time; a shift outside the site's hours for that weekday is excluded and reported in `operating_hours_violations`, never silently scheduled |
 | 5 | Personal weekday start/finish windows, including overnight | Yes (`weekly_availability`) | Yes | Yes | Generic upload wizard | `test_integration_arch_completion.py::test_personal_weekday_window_rejects_outside_shift_but_admits_matching_overnight_shift` (new) | **Accepted** — exercised through the real run API; also fixed a genuine bug found while writing this test: a sub-interval past local midnight (an overnight window's own second half) was incorrectly rejected because its minute-of-day was computed relative to its own calendar date instead of continuously from the shift's start (see `_blocked`'s `ref_at` parameter) |
 | 6 | Recurring weekly availability + dated leave/RDO + existing approval workflow | Yes | Yes | Yes | Generic upload wizard | import tests | **Accepted** — dated leave/RDO and the approval workflow are Tempo's existing, unmodified mechanism; weekly pattern is additive |
@@ -61,6 +61,136 @@ found to be a genuine gap and fixed, not just documented:
 The one genuine fix (activity casing) is a general import-pipeline fix — it applies to every
 master-data entity that cross-references an activity, not only the order-driven ones, since
 `_activity()` is shared code.
+
+## Focused final review of `39df1c5` (10 Oct 2026, fourth pass)
+
+A targeted review of four specific behaviours plus two re-confirmations, verified through the real
+import/run APIs. One genuine gap was found and fixed (a visible exclusion summary for out-of-horizon
+orders); the others were confirmed already correct, with regression tests added either way.
+
+1. **Replenishment/Replen produces an explicit mapping requirement or validation error.** Confirmed:
+   Tempo has no activity-VALUE synonym table (only CSV *column header* synonyms exist, e.g. "task" →
+   `activity`) — an abbreviated or inconsistent activity name across sheets is NOT auto-mapped, and
+   produces the "validation error" half of the brief's either/or requirement: `"activity 'Replen' has
+   no work standard. Add it under Work standards first (or correct the spelling)."` — naming exactly
+   what to fix. `test_activity_name_that_does_not_exist_anywhere_produces_an_actionable_validation_error`.
+
+2. **Scheduled or committed plans do not mark actual work fulfilled; confirm what updates `fulfilled_units`.**
+   ~~Confirmed by direct code inspection... a "scheduled" plan never executes that line.~~
+   **Superseded by the fifth pass below.** This confirmation was true of the CODE as written, but it
+   missed the actual scope gap: a COMMITTED run *was* the thing writing `fulfilled_units`, and
+   committing a roster is a plan, not a confirmation that the labour physically happened. The
+   corrected design (below) separates `committed_units` (what a committed run plans) from
+   `fulfilled_units` (what is confirmed actually done, via an explicit completion action only). This
+   gap was caught by the user's own review, not by this programme's own testing — recorded honestly.
+
+3. **Indirect relief and direct assignments cannot overlap for the same worker.** Already correct and
+   now pinned down precisely, not just inferred: `test_indirect_relief_worker_maintains_coverage_
+   without_double_booking` asserts `total_paid_hours == 16.0` exactly — one shift (8h) reserved for
+   indirect coverage PLUS one shift (8h) of direct work from the other worker. Were the same worker
+   ever double-booked into both roles, or neither worker doing direct work, that total would be 8.0;
+   were both workers somehow doing direct work, it would be 24.0. 16.0 is only reachable by exactly
+   two distinct workers, each doing exactly one role, for exactly one shift each.
+
+4. **Workbook row 4 is ignored structurally; plain CSV rows are preserved regardless of whether their
+   values match an example.** ~~Re-confirmed: Tempo has never had a workbook/XLSX importer... not a
+   gap.~~ **Superseded by the fifth pass below.** On re-review this was the wrong conclusion: the brief
+   explicitly described the reviewed templates as workbooks customers are told to upload whole, so a
+   CSV-only pipeline does not complete that requirement regardless of when the scope decision was
+   documented. A version-aware XLSX importer was added (below). The CSV-side finding stands unchanged:
+   `read_csv()` skips rows structurally (header + blank-row skipping), never by content —
+   `test_plain_csv_rows_are_preserved_regardless_of_whether_they_match_an_example` (unaffected by this
+   correction).
+
+**Genuine gap found and fixed — out-of-horizon orders were disappearing without explanation.** Prior to
+this pass, an open order outside a run's planning window was correctly excluded from scheduling but
+left NO trace anywhere — not in the result, not in `missing_evidence`. Fixed in
+`solve_order_fulfillment`: a new `orders_outside_horizon` result field lists every excluded order
+(ref, received, despatch_due), and a summary line naming them is added to `missing_evidence`. The one
+edge case where InsufficientData still rejects the request outright (every open order is outside the
+window, so there is nothing at all to run) now names the excluded order(s) in the rejection's own
+`detail` text, so the explanation survives even when no run is persisted.
+`test_order_outside_planning_horizon_is_excluded_not_silently_scheduled` (now also asserts the summary
+appears) and `test_order_entirely_outside_horizon_is_named_even_when_the_run_is_rejected` (new).
+
+**Empty optional sheets can be omitted cleanly — reconfirmed, not just for a header-only upload, but
+for the entity never being uploaded at all.** `test_order_fulfillment_run_with_no_optional_entities_
+configured_at_all_completes` runs order_fulfillment with equipment, headcount_limits,
+indirect_headcount, absenteeism, productivity_loss, staging, day_rates, award_rules and
+weekly_availability all left completely unconfigured, and confirms a normal, on-time completion.
+
+## Fifth pass — two scope/correctness corrections (10 Oct 2026) — STATUS: confirmed
+
+Two gaps identified by review, not by this programme's own testing. Both corrections are implemented
+and now confirmed: full backend suite 504 passed (`services/tempo-api`, `pytest -q`, 23m47s — up from
+493, with 11 new tests across `tests/test_committed_vs_fulfilled.py` and `tests/test_xlsx_import.py`),
+and both browser e2e scenarios re-verified passing against the corrected backend. While this pass was
+in progress, an unrelated full suite run from an earlier pass was found still active in the
+background (a process-tracking mistake on this session's part, not a product defect) and had begun
+colliding with new test runs against the same database — it was killed and the database connections
+cleared before the final clean 504-pass confirmation above.
+
+### 1. Committed does not mean physically fulfilled — CORRECTED
+
+The second completion pass's `fulfilled_units` conflated two different things: a committed run's
+PLANNED allocation, and actual confirmed completion. Corrected:
+
+- `Order.committed_units` (new column, migration `c7d8e9f0a1b2`) — the planned allocation a committed
+  run records. This is what stops a later run from re-scheduling labour a published roster already
+  promises. Written ONLY by `solve_order_fulfillment` when `request.input.committed is True`.
+- `Order.fulfilled_units` (existing column, semantics corrected) — actual confirmed completion.
+  Written ONLY by the new `POST /v1/orders/{order_id}/complete` endpoint (`app/api/v1/orders.py`), an
+  explicit, auditable confirmation. The solver never writes it. A correlated actuals import (matching
+  WorkloadEvent actuals back to an order automatically) is NOT built — stated as an open item, not
+  pretended to be done.
+- A future run's remaining backlog is `units − max(committed_units, fulfilled_units)` — whichever is
+  larger already means "don't reschedule this", each for its own distinct reason; this is what makes
+  confirming completion of already-committed work reduce backlog exactly once, not twice.
+- `Order.status` now only becomes `"completed"` via the explicit completion endpoint reaching the full
+  quantity — never merely from being fully committed.
+
+Tests: `tests/test_committed_vs_fulfilled.py` (new) — committed-vs-fulfilled separation, the
+completion endpoint's effect and status transition, and confirmed-completion-without-duplication.
+Existing backlog tests in `test_integration_arch_completion.py` updated to assert `committed_units`
+(not `fulfilled_units`) after a committed run, and that `status` stays `"open"` even when a committed
+plan is complete.
+
+### 2. Workbook support was part of the supplied brief — ADDED
+
+A version-aware (v1/v2) XLSX importer was added: `app/imports/xlsx.py` plus
+`POST /v1/imports/xlsx/inspect` and `POST /v1/imports/xlsx/stage` (`app/api/v1/imports.py`). It reuses
+the EXISTING staging/preview/apply pipeline unchanged — one `ImportBatch` per recognised sheet,
+previewed and applied through the same `/imports/batches/{id}/apply` endpoint a CSV upload uses.
+
+- **Structural, not content-based, skip**: row 1 is the header; rows 2-4 are guidance/example content,
+  always skipped by POSITION regardless of what they contain; real data begins at row 5 — built from
+  the brief's literal, stated layout ("data beginning at row 5 and row 4 ignored"). This was NOT
+  checked against an actual Arch source workbook, which this programme was never given access to (the
+  original brief said not to block on that access). If the real layout differs, `HEADER_ROW` and
+  `DATA_START_ROW` in `app/imports/xlsx.py` are the two constants to correct.
+- **Sheet relationships preserved**: recognised sheets are staged in an explicit dependency order
+  (`app/imports/xlsx.py`'s `_PROCESSING_ORDER` — sites before workers before orders, etc.) distinct
+  from `contracts.DATA_CLASSES`'s display-grouping tuple, which is not a safe processing order.
+- **Version-aware v1/v2**: one sheet-name → entity mapping and one set of contracts serve both — every
+  field this programme added is optional, so a v1 sheet (fewer columns) and a v2 sheet (more columns)
+  both validate against the same contract, the same way CSV v1 compatibility already works.
+- **An unrecognised sheet is reported, never silently dropped** — both endpoints list it explicitly.
+- **CSV is unchanged** — no content-based row deletion was added anywhere; the CSV pipeline's existing
+  structural (position/blank-row) skip is untouched.
+
+Tests: `tests/test_xlsx_import.py` (new) — multi-sheet recognition and dependency-ordered staging, row
+4 (and the guidance rows around it) structurally ignored even when well-formed, a data row that
+happens to match the example's content preserved regardless, an unrecognised sheet reported, and a
+non-workbook file rejected cleanly.
+
+### Indirect-relief overlap, strengthened
+
+`total_paid_hours` alone cannot prove absence of overlap — two different bugs could coincidentally
+produce the same total. The solver now records every worker assignment (`result.worker_assignments`:
+worker, indirect/direct, role or activity, start/end) specifically so this can be checked directly,
+not inferred. `test_indirect_relief_worker_maintains_coverage_without_double_booking` now groups by
+worker, asserts exactly one worker did indirect work and a DIFFERENT one did direct work (disjoint
+sets), and asserts no single worker's own intervals ever overlap each other.
 
 ## Scope decision (9 Oct 2026)
 

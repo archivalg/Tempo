@@ -162,6 +162,15 @@ class ProviderNotFound(TempoError):
     title = "Labour provider not found, or worker not supplied by it, or not visible in caller scope"
 
 
+class OrderNotFound(TempoError):
+    """order-driven-planning: a pragmatic extension to the §8.6 catalogue, same pattern as
+    ProviderNotFound/RunNotFound."""
+
+    status = 404
+    error_code = "TEMPO-ORDER-001"
+    title = "Order not found or not visible in caller scope"
+
+
 def problem_response(request: Request, error: TempoError) -> JSONResponse:
     correlation_id = getattr(request.state, "correlation_id", None)
     body = {

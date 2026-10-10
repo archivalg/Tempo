@@ -163,9 +163,11 @@ def test_timezone_offset_string_is_normalized_instead_of_crashing(client):
 
 # --------------------------------------------------------------------------------------------- 1. open backlog
 def test_committed_run_carries_open_backlog_forward_without_duplication(client):
-    """Priority 1: a committed run that cannot finish an order persists how much it actually
-    completed; a LATER committed run (here, after the customer extends the deadline) only schedules
-    what is left — the two runs' combined output equals the order's quantity exactly, never more."""
+    """Priority 1: a committed run that cannot finish an order persists how much it actually PLANNED
+    (`committed_units` — see tests/test_committed_vs_fulfilled.py for why this is not the same as
+    actual completion); a LATER committed run (here, after the customer extends the deadline) only
+    schedules what is left — the two runs' combined PLANNED output equals the order's quantity
+    exactly, never more. Status stays "open" throughout: committing a plan is not completing it."""
     seed(client)
     h = admin()
     _staff(client, h, ["E1"])
@@ -182,7 +184,8 @@ def test_committed_run_carries_open_backlog_forward_without_duplication(client):
         from app.models.orders import Order
         o = s.scalar(select(Order).where(Order.tenant_id == "ten_test", Order.site_id == MEL, Order.order_ref == "SO-1"))
         assert o.status == "open"
-        assert o.fulfilled_units == pytest.approx(produced_first, abs=0.5)
+        assert o.committed_units == pytest.approx(produced_first, abs=0.5)
+        assert o.fulfilled_units == 0.0  # committing a plan is not completing it
 
     # The customer extends the deadline into a LATER, non-overlapping window — a second committed run
     # for the SAME window would be a conflicting double-commitment (app.api.v1.runs._check_committed_conflict)
@@ -198,8 +201,9 @@ def test_committed_run_carries_open_backlog_forward_without_duplication(client):
     with client.session_local() as s:
         from app.models.orders import Order
         o = s.scalar(select(Order).where(Order.tenant_id == "ten_test", Order.site_id == MEL, Order.order_ref == "SO-1"))
-        assert o.status == "completed"
-        assert o.fulfilled_units == pytest.approx(1000, abs=0.5)
+        assert o.status == "open"  # still open — fully PLANNED is not the same as fully done
+        assert o.committed_units == pytest.approx(1000, abs=0.5)
+        assert o.fulfilled_units == 0.0
 
 
 def test_draft_run_never_persists_backlog_or_completes_an_order(client):
@@ -217,11 +221,23 @@ def test_draft_run_never_persists_backlog_or_completes_an_order(client):
     with client.session_local() as s:
         from app.models.orders import Order
         o = s.scalar(select(Order).where(Order.tenant_id == "ten_test", Order.site_id == MEL, Order.order_ref == "SO-1"))
-        assert o.status == "open" and o.fulfilled_units == 0.0  # ...but nothing was actually committed to the real backlog
+        assert o.status == "open" and o.committed_units == 0.0 and o.fulfilled_units == 0.0  # ...but nothing was actually committed to the real backlog
 
     # A second draft sees the SAME full quantity again — nothing was consumed by the first draft.
     again = _get(client, _run(client, _body(WINDOW))["run_id"])["result"]
     assert again["orders"][0]["quantity"] == pytest.approx(300, abs=0.01)
+
+    # Repeated scheduling (any number of non-committed runs) never touches committed_units or
+    # fulfilled_units — the ONLY write path in app/solvers/order_workload.py for EITHER field is
+    # gated on `request.input.committed is True`, and even then only `committed_units` is written
+    # (see tests/test_committed_vs_fulfilled.py: `fulfilled_units` is written exclusively by an
+    # explicit completion confirmation). A "scheduled" plan — committed or not — is still a plan.
+    for _ in range(3):
+        _get(client, _run(client, _body(WINDOW))["run_id"])
+    with client.session_local() as s:
+        from app.models.orders import Order
+        o = s.scalar(select(Order).where(Order.tenant_id == "ten_test", Order.site_id == MEL, Order.order_ref == "SO-1"))
+        assert o.status == "open" and o.committed_units == 0.0 and o.fulfilled_units == 0.0  # still untouched after repeated scheduling
 
 
 # --------------------------------------------------------------------------------------------- 2. indirect coverage relief succeeds
@@ -247,6 +263,31 @@ def test_indirect_relief_worker_maintains_coverage_without_double_booking(client
     assert result["indirect_coverage_gaps"] == []  # relief succeeded — a qualified second worker was available
     assert result["kpis"]["indirect_paid_hours"] == pytest.approx(8.0, abs=0.01)  # exactly ONE worker's shift, not two — no double-booking into indirect coverage
     assert result["orders"][0]["shortfall_quantity"] == pytest.approx(0, abs=1.0)  # the OTHER worker, never reserved, was free to do direct work
+    # Pins the exact worker count: 16.0 paid hours is precisely ONE shift reserved for indirect (8h)
+    # PLUS one shift of direct work (8h, same shift/break) — not 8h (nobody did direct work) and not
+    # 24h (the same person double-counted into both, or both workers somehow doing direct work).
+    assert result["kpis"]["total_paid_hours"] == pytest.approx(16.0, abs=0.01)
+    assert result["kpis"]["total_productive_hours"] == pytest.approx(460 / 60, abs=0.01)  # one worker's productive hours (480min shift - 20min break)
+
+    # Aggregate hours alone cannot prove absence of overlap (two different coincidences could produce
+    # the same totals) — assert each worker's own assignment intervals directly instead.
+    from datetime import datetime
+    by_worker: dict[str, list[dict]] = {}
+    for a in result["worker_assignments"]:
+        by_worker.setdefault(a["worker_id"], []).append(a)
+    assert len(by_worker) == 2  # exactly two distinct workers did anything at all
+    indirect_workers = {wid for wid, a in by_worker.items() if any(x["kind"] == "indirect" for x in a)}
+    direct_workers = {wid for wid, a in by_worker.items() if any(x["kind"] == "direct" for x in a)}
+    assert len(indirect_workers) == 1 and len(direct_workers) == 1
+    assert indirect_workers.isdisjoint(direct_workers)  # no worker appears in BOTH roles at all
+
+    def _iv(a):
+        return datetime.fromisoformat(a["start_at"]), datetime.fromisoformat(a["end_at"])
+
+    for wid, assignments in by_worker.items():
+        intervals = sorted((_iv(a) for a in assignments), key=lambda iv: iv[0])
+        for (s1, e1), (s2, e2) in zip(intervals, intervals[1:]):
+            assert e1 <= s2  # this worker's own intervals (indirect and/or direct) never overlap each other
 
 
 # --------------------------------------------------------------------------------------------- 3. personal weekday windows, incl. overnight

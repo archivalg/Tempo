@@ -342,16 +342,32 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
     demand_mode = request.input.demand_mode
     forecast_basis = request.input.forecast_basis or "additional"
 
+    missing_evidence: list[str] = []
     orders: list[Order] = []
+    orders_outside_horizon: list[dict] = []
     if demand_mode != "forecast_only":
         orders = list(db.scalars(select(Order).where(
             Order.tenant_id == tenant_id, Order.site_id == site_id, Order.status == "open",
             Order.order_received < window.end, Order.despatch_due > window.start,
         )))
+        # An open order that simply doesn't overlap this run's planning window is correctly excluded
+        # from `orders` above — but it must not just silently disappear with no trace (brief: "a
+        # visible exclusion summary rather than disappearing without explanation"). An order dated for
+        # next month is not a data problem, just out of scope for THIS run.
+        in_window_ids = {o.id for o in orders}
+        for o in db.scalars(select(Order).where(Order.tenant_id == tenant_id, Order.site_id == site_id, Order.status == "open")):
+            if o.id not in in_window_ids:
+                orders_outside_horizon.append({"order_ref": o.order_ref, "order_received": o.order_received.isoformat(), "despatch_due": o.despatch_due.isoformat()})
+        if orders_outside_horizon:
+            missing_evidence.append(f"{len(orders_outside_horizon)} open order(s) at site '{site_id}' do not overlap this run's planning window and were excluded: "
+                                     + ", ".join(o["order_ref"] for o in orders_outside_horizon))
         if not orders and demand_mode == "known_orders":
-            raise InsufficientData(f"no open orders at site '{site_id}' within the planning window")
-
-    missing_evidence: list[str] = []
+            # Even the rejection carries the same explanation — a caller gets the "why" whether or not
+            # a run is persisted (InsufficientData never persists a run at all, see app.api.v1.runs).
+            detail = f"no open orders at site '{site_id}' within the planning window"
+            if orders_outside_horizon:
+                detail += f" ({len(orders_outside_horizon)} open order(s) exist but fall outside it: " + ", ".join(o["order_ref"] for o in orders_outside_horizon) + ")"
+            raise InsufficientData(detail)
     workers = list(db.scalars(select(Worker).where(Worker.tenant_id == tenant_id, Worker.home_site == site_id, Worker.status == "active")))
     worker_ids = [w.worker_id for w in workers] or [""]
     today = datetime.now(timezone.utc).date()
@@ -463,13 +479,17 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             except ValueError as exc:
                 missing_evidence.append(f"order '{order.order_ref}': {exc}")
                 continue
-            # Open backlog (Arch acceptance item 1): only the quantity a prior COMMITTED run has not
-            # already carried through the order's LAST step is still owed. A draft never wrote
-            # fulfilled_units (see the persistence below, gated on request.input.committed), so a
-            # chain of drafts never shrinks what a real run still has to schedule.
-            quantity = max(0.0, total_quantity_for_order - order.fulfilled_units)
+            # Open backlog (Arch acceptance item 1): only the quantity neither already PLANNED by a
+            # prior committed run (`committed_units`) nor already CONFIRMED actually done
+            # (`fulfilled_units` — written only by an explicit completion confirmation or a future
+            # actuals import, never by this solver) is still owed. Committing a roster is a plan, not
+            # a fact — it is tracked separately from real completion precisely so the two are never
+            # conflated (docs/order-driven-planning.md: "committed does not mean physically fulfilled").
+            # A draft never writes either field, so a chain of drafts never shrinks real backlog.
+            already_accounted_for = max(order.committed_units, order.fulfilled_units)
+            quantity = max(0.0, total_quantity_for_order - already_accounted_for)
             if quantity <= 1e-9:
-                missing_evidence.append(f"order '{order.order_ref}' is already fully fulfilled by a prior committed run — skipped to avoid rescheduling completed work")
+                missing_evidence.append(f"order '{order.order_ref}' is already fully planned or completed — skipped to avoid rescheduling that work")
                 continue
             step_states = [{"sequence": s.sequence, "activity": s.activity, "lag_minutes": s.lag_minutes, "equipment_id": s.equipment_id, "zone_id": s.zone_id,
                              "remaining": quantity, "release_at": None, "completed_at": None, "hours": 0.0, "started_at": None} for s in steps]
@@ -519,6 +539,11 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
     # already explained by indirect_coverage_gaps/headcount_violations/staging_delays/etc.) from
     # "nothing could even be attempted" (proven infeasibility, priority 1)
     exclusion_logged: set[tuple[str, str, str]] = set()  # (worker_id, activity, reason) — one explanation per combination, not per sub-interval
+    # Every worker assignment, indirect or direct, as a concrete (worker, role/activity, start, end)
+    # interval — diagnostic, not used by the allocation logic itself (that's worker_busy_until), but
+    # lets a test (or a reviewer) directly verify no worker is EVER double-booked, rather than only
+    # inferring it from aggregate hours (Arch acceptance item 3).
+    worker_assignments: list[dict] = []
 
     daily_paid_hours: dict[tuple[str, object], float] = defaultdict(float)  # (worker_id, local date) → cumulative paid hours charged so far
 
@@ -577,6 +602,8 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             for w in chosen:
                 reserved.add(w.worker_id)
                 worker_busy_until[w.worker_id] = instance.end_at
+                worker_assignments.append({"worker_id": w.worker_id, "kind": "indirect", "role_or_activity": req.role,
+                                           "start_at": instance.start_at.isoformat(), "end_at": instance.end_at.isoformat()})
                 cr = resolve_cost_rate(cost_rules, labour_type=w.employment_type, role=req.role, position_grade=w.position_grade, provider_id=w.provider_id)
                 total_paid_hours += instance.paid_hours
                 indirect_paid_hours += instance.paid_hours
@@ -704,6 +731,8 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
                 capacity_units = total_rate * capacity_hours
 
                 for w, _rate, _source in assigned:
+                    worker_assignments.append({"worker_id": w.worker_id, "kind": "direct", "role_or_activity": activity,
+                                               "start_at": sub.start_at.isoformat(), "end_at": sub.end_at.isoformat()})
                     cr = resolve_cost_rate(cost_rules, labour_type=w.employment_type, role=activity, position_grade=w.position_grade, provider_id=w.provider_id)
                     total_paid_hours += sub.paid_hours
                     total_productive_hours += offered_hours
@@ -792,17 +821,21 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
         order_results.append({"order_ref": order.order_ref, "source": state.get("source", "order"), "despatch_due": order.despatch_due.isoformat(), "quantity": round(state["quantity"], 3),
                               "steps": step_rows, "on_time": shortfall <= 1e-9, "shortfall_quantity": round(shortfall, 3)})
 
-        # Open backlog persistence (Arch acceptance item 1) — ONLY for a committed run. A draft or
-        # scenario run promises nothing, so it must never advance fulfilled_units or flip status to
-        # "completed" merely because the solver scheduled it this time (brief: "Draft/scenario runs
-        # must not mark real work completed or reduce backlog merely because it was scheduled").
+        # Open backlog persistence (Arch acceptance item 1) — ONLY for a committed run, and ONLY the
+        # PLANNED allocation (`committed_units`), never `fulfilled_units` and never `status`. A draft
+        # or scenario run promises nothing, so it must never advance either field (brief:
+        # "Draft/scenario runs must not mark real work completed or reduce backlog merely because it
+        # was scheduled"). A COMMITTED run is still just a plan, not a confirmation that the work
+        # physically happened — only an explicit completion confirmation
+        # (POST /v1/orders/{id}/complete, app/api/v1/orders.py) or a correlated actuals import ever
+        # writes `fulfilled_units` or flips `status` to "completed" (brief: "committed does not mean
+        # physically fulfilled... actual fulfilment must come from an explicit completion update or
+        # imported actuals").
         if state.get("source") == "order" and request.input.committed:
             last_step = state["steps"][-1]
             produced_through_last_step = max(0.0, state["quantity"] - last_step["remaining"])
             if produced_through_last_step > 1e-9:
-                order.fulfilled_units = order.fulfilled_units + produced_through_last_step
-            if last_step["remaining"] <= 1e-9:
-                order.status = "completed"
+                order.committed_units = order.committed_units + produced_through_last_step
 
     # "No plan found" (proven infeasibility — the scheduler never managed to put a single worker on
     # anything, direct or indirect) is distinct from "attempted and constrained to zero direct
@@ -828,6 +861,8 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             "staging": staging_results,
             "staging_delays": staging_delays,
             "operating_hours_violations": operating_hours_violations,
+            "orders_outside_horizon": orders_outside_horizon,
+            "worker_assignments": worker_assignments,
             "kpis": {
                 "orders_planned": len(order_results), "total_shortfall_quantity": round(total_shortfall, 3), "coverage_pct": round(coverage * 100, 2),
                 "total_paid_hours": round(total_paid_hours, 3), "total_productive_hours": round(total_productive_hours, 3), "indirect_paid_hours": round(indirect_paid_hours, 3),

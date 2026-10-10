@@ -74,10 +74,21 @@ class Order(Base):
     unit: Mapped[str] = mapped_column(String, default="units")
     process_template_id: Mapped[str] = mapped_column(String, ForeignKey("process_template.id"))
     status: Mapped[str] = mapped_column(String, default="open")  # open | completed | cancelled
-    # Open backlog (Arch acceptance item 1): cumulative units a COMMITTED run has actually finished
-    # through the order's LAST process step — never incremented by a draft/scenario run, which
-    # promises nothing and must not shrink what a real run still owes. A subsequent run's remaining
-    # work is `units - fulfilled_units`, so work already finished is never rescheduled or recounted.
+    # Open backlog (Arch acceptance item 1) deliberately tracks TWO different things, never conflated:
+    #
+    # `committed_units` — cumulative units a COMMITTED run has PLANNED through the order's LAST
+    # process step. This is what prevents a later run from re-scheduling labour that a published
+    # roster already promises against this order. It is a plan, not a fact: committing a roster does
+    # not mean the work physically happened yet. Never incremented by a draft/scenario run.
+    #
+    # `fulfilled_units` — cumulative units CONFIRMED actually completed, in the real world. The only
+    # writer is an explicit completion confirmation (POST /v1/orders/{id}/complete,
+    # app/api/v1/orders.py) or, in future, a correlated actuals import (not yet built — see
+    # docs/order-driven-planning.md). The solver never writes this field.
+    #
+    # A subsequent run's remaining work is `units - max(committed_units, fulfilled_units)` — whichever
+    # is larger already means "don't (re)schedule this portion", for its own distinct reason.
+    committed_units: Mapped[float] = mapped_column(Float, default=0.0)
     fulfilled_units: Mapped[float] = mapped_column(Float, default=0.0)
 
 

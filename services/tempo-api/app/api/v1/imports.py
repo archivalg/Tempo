@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core import auth, service_auth
 from app.dependencies import get_db, get_principal, get_request_context
 from app.errors import AuthForbidden, AuthInvalid, PolicyConflict, RunNotFound, ScopeError
-from app.imports import apply as A, engine as E, parse as P
+from app.imports import apply as A, engine as E, parse as P, xlsx as X
 from app.imports.contracts import CONTRACTS, CONTRACT_VERSION, DATA_CLASSES, MAX_ROWS, contract_for, describe, template_csv
 from app.models.directory import Site
 from app.models.imports import ActualsPolicy, ImportBatch, ImportMapping, ImportRow, SiteForecastPreference, SuppliedForecast
@@ -135,6 +135,67 @@ async def stage_csv(request: Request, data_class: str, entity: str | None = None
         else:
             row.mapping, row.updated_by, row.updated_at = m, ctx.user_id, datetime.now(timezone.utc)
     return view(batch, replayed=replayed, errors=_sample_errors(db, batch))
+
+
+# ------------------------------------------------------------------------------------------------------------------ workbook (.xlsx) channel
+@router.post("/imports/xlsx/inspect")
+async def inspect_xlsx(request: Request, ctx: RequestContext = Depends(import_context), db: Session = Depends(get_db)) -> dict:
+    """One workbook, many sheets: what each sheet maps to (or 'unrecognised', never silently
+    dropped), its row count and its proposed column mapping. Changes nothing."""
+    try:
+        sheets = X.read_xlsx(await request.body())
+    except P.ImportProblem as e:
+        raise _problem(e) from None
+    out = []
+    for name, (headers, rows) in sheets.items():
+        mapped = X.sheet_entity(name)
+        if mapped is None:
+            out.append({"sheet": name, "recognised": False, "row_count": len(rows)})
+            continue
+        data_class, entity = mapped
+        c = _contract(data_class, entity)
+        saved = _saved(db, ctx, data_class, entity)
+        mapping = P.suggest_mapping(c, headers, saved)
+        out.append({"sheet": name, "recognised": True, "data_class": data_class, "entity": entity, "headers": headers, "row_count": len(rows),
+                    "sample": rows[:5], "suggested_mapping": mapping, "missing_required": [f.name for f in c.fields if f.required and not mapping.get(f.name)]})
+    out.sort(key=lambda s: X.processing_rank(s["entity"]) if s.get("recognised") else 10_000)
+    return {"sheets": out}
+
+
+@router.post("/imports/xlsx/stage", status_code=201)
+async def stage_xlsx(request: Request, file_name: str = "upload.xlsx", ctx: RequestContext = Depends(import_context), db: Session = Depends(get_db)) -> dict:
+    """Stages every RECOGNISED sheet through the exact same `engine.stage` pipeline a CSV upload
+    uses — one ImportBatch per sheet, previewed and later applied through the existing
+    /imports/batches/{id}/apply endpoint, unchanged. Sheets are processed in dependency order (sites
+    before workers before orders, etc.) so a workbook that defines its own prerequisites earlier in
+    the same file does not need a second upload pass. An unrecognised sheet is reported, not dropped."""
+    body = await request.body()
+    try:
+        sheets = X.read_xlsx(body)
+    except P.ImportProblem as e:
+        raise _problem(e) from None
+    recognised = [(name, X.sheet_entity(name), headers, rows) for name, (headers, rows) in sheets.items() if X.sheet_entity(name) is not None]
+    recognised.sort(key=lambda t: X.processing_rank(t[1][1]))
+    staged, skipped = [], [name for name in sheets if X.sheet_entity(name) is None]
+    for name, (data_class, entity), headers, raw_rows in recognised:
+        if not raw_rows:
+            staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": "no data rows (rows 2-4 are guidance, data starts at row 5) — nothing to stage"})
+            continue
+        c = _contract(data_class, entity)
+        mapping = P.suggest_mapping(c, headers)
+        missing = [f.name for f in c.fields if f.required and not mapping.get(f.name)]
+        if missing:
+            staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": f"could not map required column(s): {', '.join(missing)}"})
+            continue
+        rows = P.apply_mapping(c, mapping, raw_rows)
+        sha = hashlib.sha256(body + name.encode() + b"xlsx-sheet").hexdigest()
+        try:
+            batch, replayed = E.stage(db, ctx, data_class=data_class, entity=entity, channel="xlsx", source_label=f"{file_name}:{name}", rows=rows, raw_sha=sha)
+        except P.ImportProblem as e:
+            staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": None, "note": str(e)})
+            continue
+        staged.append({"sheet": name, "data_class": data_class, "entity": entity, "batch": view(batch, replayed=replayed, errors=_sample_errors(db, batch))})
+    return {"staged": staged, "skipped_sheets": skipped}
 
 
 # ------------------------------------------------------------------------------------------------------------------ API channel

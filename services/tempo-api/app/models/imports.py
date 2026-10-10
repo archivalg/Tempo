@@ -31,7 +31,7 @@ class ImportBatch(Base):
     tenant_id: Mapped[str] = mapped_column(String, index=True)
     data_class: Mapped[str] = mapped_column(String)  # master | forecast | transactions | bulk
     entity: Mapped[str | None] = mapped_column(String, nullable=True)  # master only: workers | work_standards
-    channel: Mapped[str] = mapped_column(String)  # csv | api
+    channel: Mapped[str] = mapped_column(String)  # csv | xlsx | api — "xlsx" is one sheet of a multi-sheet workbook upload
     source_label: Mapped[str] = mapped_column(String, default="")  # file name or API client name
     content_sha256: Mapped[str] = mapped_column(String, index=True)
     contract_version: Mapped[str] = mapped_column(String, default="1.0")
