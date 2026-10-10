@@ -202,6 +202,11 @@ class WorkStandard(Base):
     # scheduling and results rather than being dropped at the door (priority 16).
     function: Mapped[str | None] = mapped_column(String, nullable=True)
     flow: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Skill/certification eligibility (Arch acceptance item 6), distinct from an award/agreement
+    # restriction (app.models.constraints.AwardEligibilityRestriction): a worker needs a current,
+    # unexpired SkillCertification matching this code to perform the activity at all. Null means no
+    # skill is required — the activity standard's rate alone governs eligibility, as before.
+    required_skill: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class ActivityRoleZoneMap(Base):

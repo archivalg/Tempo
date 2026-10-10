@@ -74,6 +74,11 @@ class Order(Base):
     unit: Mapped[str] = mapped_column(String, default="units")
     process_template_id: Mapped[str] = mapped_column(String, ForeignKey("process_template.id"))
     status: Mapped[str] = mapped_column(String, default="open")  # open | completed | cancelled
+    # Open backlog (Arch acceptance item 1): cumulative units a COMMITTED run has actually finished
+    # through the order's LAST process step — never incremented by a draft/scenario run, which
+    # promises nothing and must not shrink what a real run still owes. A subsequent run's remaining
+    # work is `units - fulfilled_units`, so work already finished is never rescheduled or recounted.
+    fulfilled_units: Mapped[float] = mapped_column(Float, default=0.0)
 
 
 class OrderTask(Base):

@@ -6,7 +6,7 @@ import csv
 import io
 from dataclasses import dataclass, field
 
-CONTRACT_VERSION = "1.7"  # 1.7 adds day_rates, award_rules, award on workers, function/flow on work_standards (additive; earlier contracts are unchanged)
+CONTRACT_VERSION = "1.8"  # 1.8 adds award_eligibility_restrictions, required_skill on work_standards, open-order backlog (additive; earlier contracts are unchanged)
 MAX_ROWS = 20_000          # synchronous limit; larger files must be split (a background worker does not exist yet)
 MAX_BYTES = 8 * 1024 * 1024
 
@@ -62,7 +62,9 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("effective_from", "date", False, "Date the standard starts (defaults to today).", "2026-10-01", synonyms=("start_date", "from")),
         Field("function", "text", False, "Leave blank if you do not group activities by function.", "", synonyms=("process_function",)),
         Field("flow", "text", False, "Leave blank if you do not group activities by flow (for example inbound or outbound).", "", synonyms=("process_flow", "direction")),
-    ), notes=("A changed value closes the previous standard on the day the new one starts.", "function/flow are carried through to scheduling results unchanged.")),
+        Field("required_skill", "text", False, "Leave blank if no particular skill/certification is required; otherwise a worker needs a current, unexpired skill of this code to be assigned.", "", synonyms=("skill", "required_certification")),
+    ), notes=("A changed value closes the previous standard on the day the new one starts.", "function/flow are carried through to scheduling results unchanged.",
+              "required_skill is a qualification check, separate from any award/agreement restriction (see Award eligibility restrictions).")),
     Contract("master", "sites", "Sites (master data)", "Create or update your sites. Needs the configure permission because it adds places people can be rostered.", ("site_id",), (
         Field("site_id", "text", True, "Your stable ID for the site; letters, numbers, underscore or hyphen.", "syd_dc_02", synonyms=("site", "id", "code", "site_code")),
         Field("name", "text", True, "Display name.", "Sydney DC", synonyms=("site_name", "warehouse")),
@@ -244,6 +246,10 @@ CONTRACTS: dict[tuple[str, str | None], Contract] = {(c.data_class, c.entity): c
         Field("ordinary_hours_per_day", "number", True, "Hours per day before overtime applies.", "8"),
         Field("overtime_multiplier", "number", True, "Multiplier applied to hours beyond ordinary_hours_per_day.", "1.5"),
     )),
+    Contract("master", "award_eligibility_restrictions", "Award eligibility restrictions (master data)", "An EXPLICIT statement that workers under an award/agreement may not perform an activity. Nothing is inferred from the award's name — only rows uploaded here restrict anything.", ("award_code", "activity"), (
+        Field("award_code", "text", True, "The award/agreement identifier used on Staff uploads.", "retail_award_2024", synonyms=("award",)),
+        ACTIVITY,
+    ), notes=("An award with no row here restricts nothing — eligibility otherwise follows skills/certifications and activity rates as usual.",)),
     Contract("forecast", None, "Forecast workload", "Expected units per activity and period. Customer-supplied forecasts are versioned and shown with their origin.", ("site", "activity", "period_start", "grain"), (
         SITE, ACTIVITY, PERIOD_START, GRAIN,
         Field("units", "number", True, "Expected units in the period.", "26500", synonyms=("forecast", "volume", "quantity", "expected")),
@@ -281,7 +287,7 @@ DATA_CLASSES = {"master": ("workers", "work_standards", "sites", "customers", "a
                             "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                             "fill_priorities", "absenteeism", "equipment", "headcount_limits",
                             "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability",
-                            "day_rates", "award_rules"),
+                            "day_rates", "award_rules", "award_eligibility_restrictions"),
                  "forecast": (None,), "transactions": (None,), "bulk": (None,)}
 
 

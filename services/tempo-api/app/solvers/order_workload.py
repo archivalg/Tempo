@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.models.availability_pattern import WeeklyAvailabilityPattern
 from app.models.canonical import Availability, DemandBucket, LabourCostRule, SkillCertification, Worker, WorkerPerformanceProfile, WorkStandard
 from app.models.constraints import AbsenteeismRule as AbsenteeismRuleModel
-from app.models.constraints import AwardRule as AwardRuleModel
+from app.models.constraints import AwardEligibilityRestriction, AwardRule as AwardRuleModel
 from app.models.constraints import Equipment as EquipmentModel
 from app.models.constraints import FillPriority, HeadcountLimit
 from app.models.indirect import IndirectHeadcountRequirement
@@ -207,10 +207,19 @@ def _overlaps_time_window(inst_start_minute: int, inst_elapsed_minutes: int, req
     return inst_start_minute < req_start_minute + req_elapsed and req_start_minute < inst_start_minute + inst_elapsed_minutes
 
 
-def _expand_shift_instances(db: Session, tenant_id: str, site_id: str, window, tz_name: str) -> list[ShiftInstance]:
+def _expand_shift_instances(db: Session, tenant_id: str, site_id: str, window, tz_name: str,
+                             operating_hours_violations: list[dict] | None = None) -> list[ShiftInstance]:
     """Concrete UTC shift instances for the site within the window, from versioned ShiftTemplate/
     ShiftBreak/OperatingCalendarDay rows (order-driven-planning Stage 1). Empty if the tenant has not
-    configured any shift templates — the caller falls back to one open interval and says so."""
+    configured any shift templates — the caller falls back to one open interval and says so.
+
+    Operating hours are revalidated HERE, at scheduling time, every run — not only at shift-template
+    import time (Arch acceptance item 5: a calendar edited after a shift template was uploaded, or a
+    shift template arriving through a different path, must still be caught). A non-24h, non-closed
+    day whose open_time/close_time doesn't fully contain a shift instance (including the overnight
+    case, where close_time <= open_time crosses midnight the same way a shift template does) excludes
+    that instance and records why in `operating_hours_violations`, rather than silently scheduling
+    outside the site's actual operating window."""
     tz = ZoneInfo(tz_name)
     templates = list(db.scalars(select(ShiftTemplate).where(ShiftTemplate.tenant_id == tenant_id, ShiftTemplate.site_id == site_id)))
     if not templates:
@@ -229,6 +238,9 @@ def _expand_shift_instances(db: Session, tenant_id: str, site_id: str, window, t
         if cal is not None and cal.is_closed:
             d += timedelta(days=1)
             continue
+        operating_bounds = None
+        if cal is not None and not cal.is_24h and cal.open_time and cal.close_time:
+            operating_bounds = shift_template_bounds_utc(d, cal.open_time, cal.close_time, tz_name)
         for t in templates:
             if t.effective_from > d or (t.effective_to is not None and t.effective_to <= d):
                 continue
@@ -236,6 +248,14 @@ def _expand_shift_instances(db: Session, tenant_id: str, site_id: str, window, t
                 continue
             start_utc, end_utc = shift_template_bounds_utc(d, t.start_time, t.end_time, tz_name)
             if end_utc <= window.start or start_utc >= window.end:
+                continue
+            if operating_bounds is not None and (start_utc < operating_bounds[0] or end_utc > operating_bounds[1]):
+                if operating_hours_violations is not None:
+                    operating_hours_violations.append({
+                        "site_id": site_id, "weekday": wd, "date": d.isoformat(), "shift_code": t.shift_code,
+                        "shift_window": f"{t.start_time}-{t.end_time}", "operating_hours": f"{cal.open_time}-{cal.close_time}",
+                        "reason": "shift falls outside the site's operating hours for this weekday",
+                    })
                 continue
             elapsed = shift_elapsed_minutes(t.start_time, t.end_time)
             breaks = breaks_by_template.get(t.id, [])
@@ -343,8 +363,13 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
 
     standards = {w.activity: w.time_per_unit_seconds for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == tenant_id))}
     standard_function_flow = {w.activity: (w.function, w.flow) for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == tenant_id))}
+    required_skill_by_activity = {w.activity: w.required_skill for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == tenant_id)) if w.required_skill}
     day_rates = {(d.activity, d.weekday): d.rate_per_hour for d in db.scalars(select(DayRate).where(DayRate.tenant_id == tenant_id))}
     award_rules = {a.award_code: a for a in db.scalars(select(AwardRuleModel).where(AwardRuleModel.tenant_id == tenant_id))}
+    # Explicit, imported award/agreement restrictions only — never inferred from an award's name
+    # (Arch acceptance item 6). Separate from required_skill_by_activity above, which is a
+    # qualification check, not an employment-agreement one.
+    award_restricted_activities = {(a.award_code, a.activity) for a in db.scalars(select(AwardEligibilityRestriction).where(AwardEligibilityRestriction.tenant_id == tenant_id))}
     productivity = {p.worker_id: p.productivity_index for p in db.scalars(select(WorkerPerformanceProfile).where(WorkerPerformanceProfile.tenant_id == tenant_id))}
     conversions = {(c.activity, c.from_unit, c.to_unit): c.factor for c in db.scalars(select(UnitConversion).where(UnitConversion.tenant_id == tenant_id))}
     skills: dict[str, set[str]] = defaultdict(set)
@@ -404,8 +429,12 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
                 t, delta = events.pop(0)
                 current_occupancy[zone_id] = current_occupancy.get(zone_id, 0.0) + delta
 
-    instances = _expand_shift_instances(db, tenant_id, site_id, window, tz_name)
-    if not instances:
+    has_shift_templates = db.scalar(select(ShiftTemplate.id).where(ShiftTemplate.tenant_id == tenant_id, ShiftTemplate.site_id == site_id).limit(1)) is not None
+    operating_hours_violations: list[dict] = []
+    instances = _expand_shift_instances(db, tenant_id, site_id, window, tz_name, operating_hours_violations)
+    for v in operating_hours_violations:
+        missing_evidence.append(f"site '{v['site_id']}' {v['weekday']} {v['date']}: shift '{v['shift_code']}' ({v['shift_window']}) falls outside operating hours {v['operating_hours']} — excluded from scheduling")
+    if not instances and not has_shift_templates:
         missing_evidence.append("no shift templates configured for this site — treating each local calendar day in the window as one open interval with no break/operating-hours modelling")
         d = window.start.astimezone(tz).date()
         end_date = window.end.astimezone(tz).date()
@@ -430,9 +459,17 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
                 missing_evidence.append(f"order '{order.order_ref}' has a process template with no steps — skipped")
                 continue
             try:
-                quantity = resolve_order_quantity(units=order.units, lines=order.lines, activity=steps[0].activity, conversions=conversions, target_unit=order.unit)
+                total_quantity_for_order = resolve_order_quantity(units=order.units, lines=order.lines, activity=steps[0].activity, conversions=conversions, target_unit=order.unit)
             except ValueError as exc:
                 missing_evidence.append(f"order '{order.order_ref}': {exc}")
+                continue
+            # Open backlog (Arch acceptance item 1): only the quantity a prior COMMITTED run has not
+            # already carried through the order's LAST step is still owed. A draft never wrote
+            # fulfilled_units (see the persistence below, gated on request.input.committed), so a
+            # chain of drafts never shrinks what a real run still has to schedule.
+            quantity = max(0.0, total_quantity_for_order - order.fulfilled_units)
+            if quantity <= 1e-9:
+                missing_evidence.append(f"order '{order.order_ref}' is already fully fulfilled by a prior committed run — skipped to avoid rescheduling completed work")
                 continue
             step_states = [{"sequence": s.sequence, "activity": s.activity, "lag_minutes": s.lag_minutes, "equipment_id": s.equipment_id, "zone_id": s.zone_id,
                              "remaining": quantity, "release_at": None, "completed_at": None, "hours": 0.0, "started_at": None} for s in steps]
@@ -481,6 +518,7 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
     any_assignment_made = False  # distinguishes "attempted but constrained to zero output" (feasible_with_slack,
     # already explained by indirect_coverage_gaps/headcount_violations/staging_delays/etc.) from
     # "nothing could even be attempted" (proven infeasibility, priority 1)
+    exclusion_logged: set[tuple[str, str, str]] = set()  # (worker_id, activity, reason) — one explanation per combination, not per sub-interval
 
     daily_paid_hours: dict[tuple[str, object], float] = defaultdict(float)  # (worker_id, local date) → cumulative paid hours charged so far
 
@@ -499,11 +537,17 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
         overtime_hours = max(0.0, hours - ordinary_remaining)
         return labour_cost(paid_hours=hours, rate_per_hour=rate, overtime_hours=overtime_hours, overtime_multiplier=award.overtime_multiplier)
 
-    def _blocked(worker_id: str, weekday: str, start: datetime, end: datetime) -> bool:
+    def _blocked(worker_id: str, weekday: str, start: datetime, end: datetime, ref_at: datetime) -> bool:
+        """`ref_at` anchors the weekly-pattern minute-of-day to the shift INSTANCE's own start, not
+        `start` itself — a sub-interval past local midnight (an overnight shift's tail, on the
+        following calendar date) must keep counting minutes continuously from the instance's start,
+        not reset to 0 at midnight, or an overnight weekly-availability window would wrongly reject
+        its own second half (Arch acceptance item 3)."""
         if _availability_blocked(worker_id, start, end, avail_blocks):
             return True
-        local = start.astimezone(tz)
-        start_minute = local.hour * 60 + local.minute
+        ref_date = ref_at.astimezone(tz).date()
+        local_midnight = datetime(ref_date.year, ref_date.month, ref_date.day, tzinfo=tz).astimezone(timezone.utc)
+        start_minute = int((start - local_midnight).total_seconds() / 60)
         elapsed = int((end - start).total_seconds() / 60)
         return not _within_weekly_pattern(worker_id, weekday, start_minute, elapsed, weekly_patterns)
 
@@ -520,7 +564,7 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             if req.weekday != weekday or not _overlaps_time_window(inst_start_minute, inst_elapsed_minutes, req.start_time, req.end_time):
                 continue
             eligible = [w for w in workers if req.role in skills.get(w.worker_id, set()) and w.worker_id not in reserved
-                       and worker_busy_until.get(w.worker_id, datetime.min.replace(tzinfo=timezone.utc)) <= instance.start_at and not _blocked(w.worker_id, weekday, instance.start_at, instance.end_at)]
+                       and worker_busy_until.get(w.worker_id, datetime.min.replace(tzinfo=timezone.utc)) <= instance.start_at and not _blocked(w.worker_id, weekday, instance.start_at, instance.end_at, instance.start_at)]
             chosen = sorted(eligible, key=lambda w: w.worker_id)[: req.headcount]
             if len(chosen) < req.headcount:
                 indirect_gaps.append({"role": req.role, "weekday": weekday, "interval_start": instance.start_at.isoformat(), "reason": "missing_qualified_workers", "shortfall": req.headcount - len(chosen)})
@@ -549,7 +593,7 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             _advance_staging(sub.start_at)
             equipment_remaining = dict(equipment_pools)  # shared across EVERY activity in this sub-interval, not just the one reading it last (priority 10)
             available_now = [w for w in workers if w.worker_id not in reserved
-                             and worker_busy_until.get(w.worker_id, datetime.min.replace(tzinfo=timezone.utc)) <= sub.start_at and not _blocked(w.worker_id, weekday, sub.start_at, sub.end_at)]
+                             and worker_busy_until.get(w.worker_id, datetime.min.replace(tzinfo=timezone.utc)) <= sub.start_at and not _blocked(w.worker_id, weekday, sub.start_at, sub.end_at, instance.start_at)]
 
             ready_by_activity: dict[str, list[tuple[str, dict]]] = defaultdict(list)
             for order_id, state in order_state.items():
@@ -564,8 +608,20 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
 
             for activity in sorted(ready_by_activity, key=_activity_priority):
                 tasks = sorted(ready_by_activity[activity], key=lambda ot: (_aware(order_state[ot[0]]["order"].despatch_due), order_state[ot[0]]["order"].order_ref))
+                required_skill = required_skill_by_activity.get(activity)
                 elig: list[tuple[Worker, float, str]] = []
                 for w in available_now:
+                    worker_label = w.source_ref or w.worker_id
+                    if required_skill and required_skill not in skills.get(w.worker_id, set()):
+                        if (w.worker_id, activity, "missing_skill") not in exclusion_logged:
+                            exclusion_logged.add((w.worker_id, activity, "missing_skill"))
+                            missing_evidence.append(f"worker '{worker_label}' excluded from activity '{activity}': requires skill/certification '{required_skill}', which this worker does not currently hold")
+                        continue
+                    if w.award and (w.award, activity) in award_restricted_activities:
+                        if (w.worker_id, activity, "award_restricted") not in exclusion_logged:
+                            exclusion_logged.add((w.worker_id, activity, "award_restricted"))
+                            missing_evidence.append(f"worker '{worker_label}' excluded from activity '{activity}': award '{w.award}' is explicitly restricted from this activity")
+                        continue
                     personal = personal_rates.get((w.worker_id, activity))
                     std_seconds = standards.get(activity)
                     standard_rate = 3600 / std_seconds if std_seconds else None
@@ -736,6 +792,18 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
         order_results.append({"order_ref": order.order_ref, "source": state.get("source", "order"), "despatch_due": order.despatch_due.isoformat(), "quantity": round(state["quantity"], 3),
                               "steps": step_rows, "on_time": shortfall <= 1e-9, "shortfall_quantity": round(shortfall, 3)})
 
+        # Open backlog persistence (Arch acceptance item 1) — ONLY for a committed run. A draft or
+        # scenario run promises nothing, so it must never advance fulfilled_units or flip status to
+        # "completed" merely because the solver scheduled it this time (brief: "Draft/scenario runs
+        # must not mark real work completed or reduce backlog merely because it was scheduled").
+        if state.get("source") == "order" and request.input.committed:
+            last_step = state["steps"][-1]
+            produced_through_last_step = max(0.0, state["quantity"] - last_step["remaining"])
+            if produced_through_last_step > 1e-9:
+                order.fulfilled_units = order.fulfilled_units + produced_through_last_step
+            if last_step["remaining"] <= 1e-9:
+                order.status = "completed"
+
     # "No plan found" (proven infeasibility — the scheduler never managed to put a single worker on
     # anything, direct or indirect) is distinct from "attempted and constrained to zero direct
     # output" — the latter is already explained by indirect_coverage_gaps / headcount_violations /
@@ -747,7 +815,7 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
 
     coverage = 1.0 if total_quantity == 0 else max(0.0, 1 - total_shortfall / total_quantity)
     feasibility = "feasible"
-    if total_shortfall > 0 or indirect_gaps or headcount_violations or equipment_violations or staging_delays or any(not s["available"] or s["violations"] for s in staging_results.values()):
+    if total_shortfall > 0 or indirect_gaps or headcount_violations or equipment_violations or staging_delays or operating_hours_violations or any(not s["available"] or s["violations"] for s in staging_results.values()):
         feasibility = "feasible_with_slack"
 
     return SolverOutcome(
@@ -759,6 +827,7 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
             "equipment_violations": [{"equipment_id": v.equipment_id, "at": v.at.isoformat(), "concurrent": v.concurrent, "quantity_available": v.quantity_available} for v in equipment_violations],
             "staging": staging_results,
             "staging_delays": staging_delays,
+            "operating_hours_violations": operating_hours_violations,
             "kpis": {
                 "orders_planned": len(order_results), "total_shortfall_quantity": round(total_shortfall, 3), "coverage_pct": round(coverage * 100, 2),
                 "total_paid_hours": round(total_paid_hours, 3), "total_productive_hours": round(total_productive_hours, 3), "indirect_paid_hours": round(indirect_paid_hours, 3),

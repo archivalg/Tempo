@@ -224,6 +224,7 @@ def _standards(row, lk):
     yield "effective_from", lambda: {"effective_from": (parse_local_date(_g(row, "effective_from")) if _g(row, "effective_from") else datetime.now(timezone.utc).date()).isoformat()}
     yield "function", lambda: {"function": _g(row, "function")[:80] or None}
     yield "flow", lambda: {"flow": _g(row, "flow")[:80] or None}
+    yield "required_skill", lambda: {"required_skill": _g(row, "required_skill")[:80] or None}
 
 
 def _forecast(row, lk):
@@ -730,6 +731,11 @@ def _award_rules(row, lk):
     yield "overtime_multiplier", lambda: {"overtime_multiplier": _num(_g(row, "overtime_multiplier"), "overtime_multiplier", minimum=1.0, maximum=5.0)}
 
 
+def _award_eligibility_restrictions(row, lk):
+    yield "award_code", lambda: {"award_code": _need(_g(row, "award_code"), "award_code")[:80]}
+    yield "activity", lambda: {"activity": _activity(_g(row, "activity"), lk)}
+
+
 def _indirect_headcount(row, lk):
     yield "site", lambda: {"site": _site(_g(row, "site"), lk)[0]}
     yield "role", lambda: {"role": _need(_g(row, "role"), "role").lower()[:80]}
@@ -759,7 +765,7 @@ _VALIDATORS = {("master", "workers"): _workers, ("master", "work_standards"): _s
                ("master", "fill_priorities"): _fill_priorities, ("master", "absenteeism"): _absenteeism, ("master", "equipment"): _equipment, ("master", "headcount_limits"): _headcount_limits,
                ("master", "grade_rates"): _grade_rates, ("master", "productivity_loss"): _productivity_loss, ("master", "staging_capacity"): _staging_capacity, ("master", "staging_movements"): _staging_movements,
                ("master", "indirect_headcount"): _indirect_headcount, ("master", "weekly_availability"): _weekly_availability,
-               ("master", "day_rates"): _day_rates, ("master", "award_rules"): _award_rules,
+               ("master", "day_rates"): _day_rates, ("master", "award_rules"): _award_rules, ("master", "award_eligibility_restrictions"): _award_eligibility_restrictions,
                ("forecast", None): _forecast, ("transactions", None): _transactions, ("bulk", None): _bulk}
 
 
@@ -781,7 +787,8 @@ def row_key(data_class: str, entity: str | None, n: dict) -> tuple:
                 "staging_capacity": lambda: (n["site"], n["zone_id"]), "staging_movements": lambda: (n["site"], n["zone_id"], n["occurred_at"], n["movement_type"]),
                 "indirect_headcount": lambda: (n["site"], n["role"], n["weekday"], n["start_time"], n["end_time"]),
                 "weekly_availability": lambda: (n["worker_ref"], n["weekday"]),
-                "day_rates": lambda: (n["activity"], n["weekday"]), "award_rules": lambda: (n["award_code"],)}[entity]()
+                "day_rates": lambda: (n["activity"], n["weekday"]), "award_rules": lambda: (n["award_code"],),
+                "award_eligibility_restrictions": lambda: (n["award_code"], n["activity"])}[entity]()
     if data_class == "transactions":
         return (n["source"], n["event_id"], n.get("revision"), n["action"])
     return (n["site"], n["activity"], n["bucket_start"], n["bucket_minutes"], n.get("customer"))

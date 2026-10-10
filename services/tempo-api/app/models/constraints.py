@@ -86,3 +86,19 @@ class AwardRule(Base):
     award_code: Mapped[str] = mapped_column(String)
     ordinary_hours_per_day: Mapped[float] = mapped_column(Float)
     overtime_multiplier: Mapped[float] = mapped_column(Float)
+
+
+class AwardEligibilityRestriction(Base):
+    """An EXPLICIT, imported statement that workers under `award_code` may not perform `activity` —
+    never inferred from the award's name or any pattern in it (Arch acceptance item 6: "do not infer
+    restrictions from an award name or invent restrictions"). Distinct from skill/certification
+    eligibility (app.models.canonical.WorkStandard.required_skill / SkillCertification), which gates
+    on a worker's qualifications, not their employment agreement. The absence of a row here means no
+    restriction — an award with no configured row restricts nothing."""
+
+    __tablename__ = "award_eligibility_restriction"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    award_code: Mapped[str] = mapped_column(String)
+    activity: Mapped[str] = mapped_column(String)

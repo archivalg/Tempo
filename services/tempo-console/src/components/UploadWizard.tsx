@@ -8,6 +8,7 @@ const ORDER = ['master|sites', 'master|zones', 'master|customers', 'master|worke
   'master|operating_calendar', 'master|shift_templates', 'master|shift_breaks', 'master|unit_conversions', 'master|process_templates', 'master|process_steps', 'master|orders',
   'master|fill_priorities', 'master|absenteeism', 'master|equipment', 'master|headcount_limits',
   'master|grade_rates', 'master|productivity_loss', 'master|staging_capacity', 'master|staging_movements', 'master|indirect_headcount', 'master|weekly_availability', 'master|day_rates', 'master|award_rules',
+  'master|award_eligibility_restrictions',
   'forecast|', 'bulk|', 'transactions|']
 const HINT: Record<string, string> = {
   'master|sites': 'Your warehouses. Needs an administrator.', 'master|zones': 'Named areas within a site (pick, pack, stage). Upload sites first.', 'master|customers': 'The customers whose work you handle.',

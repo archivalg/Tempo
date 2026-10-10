@@ -63,3 +63,30 @@ test('order-driven order_fulfillment run: upload, validate, create run, see resu
   await expect(page.getByText(/E2E-SO-1/)).toBeVisible()
   await page.screenshot({ path: '../../docs/screenshots/order-fulfillment-run-result.png', fullPage: true })
 })
+
+test('order-driven order_fulfillment run: a constrained order produces an explained shortfall, not a silent success', async ({ page }) => {
+  await signIn(page, /Demo Tenant Admin/)
+  await page.goto('/data')
+
+  // Same process as the happy-path spec, but a despatch window far too short for the demo's
+  // existing worker pool to clear the quantity — this must surface as feasible_with_slack with a
+  // concrete explanation, never as a silent "completed" that hides the shortfall.
+  await loadCsv(page, /Process templates/, 'process-templates-2.csv',
+    'site,process_code,customer_id\nmel_dc_01,e2e_outbound_2,\n', /^Load \d+ rows?$/)
+  await loadCsv(page, /Process steps/, 'process-steps-2.csv',
+    'site,process_code,sequence,activity\nmel_dc_01,e2e_outbound_2,1,picking\n', /^Load \d+ rows?$/)
+  const received = isoLocal(1, 1)
+  const due = isoLocal(1, 2) // one hour — not enough to clear 50,000 units with the demo's picking rate
+  await loadCsv(page, /^Orders/, 'orders-2.csv',
+    `site,order_id,order_received,despatch_due,units,process_code\nmel_dc_01,E2E-SO-CONSTRAINED,${received},${due},50000,e2e_outbound_2\n`, /^Load \d+ rows?$/)
+
+  await page.goto('/runs/new')
+  await page.getByLabel('Run type').selectOption('order_fulfillment')
+  await page.getByLabel(/Site IDs/).fill('mel_dc_01')
+  await page.getByRole('button', { name: 'Create run' }).click()
+  await page.waitForURL(/\/runs\/run_/, { timeout: 30_000 })
+  await expect(page.getByText(/completed/i).first()).toBeVisible({ timeout: 30_000 })
+  await expect(page.getByText(/E2E-SO-CONSTRAINED/)).toBeVisible()
+  await expect(page.getByText(/feasible_with_slack/)).toBeVisible()  // not silently "feasible" — the shortfall is disclosed
+  await page.screenshot({ path: '../../docs/screenshots/order-fulfillment-constrained-run.png', fullPage: true })
+})

@@ -288,6 +288,12 @@ def _master_preview(db: Session, ctx: RequestContext, entity: str, good: list[Im
         have = {a.award_code for a in db.scalars(select(AwardRule).where(AwardRule.tenant_id == ctx.tenant_id))}
         for r in good:
             s["updates" if r.normalised["award_code"] in have else "creates"] += 1
+    elif entity == "award_eligibility_restrictions":
+        from app.models.constraints import AwardEligibilityRestriction
+        have = {(a.award_code, a.activity) for a in db.scalars(select(AwardEligibilityRestriction).where(AwardEligibilityRestriction.tenant_id == ctx.tenant_id))}
+        for r in good:
+            n = r.normalised
+            s["unchanged" if (n["award_code"], n["activity"]) in have else "creates"] += 1
     elif entity == "sites":
         if not ctx.has_permission("labour.configure"):
             s["blocking"].append("Adding or changing sites needs the configure permission (a tenant administrator).")
@@ -325,7 +331,8 @@ def _preview(db: Session, ctx: RequestContext, batch: ImportBatch, contract: Con
     elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                                               "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                                               "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability", "day_rates", "award_rules"):
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability", "day_rates", "award_rules",
+                                              "award_eligibility_restrictions"):
         _master_preview(db, ctx, batch.entity, good, lk, s)
     elif dc == "master":
         cur = {w.activity: w for w in db.scalars(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id, WorkStandard.effective_to.is_(None)))}

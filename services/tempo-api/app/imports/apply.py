@@ -54,7 +54,8 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
     elif dc == "master" and batch.entity in ("sites", "customers", "availability", "rates", "zones", "activity_roles", "operating_calendar", "shift_templates", "shift_breaks",
                                               "process_templates", "process_steps", "orders", "worker_activity_rates", "unit_conversions",
                                               "fill_priorities", "absenteeism", "equipment", "headcount_limits",
-                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability", "day_rates", "award_rules"):
+                                              "grade_rates", "productivity_loss", "staging_capacity", "staging_movements", "indirect_headcount", "weekly_availability", "day_rates", "award_rules",
+                                              "award_eligibility_restrictions"):
         result = {"sites": _apply_sites, "customers": _apply_customers, "availability": _apply_availability, "rates": _apply_rates,
                   "zones": _apply_zones, "activity_roles": _apply_activity_roles, "operating_calendar": _apply_operating_calendar,
                   "shift_templates": _apply_shift_templates, "shift_breaks": _apply_shift_breaks,
@@ -63,7 +64,8 @@ def apply_batch(db: Session, ctx: RequestContext, batch: ImportBatch, *, accept_
                   "fill_priorities": _apply_fill_priorities, "absenteeism": _apply_absenteeism, "equipment": _apply_equipment,
                   "headcount_limits": _apply_headcount_limits, "grade_rates": _apply_grade_rates, "productivity_loss": _apply_productivity_loss,
                   "staging_capacity": _apply_staging_capacity, "staging_movements": _apply_staging_movements, "indirect_headcount": _apply_indirect_headcount,
-                  "weekly_availability": _apply_weekly_availability, "day_rates": _apply_day_rates, "award_rules": _apply_award_rules}[batch.entity](db, ctx, batch, good)
+                  "weekly_availability": _apply_weekly_availability, "day_rates": _apply_day_rates, "award_rules": _apply_award_rules,
+                  "award_eligibility_restrictions": _apply_award_eligibility_restrictions}[batch.entity](db, ctx, batch, good)
     elif dc == "master":
         result = _apply_standards(db, ctx, good)
     elif dc == "forecast":
@@ -562,6 +564,21 @@ def _apply_award_rules(db: Session, ctx: RequestContext, batch: ImportBatch, goo
     return {"created": created, "updated": updated}
 
 
+def _apply_award_eligibility_restrictions(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
+    from app.models.constraints import AwardEligibilityRestriction
+    created = same = 0
+    for r in good:
+        n = r.normalised
+        if db.scalar(select(AwardEligibilityRestriction.id).where(AwardEligibilityRestriction.tenant_id == ctx.tenant_id, AwardEligibilityRestriction.award_code == n["award_code"],
+                                                                   AwardEligibilityRestriction.activity == n["activity"]).limit(1)):
+            same += 1
+            continue
+        db.add(AwardEligibilityRestriction(tenant_id=ctx.tenant_id, award_code=n["award_code"], activity=n["activity"]))
+        created += 1
+        r.applied = True
+    return {"created": created, "unchanged": same}
+
+
 def _apply_indirect_headcount(db: Session, ctx: RequestContext, batch: ImportBatch, good: list[ImportRow]) -> dict:
     from app.models.indirect import IndirectHeadcountRequirement
     created = updated = 0
@@ -602,12 +619,13 @@ def _apply_standards(db: Session, ctx: RequestContext, good: list[ImportRow]) ->
         n = r.normalised
         start = datetime.fromisoformat(n["effective_from"]).replace(tzinfo=timezone.utc)
         cur = db.scalar(select(WorkStandard).where(WorkStandard.tenant_id == ctx.tenant_id, WorkStandard.activity == n["activity"], WorkStandard.effective_to.is_(None)))
-        if cur is not None and abs(cur.time_per_unit_seconds - n["seconds_per_unit"]) < 1e-9 and cur.function == n.get("function") and cur.flow == n.get("flow"):
+        if (cur is not None and abs(cur.time_per_unit_seconds - n["seconds_per_unit"]) < 1e-9 and cur.function == n.get("function")
+                and cur.flow == n.get("flow") and cur.required_skill == n.get("required_skill")):
             same += 1
             continue
         if cur is not None:
             if _aware(cur.effective_from) >= start:
-                cur.time_per_unit_seconds, cur.function, cur.flow = n["seconds_per_unit"], n.get("function"), n.get("flow")  # same-day correction, no new row
+                cur.time_per_unit_seconds, cur.function, cur.flow, cur.required_skill = n["seconds_per_unit"], n.get("function"), n.get("flow"), n.get("required_skill")  # same-day correction, no new row
                 changed += 1
                 r.applied = True
                 continue
@@ -615,7 +633,7 @@ def _apply_standards(db: Session, ctx: RequestContext, good: list[ImportRow]) ->
             changed += 1
         else:
             created += 1
-        db.add(WorkStandard(tenant_id=ctx.tenant_id, activity=n["activity"], time_per_unit_seconds=n["seconds_per_unit"], effective_from=start, function=n.get("function"), flow=n.get("flow")))
+        db.add(WorkStandard(tenant_id=ctx.tenant_id, activity=n["activity"], time_per_unit_seconds=n["seconds_per_unit"], effective_from=start, function=n.get("function"), flow=n.get("flow"), required_skill=n.get("required_skill")))
         r.applied = True
     return {"created": created, "changed": changed, "unchanged": same}
 
