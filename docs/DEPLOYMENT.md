@@ -1,17 +1,17 @@
 # Tempo — authoritative deployment record
 
 This is the single place that says what is running. When it disagrees with `build-progress.md` (a historical ledger), this file wins.
-Update it whenever the deployed stack changes. Last verified: **2 October 2026**, host `opc`, public name `https://tempo.ensemblesolutions.com.au/`.
+Update it whenever the deployed stack changes. Last verified: **11 October 2026**, host `opc`, public name `https://tempo.ensemblesolutions.com.au/`.
 
 ## What is running
 
 | Item | Value |
 |---|---|
-| Source revision of the running code | `51eeb42` on `build/tempo-standalone-gate1` (images built 2 Oct 2026 from a clean checkout of that commit, so uncommitted working-tree edits were not deployed). |
+| Source revision of the running code | `6723cb0` on `build/order-driven-planning` (images built 11 Oct 2026 from a clean checkout of that commit; working tree was clean at build time). |
 | Backend | container `tempo_backend`, image `tempo-api:local`, host port **8007** → 8000, runs as non-owner role `tempo_app` |
 | Frontend | container `tempo_frontend`, host port **3007** → 80 |
 | Database | container `tempo_postgres` (postgres:16), host `127.0.0.1:5439`, database `tempo`, roles `tempo_owner` (migrations) / `tempo_app` (runtime, no BYPASSRLS), volume `tempo_tempo_pgdata` |
-| Migration head | **`a9b0c1d2e3f4`** (read from `alembic_version` in database `tempo`) |
+| Migration head | **`d8e9f0a1b2c3`** (read from `alembic_version` in database `tempo`) |
 | Migration job | `tempo_migrate` (one-shot, owner role, `alembic upgrade head`) |
 | Redis | not used (6386 reserved) |
 | Dev identity picker | **OFF** in the deployed stack (`TEMPO_DEV_IDP_ENABLED=false`); password sign-in only |
@@ -39,6 +39,36 @@ Never use `docker compose down --volumes`. Never point the demo reset or browser
 The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database other than `tempo_e2e` / `tempo_test` unless `TEMPO_DEMO_RESET_DB=<name>` is set on purpose (tested).
 
 ## Verification record
+- **11 Oct 2026 (`6723cb0`, order-driven labour planning — order-driven demand, personal/day rates,
+  indirect coverage, dependencies, equipment, congestion/staging, grade/award costing, committed-vs-
+  fulfilled backlog, XLSX workbook import)**: ten additive migrations applied cleanly,
+  `f1a2b3c4d5e6` → `d8e9f0a1b2c3` (new tables/columns only; every migration's `downgrade()` reverses
+  it, `upgrade()` never drops or alters existing data — verified by inspection before deploying).
+  Pre-deploy dump `~/tempo-backups/tempo-pre-orderdriven-20261010-235549.dump` (verified readable,
+  699 TOC entries); rollback images `tempo-api:rollback-20261010-235549` and
+  `tempo-tempo_frontend:rollback-20261010-235549` (the prior running revision, `51eeb42` / migration
+  head `a9b0c1d2e3f4` — rollback: retag both images to `:local`/`:latest`, `docker compose up -d
+  tempo_backend tempo_frontend`; no `alembic downgrade` needed since the new schema is additive and
+  ignored by the older code). Backend suite 520 passed; browser e2e 3/3 passed (upload/run/results,
+  a constrained run's explained shortfall, and XLSX upload + explicit completion through a real
+  authenticated session). Smoke test passed (full list below). Deployed-revision checks run directly
+  against the live hostname: container health (`tempo_backend` healthy, `tempo_frontend` and
+  `tempo_postgres` up), login (via smoke), workbook upload/preview (`POST /v1/imports/xlsx/inspect`
+  against a real fixture, sheet recognised, guidance/example rows correctly excluded from the row
+  count), order-fulfillment run creation/results (a draft run against a clearly-labelled verification
+  order `DEPLOY-VERIFY-1` on site `mel_dc_01`, process `deploy_verify`, completed with a disclosed
+  warning — no shift templates configured for that site, handled as a normal `completed_with_warnings`
+  outcome, not an error), and commitment release vs actual completion (a committed run brought
+  `committed_units` to 20/`fulfilled_units` to 0; releasing that run's commitment returned
+  `committed_units` to 0 while `fulfilled_units` stayed 0; an explicit completion call then moved
+  `fulfilled_units` to 5 while `committed_units` stayed 0 throughout — the planning/actual separation
+  holds on the live database, not only in tests). The verification process template/steps/order
+  (`deploy_verify` / `DEPLOY-VERIFY-1`) were left in place afterwards as clearly-labelled evidence,
+  consistent with this demo tenant's existing synthetic data, rather than attempting a partial cleanup
+  with no delete endpoint to match. **Source-workbook compatibility with Arch's actual v1/v2 files
+  remains explicitly unverified** — see `docs/order-driven-planning.md`'s "Sixth pass" section; this
+  deployment is fixture-tested import support, not confirmed compatibility with the real files, which
+  have not been supplied to this programme at any point.
 - Smoke test against the public hostname (`scripts/smoke.sh`): readiness, console, anonymous refusal, password sign-in, and read-only calls for overview, demand, rosters, roster, live attendance, timesheets, variance, notifications, data status, setup checklist, data contracts; sign-out. Last run: **passed**, 1 Oct 2026.
 - 4 Oct 2026 (`c3e096e`, email-code two-step verification): sign-in/enrolment by emailed 6-digit code for web, mobile and kiosk manager exit; additive migration `a9b0c1d2e3f4` (`tempo_user.email_mfa_enabled_at`, `email_otp`); pre-deploy dump `~/tempo-backups/tempo-pre-emailmfa-20261004-092502.dump`, rollback images `...:rollback-20261004-092502` (older code ignores the new column/table); backend suite 419 passed (capacity tests excluded); smoke passed. SMTP account for the platform was loaded by an operator on 4 Oct 2026 and a platform-admin invitation email was accepted by the mail server and received; email codes themselves have not been exercised by a person against the live mailbox yet.
 - 4 Oct 2026 (`1140f43`, platform SMTP): Platform console → Email, encrypted SMTP account, test connection / test email, message log without bodies, best-effort invitation emails; additive migration `f8a9b0c1d2e3` (`smtp_config`, `email_message` with row security); pre-deploy dump `~/tempo-backups/tempo-pre-smtp-20261004-073058.dump`, rollback images `tempo-api:rollback-20261004-073058` and `tempo-tempo_frontend:rollback-20261004-073058` (re-tag to `:local`/`:latest` and `docker compose up -d`; the new tables are additive and unused by older code); backend suite 413 passed (capacity tests excluded, known load-sensitive); smoke passed. **No SMTP account is stored yet** in this database: it is loaded by an operator with `docker exec -i tempo_backend python -m app.cli set-smtp ... --password-stdin`, or typed into the console. No email has been sent from this system; real delivery is unverified until then.
@@ -53,7 +83,7 @@ The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database 
 - Backup/restore drill: one manual `pg_dump`/`pg_restore` of `tempo` into a scratch database on 1 Oct 2026; row counts matched. No schedule, off-host copy or timed recovery yet.
 
 ## Known operational gaps
-No automated backups; no secret vault; database connection not TLS; one host, no failover; the capacity test is not part of CI; the demo tenant `ensemble_solutions` (synthetic data, account `tempo.admin`) is the only tenant.
+No automated backups; no secret vault; database connection not TLS; one host, no failover; the capacity test is not part of CI; the demo tenant `ensemble_solutions` (synthetic data, account `tempo.admin`) is the only tenant. Order-driven planning (`6723cb0`): neither committing a run nor releasing a commitment nor confirming order completion has console UI yet — these are API-only (`input.committed`, `POST /v1/runs/{id}/release-commitment`, `POST /v1/orders/{id}/complete`); XLSX workbook upload is also API-only (`POST /v1/imports/xlsx/inspect`/`stage`), and its compatibility with Arch's actual v1/v2 source files is unverified (see `docs/order-driven-planning.md`).
 
 ## Frontend release: landing pages and UI refresh
 
