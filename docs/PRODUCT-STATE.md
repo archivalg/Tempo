@@ -6,9 +6,9 @@ or **Planned**, and points to the evidence (a test, a file, a screenshot, a live
 asserting it. Where this document and an older one disagree, **this document wins** for current
 status; the older document's own history is kept, not deleted (see each section's links).
 
-- **Deployed revision**: `6723cb0` (code) / `168c7d8` (this doc's own deployment-record commit) on
-  branch `build/order-driven-planning`, live at `https://tempo.ensemblesolutions.com.au/`.
-  Full detail, migration head, rollback procedure: [`DEPLOYMENT.md`](DEPLOYMENT.md).
+- **Deployed revision**: `a637bb7` on branch `build/order-driven-planning`, live at
+  `https://tempo.ensemblesolutions.com.au/`. Full detail, migration head, rollback procedure:
+  [`DEPLOYMENT.md`](DEPLOYMENT.md).
 - **This branch is not yet merged to `main`.** "Deployed" means *this branch's head is what is
   actually running*, not that the work has passed a merge/release gate. Treat "Deployed" and
   "on `main`" as two different questions throughout this document.
@@ -58,7 +58,7 @@ and review its result → capture attendance → report variance → reconcile.
 
 Status key: **Deployed** (running at the URL above) · **Branch-only** (committed on
 `build/order-driven-planning`, not deployed — N/A here, everything on this branch IS deployed as of
-`6723cb0`; this status would apply to future uncommitted/unreleased work) · **API-only** (reachable
+`a637bb7`; this status would apply to future uncommitted/unreleased work) · **API-only** (reachable
 over HTTP, no console UI) · **Console** (has a console page) · **Planned** (not built).
 
 ### 2.1 Core forecast-driven planning (pre-existing, all Deployed, all Console)
@@ -477,8 +477,9 @@ tempo_migrate`; the one-shot job's `restart: "no"` means it will not silently re
 
 ## 10. Verification and roadmap
 
-**Latest deployed revision**: `6723cb0` (`168c7d8` for this doc's own deployment-record commit), live
-at `https://tempo.ensemblesolutions.com.au/`, migration head `d8e9f0a1b2c3`.
+**Latest deployed revision**: `a637bb7`, live at `https://tempo.ensemblesolutions.com.au/`, migration
+head `e9f0a1b2c3d4`. Full deployment record: `docs/DEPLOYMENT.md`'s 11 Oct 2026 entry (shared worker
+commitments + remaining browser workflows).
 
 **Backend test suite**: 524 passed (`pytest -q`, real PostgreSQL, non-owner `tempo_app` role,
 `tests/test_capacity.py` included — it was investigated and found to have no exclusion mechanism;
@@ -494,6 +495,18 @@ repeated completion confirmation past an order's own quantity, shown as reported
 than double-counted. Screenshots: `docs/screenshots/order-fulfillment-*.png`,
 `docs/screenshots/xlsx-upload-result.png`, `docs/screenshots/order-partial-completion.png`,
 `docs/screenshots/order-full-completion.png`.
+
+**Live-deployment evidence** (11 Oct 2026, against the production URL, using a clearly-labelled
+verification order `DEPLOY-VERIFY-SHARED-RES-1`, left in place as evidence — no delete endpoint
+exists): CSV upload of a process template/steps/order; a draft `order_fulfillment` run showing
+`committed: false` and, new this deploy, its own `request` echoed back by `GET /v1/runs/{id}`;
+committing by resubmitting that stored request with `committed: true` (the console's own "commit this
+plan" action) reaching `committed: true`; confirming partial completion (5 of 20 units); releasing the
+commitment and seeing the new `released_worker_commitments` field list every worker/window the run had
+reserved, with the order's available-for-planning quantity returning to 15 while `fulfilled_units`
+stayed at 5 (release never touches actual completion); confirming the remaining 15 units, reaching
+`status: completed` with outstanding and available-for-planning both 0. Full detail:
+`docs/DEPLOYMENT.md`'s 11 Oct 2026 verification-record entry.
 
 **Known gaps, prioritised**:
 

@@ -8,11 +8,11 @@ For what the deployed revision actually *does* (capability by capability, with e
 
 | Item | Value |
 |---|---|
-| Source revision of the running code | `6723cb0` on `build/order-driven-planning` (images built 11 Oct 2026 from a clean checkout of that commit; working tree was clean at build time). |
+| Source revision of the running code | `a637bb7` on `build/order-driven-planning` (images built 11 Oct 2026 from a clean checkout of that commit; working tree was clean at build time). |
 | Backend | container `tempo_backend`, image `tempo-api:local`, host port **8007** → 8000, runs as non-owner role `tempo_app` |
 | Frontend | container `tempo_frontend`, host port **3007** → 80 |
 | Database | container `tempo_postgres` (postgres:16), host `127.0.0.1:5439`, database `tempo`, roles `tempo_owner` (migrations) / `tempo_app` (runtime, no BYPASSRLS), volume `tempo_tempo_pgdata` |
-| Migration head | **`d8e9f0a1b2c3`** (read from `alembic_version` in database `tempo`) |
+| Migration head | **`e9f0a1b2c3d4`** (read from `alembic_version` in database `tempo`) |
 | Migration job | `tempo_migrate` (one-shot, owner role, `alembic upgrade head`) |
 | Redis | not used (6386 reserved) |
 | Dev identity picker | **OFF** in the deployed stack (`TEMPO_DEV_IDP_ENABLED=false`); password sign-in only |
@@ -40,6 +40,44 @@ Never use `docker compose down --volumes`. Never point the demo reset or browser
 The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database other than `tempo_e2e` / `tempo_test` unless `TEMPO_DEMO_RESET_DB=<name>` is set on purpose (tested).
 
 ## Verification record
+- **11 Oct 2026 (`a637bb7`, shared worker commitments + remaining browser workflows)**: one additive
+  migration applied cleanly, `d8e9f0a1b2c3` → `e9f0a1b2c3d4` (new `worker_commitment` table only, with
+  tenant+site RLS; `downgrade()` drops only what `upgrade()` created). Pre-deploy dump
+  `~/tempo-backups/tempo-pre-sharedresource-20261011-060841.dump` (verified readable via
+  `pg_restore --list`, 904 TOC entries); rollback images `tempo-api:rollback-20261011-060841` and
+  `tempo-tempo_frontend:rollback-20261011-060841` (the prior running revision, `6723cb0` / migration
+  head `d8e9f0a1b2c3` — rollback: retag both images to `:local`/`:latest`, `docker compose up -d
+  tempo_backend tempo_frontend`; no `alembic downgrade` needed, the new table is additive and ignored
+  by the older code). Backend suite 524 passed (0 failed — a site-scope RLS gap on the new
+  `worker_commitment` table, caught by `tests/test_rls.py`, was fixed before this deploy: the table
+  has a `site_id` column and needed the full site-scoped policy, not just tenant-scoped); browser e2e
+  8/8 passed across `order-fulfillment.spec.ts` (all 5 specs, including the 3 new ones: XLSX upload,
+  commit→partial-completion→release→full-completion, and repeated-completion-past-quantity, all
+  driving the real console UI) and `data-import.spec.ts` (updated to target the CSV file input by
+  label now that the Data page has two file inputs). Smoke test passed (full list below). Deployed-
+  revision checks: container health (`tempo_backend` healthy, `tempo_frontend`/`tempo_postgres` up),
+  `docker exec tempo_backend grep WorkerCommitment app/models/orders.py` confirms the running image is
+  this revision, migration head read directly from `alembic_version` in database `tempo` matches
+  `e9f0a1b2c3d4`. Live workflow verification against the production database and UI's own API
+  contracts (clearly-labelled order `DEPLOY-VERIFY-SHARED-RES-1`, process `deploy_verify_sr`, left in
+  place as evidence — no delete endpoint exists): CSV upload of process template/steps/order; a draft
+  `order_fulfillment` run (`committed: false`, `request` now echoed by `GET /v1/runs/{id}` as the
+  console's "commit this plan" action needs); committing by resubmitting that same stored request with
+  `committed: true` (`committed: true` on the new run, exactly what the console's `recommitRun` does);
+  confirming partial completion (5 of 20 units, `fulfilled_units` advanced, `committed_units`
+  unaffected); releasing the commitment (`released_worker_commitments` — the new field — listed every
+  worker/window this run had reserved, order availability returned to 15 while `fulfilled_units` stayed
+  5, proving release never touches actual completion); confirming the remaining 15 units, reaching
+  `status: completed` with `outstanding_quantity`/`available_for_planning` both 0. The shared-resource
+  conflict check itself (a committed order run vs. a published roster) is covered by
+  `tests/test_shared_resource_conflicts.py` rather than repeated live, since it needs a second,
+  independently-scheduled roster to conflict against. **Equipment commitments remain explicitly out of
+  scope** (no other run type allocates named equipment, so there is no cross-run-type conflict to
+  resolve — see `docs/order-driven-planning.md`). **Source-workbook compatibility with Arch's actual
+  v1/v2 files and the Bluegum sample workbook(s) remains explicitly unverified and the exact files have
+  not been supplied to this programme** (checked: no file matching those names exists anywhere in this
+  repository or host, and this programme has no Google Drive access) — see
+  `docs/order-driven-planning.md`'s ledger for the exact missing-input statement.
 - **11 Oct 2026 (`6723cb0`, order-driven labour planning — order-driven demand, personal/day rates,
   indirect coverage, dependencies, equipment, congestion/staging, grade/award costing, committed-vs-
   fulfilled backlog, XLSX workbook import)**: ten additive migrations applied cleanly,
@@ -84,7 +122,7 @@ The demo reset (`bootstrap-ensemble-demo --reset`) now **refuses** any database 
 - Backup/restore drill: one manual `pg_dump`/`pg_restore` of `tempo` into a scratch database on 1 Oct 2026; row counts matched. No schedule, off-host copy or timed recovery yet.
 
 ## Known operational gaps
-No automated backups; no secret vault; database connection not TLS; one host, no failover; the capacity test is not part of CI; the demo tenant `ensemble_solutions` (synthetic data, account `tempo.admin`) is the only tenant. Order-driven planning (`6723cb0`): neither committing a run nor releasing a commitment nor confirming order completion has console UI yet — these are API-only (`input.committed`, `POST /v1/runs/{id}/release-commitment`, `POST /v1/orders/{id}/complete`); XLSX workbook upload is also API-only (`POST /v1/imports/xlsx/inspect`/`stage`), and its compatibility with Arch's actual v1/v2 source files is unverified (see `docs/order-driven-planning.md`).
+No automated backups; no secret vault; database connection not TLS; one host, no failover; the capacity test is not part of CI; the demo tenant `ensemble_solutions` (synthetic data, account `tempo.admin`) is the only tenant. Order-driven planning (`a637bb7`): committing a run, releasing a commitment, confirming order completion and XLSX workbook upload now all have dedicated console UI (see `docs/order-driven-planning.md`'s "Shared-resource conflicts and remaining browser workflows" section); XLSX compatibility with Arch's actual v1/v2 source files and the Bluegum sample workbook(s) remains unverified — the exact files have not been supplied to this programme.
 
 ## Frontend release: landing pages and UI refresh
 
