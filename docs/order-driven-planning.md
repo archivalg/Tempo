@@ -586,6 +586,20 @@ real `/v1/optimisations/order_fulfillment` → `/v1/runs/{id}` path).
 
 ### Explicitly not done
 
+> **[Corrected 11 Oct 2026 — several of the bullets below are now stale; see `docs/PRODUCT-STATE.md` for
+> the current, consolidated status.]** Resolved by later passes in this document: hybrid demand mode
+> (now implemented — "Stage 2 — delivered"/"Integration increment" above); personal weekly availability
+> windows, including the overnight-boundary case (now implemented and bug-fixed — "Fifth pass",
+> `test_personal_weekday_window_rejects_outside_shift_but_admits_matching_overnight_shift`);
+> `position_grade` import (now a `workers` CSV/XLSX field); staging violations feeding back into
+> scheduling (now hold-back/reschedule, not just reported — "Integration increment" priority 3);
+> congestion's integration-test coverage (now present — `test_congestion_reduces_capacity_in_an_
+> integrated_run`); a dependent step waiting for the next shift instead of the next scheduling interval
+> (now `SCHEDULING_INTERVAL_MINUTES = 60`). **Still accurate**: the employment_type fill-priority scope
+> is NOT inert (it is actively used — only `customer` scope is rejected); shortfall reason codes remain
+> the coarser four-code set; the scheduler remains a greedy, non-MILP, interval-granularity allocator
+> (an intentional design choice, not a defect).
+
 - **No hybrid demand mode.** This was and remains the single biggest gap against the brief's original
   ask ("plan labour from known orders... while retaining forecasting"). `order_fulfillment` is its own
   run type with its own worker pool accounting; it does not know about `workforce_mix`'s forecast-driven

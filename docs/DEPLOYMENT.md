@@ -2,6 +2,7 @@
 
 This is the single place that says what is running. When it disagrees with `build-progress.md` (a historical ledger), this file wins.
 Update it whenever the deployed stack changes. Last verified: **11 October 2026**, host `opc`, public name `https://tempo.ensemblesolutions.com.au/`.
+For what the deployed revision actually *does* (capability by capability, with evidence), see [`PRODUCT-STATE.md`](PRODUCT-STATE.md).
 
 ## What is running
 

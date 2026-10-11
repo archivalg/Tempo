@@ -28,7 +28,9 @@ This roadmap replaces the older integration-led roadmap as the delivery priority
 
 ## 2. Current baseline and truthful status
 
-Baseline reviewed: original main `03e4b58`; build branch through `fa32d77`.
+Baseline reviewed: original main `03e4b58`; build branch through `fa32d77`. **This table is a dated
+snapshot, not continuously maintained** — for the current, consolidated status of every module as of
+11 Oct 2026, see [`PRODUCT-STATE.md`](PRODUCT-STATE.md).
 
 | Capability | Current evidence | Outstanding before acceptance |
 |---|---|---|
@@ -169,21 +171,30 @@ Acceptance: a warehouse manager completes a weekly plan and daily attendance rev
 
 ### M3 extension — order-driven labour planning (9 Oct 2026, supersedes/expands the above)
 
+**[Updated 11 Oct 2026 — the table below was stale; see `docs/PRODUCT-STATE.md` for the current,
+consolidated status across the whole product, not only this extension.]**
+
 Plan labour from known orders, tasks, deadlines, real shifts and available people, while retaining
-forecast-only planning and the cost/reporting items above. Staged delivery (Stage 0 code assessment
-complete; Stage 1–2 are the first operational increment; Stage 3–4 follow once demonstrated):
+forecast-only planning and the cost/reporting items above. Deployed at `https://tempo.ensemblesolutions.com.au/`
+(revision `6723cb0`, `build/order-driven-planning`, not yet merged to `main`):
 
 | Stage | Scope | Status |
 |---|---|---|
 | 0 | Code assessment and versioned data-contract design | **Accepted** |
-| 1 | Import foundation, operating calendars, versioned shift templates/breaks, availability | **Partial** |
-| 2 | Order/process-template workload, personal activity rates, indirect headcount coverage, unit conversion | **Partial** |
-| 3 | Priorities, absenteeism (in the core plan), equipment pools, dependencies, headcount limits | **Partial** |
-| 4 | Congestion/off-task loss, staging capacity, grade-aware costing, forecasting improvements | **Partial** |
+| 1 | Import foundation, operating calendars, versioned shift templates/breaks, availability | **Accepted** |
+| 2 | Order/process-template workload, personal activity rates, indirect headcount coverage, unit conversion | **Accepted** |
+| 3 | Priorities, absenteeism (in the core plan), equipment pools, dependencies, headcount limits | **Accepted** |
+| 4 | Congestion/off-task loss, staging capacity, grade-aware costing | **Accepted** |
 
-Full scope, the Stage 0 field-support matrix, and the Stage 1–2 implementation approach are recorded in
-[Order-driven labour planning](order-driven-planning.md). Do not mark any stage accepted without the
-acceptance scenarios in that document demonstrated and evidenced, per this roadmap's status rules.
+All 17 of Arch's original requirements are **Accepted**, each with a specific, named residual
+limitation (none silently claimed complete) — see the acceptance ledger in
+[Order-driven labour planning](order-driven-planning.md) or the condensed version in
+`docs/PRODUCT-STATE.md` §2.2. The largest remaining gaps are stated there and in
+`docs/PRODUCT-STATE.md` §10: actual compatibility with Arch's supplied v1/v2 workbook files is
+unverified (fixture-tested import support only); the committed/release/actual-completion plan
+lifecycle and XLSX upload have no console UI yet (API-only); `order_fulfillment` does not share a
+worker pool with the ten forecast-driven run types. "Forecasting improvements" from Stage 4's original
+scope were not pursued — this extension focuses on order-driven demand, not forecast quality.
 
 ## 8. M4 and M5 — two external workforce connections
 

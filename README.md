@@ -7,6 +7,10 @@ Intelligence pack.
 
 ## Start here
 
+- **`docs/PRODUCT-STATE.md` — what Tempo actually does today**, for anyone who wants the current
+  picture in one place: capability-by-capability status (deployed/API-only/console/planned), customer
+  setup, data imports, planning, plan lifecycle, other modules, architecture, operations, verification
+  evidence and a practical walkthrough. Start here for a review or acceptance check.
 - `docs/roadmap.md` — the delivery plan and milestone status (what is open, partial, blocked or accepted).
 - `docs/DEPLOYMENT.md` — what is running now: revision, ports, migration head, how to deploy and verify.
 - `docs/build-progress.md` — the historical build ledger (evidence per feature; stale statements are marked).
