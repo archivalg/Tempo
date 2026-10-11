@@ -31,7 +31,7 @@ test('load workload totals from a spreadsheet with your own column names, then u
   const [tpl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /Download the template/ }).click()])
   expect(tpl.suggestedFilename()).toBe('tempo-template-bulk.csv')
 
-  await page.locator('input[type=file]').setInputFiles({ name: 'sydney-june.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
+  await page.getByLabel('CSV file').setInputFiles({ name: 'sydney-june.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
   await expect(page.getByLabel('Column for site')).toHaveValue('Location')         // matched from a synonym, not by guesswork
   await expect(page.getByLabel('Column for units')).toHaveValue('Quantity')
   await page.getByRole('button', { name: 'Check the file' }).click()
@@ -49,7 +49,7 @@ test('load workload totals from a spreadsheet with your own column names, then u
 
   // the same file again changes nothing
   await result.getByRole('button', { name: 'Load another file' }).click()
-  await page.locator('input[type=file]').setInputFiles({ name: 'sydney-june.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
+  await page.getByLabel('CSV file').setInputFiles({ name: 'sydney-june.csv', mimeType: 'text/csv', buffer: Buffer.from(CSV) })
   await page.getByRole('button', { name: 'Check the file' }).click()
   await expect(page.getByText('You have already sent this exact file')).toBeVisible()
 

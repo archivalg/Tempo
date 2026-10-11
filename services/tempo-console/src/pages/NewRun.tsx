@@ -21,11 +21,16 @@ export function NewRunPage() {
   const [windowStart, setWindowStart] = useState(isoInDays(0))
   const [windowEnd, setWindowEnd] = useState(isoInDays(7))
   const [objectiveProfile, setObjectiveProfile] = useState<ObjectiveProfile>('balanced')
+  const [committed, setCommitted] = useState(false)
+  const [demandMode, setDemandMode] = useState<'known_orders' | 'forecast_only' | 'hybrid'>('known_orders')
+  const [forecastBasis, setForecastBasis] = useState<'total' | 'additional'>('total')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const isOrderFulfillment = runType === 'order_fulfillment'
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
+    if (submitting) return
     setSubmitting(true)
     setError(null)
     try {
@@ -38,6 +43,7 @@ export function NewRunPage() {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         bucketMinutes: 60,
         objectiveProfile,
+        ...(isOrderFulfillment ? { committed, demandMode, ...(demandMode === 'hybrid' ? { forecastBasis } : {}) } : {}),
       })
       navigate(`/runs/${response.run_id}`)
     } catch (err) {
@@ -93,6 +99,38 @@ export function NewRunPage() {
             ))}
           </select>
         </label>
+        {isOrderFulfillment && (
+          <div className="tp-stack" style={{ border: '1px solid var(--tp-border, #ddd)', borderRadius: 8, padding: 12 }}>
+            <div className="tp-cols2">
+              <label className="tp-field">
+                Demand basis
+                <select value={demandMode} onChange={(e) => setDemandMode(e.target.value as typeof demandMode)}>
+                  <option value="known_orders">Known orders only</option>
+                  <option value="forecast_only">Forecast only</option>
+                  <option value="hybrid">Known orders + forecast for the rest</option>
+                </select>
+              </label>
+              {demandMode === 'hybrid' && (
+                <label className="tp-field">
+                  Forecast basis
+                  <select value={forecastBasis} onChange={(e) => setForecastBasis(e.target.value as typeof forecastBasis)}>
+                    <option value="total">Forecast is the total demand</option>
+                    <option value="additional">Forecast is on top of known orders</option>
+                  </select>
+                </label>
+              )}
+            </div>
+            <label className="tp-field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <input type="checkbox" checked={committed} onChange={(e) => setCommitted(e.target.checked)} />
+              Commit this plan
+            </label>
+            <p className="tp-muted" style={{ margin: 0, fontSize: 12.5 }}>
+              {committed
+                ? 'A committed run reserves the workers and order quantity it allocates. No other committed run or published roster can reuse that reserved time until this plan is released. Use this once you are ready to act on the plan.'
+                : 'A draft run does not reserve anything — it is safe to run as many times as you like to compare options. Nothing is committed until you create a committed run.'}
+            </p>
+          </div>
+        )}
         {error ? <Banner tone="bad" title="Could not create run">{error instanceof Error ? error.message : String(error)}</Banner> : null}
         <button className="tp-btn primary" type="submit" disabled={submitting}>
           {submitting ? 'Submitting...' : 'Create run'}

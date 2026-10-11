@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, Query
@@ -14,6 +15,7 @@ from app.core import rosters as svc
 from app.dependencies import get_db, get_request_context
 from app.errors import PolicyConflict, ScopeError
 from app.models.canonical import OptimisationPolicy, ShiftAssignment, Worker
+from app.models.orders import WorkerCommitment
 from app.models.rosters import RosterEvent, RosterVersion
 from app.schemas.runs import RunRequest
 from app.schemas.tenancy import RequestContext
@@ -325,6 +327,20 @@ def publish(version_id: str, ctx: RequestContext = Depends(get_request_context),
         raise PolicyConflict("the roster changed after approval; approval invalidated — re-submit")
     if svc.board(db, ctx, site, v)["hard_conflicts"]:
         raise PolicyConflict("hard conflicts exist; the roster cannot be published")
+    # Shared-resource conflicts: a committed order_fulfillment run may already have claimed one of
+    # this roster's workers for an overlapping window (app.models.orders.WorkerCommitment). Publishing
+    # over that would double-book a real person — refused, named explicitly, not silently allowed.
+    # A worker can hold several active commitments at once (from separate runs, different windows),
+    # so every claim for a worker must be checked — a dict keyed by worker_id would silently keep only
+    # the last one and miss a genuine conflict against an earlier claim.
+    active_claims: dict[str, list[tuple[datetime, datetime]]] = defaultdict(list)
+    for wc in db.scalars(select(WorkerCommitment).where(WorkerCommitment.tenant_id == ctx.tenant_id, WorkerCommitment.site_id == v.site_id, WorkerCommitment.released_at.is_(None))):
+        active_claims[wc.worker_id].append((wc.start_at, wc.end_at))
+    for s in shifts:
+        for claim_start, claim_end in active_claims.get(s.worker_id, []):
+            if claim_start < s.end_at and s.start_at < claim_end:
+                raise PolicyConflict(f"worker '{s.worker_id}' is already committed to order-driven work from {claim_start.isoformat()} to {claim_end.isoformat()} — "
+                                     "this overlaps a shift in this roster; release that commitment or adjust the roster before publishing")
     v.state = "publishing"
     svc.event(db, ctx, v, "publishing", {"idempotency_key": idempotency_key})
     ws, we = svc.window(site, v.week_start, v.days)

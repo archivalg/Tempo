@@ -40,7 +40,7 @@ from app.core.idempotency import IdempotencyConflict, hash_payload, idempotency_
 from app.core.policy import resolve_policy
 from app.dependencies import get_db, get_request_context, require_idempotency_key
 from app.errors import AuthForbidden, DataNotReady, PolicyConflict, RunNotFound, RunTerminal, RunTypeNotImplemented, ScopeError
-from app.models.orders import Order, OrderCommitment
+from app.models.orders import Order, OrderCommitment, WorkerCommitment
 from app.models.runs import (
     OptimisationRun,
     OptimisationRunCustomer,
@@ -457,6 +457,14 @@ def get_run(
             "completed_at": run.completed_at,
             "supersedes_run_id": run.supersedes_run_id,
             "recommendation_id": recommendation.recommendation_id if recommendation else None,
+            # Surfaces whether THIS run's own request asked to commit — the console needs this to
+            # offer "release commitment" only where it could possibly apply, and to distinguish a
+            # draft (which never touched Order.committed_units) from a committed run.
+            "committed": bool((run.request or {}).get("input", {}).get("committed")),
+            # The original request body, so the console can offer "commit this plan" for a completed
+            # draft order_fulfillment run by resubmitting the same scope/window/configuration with
+            # input.committed flipped to true, rather than asking the user to re-enter everything.
+            "request": run.request,
         }
     return {
         "run_id": run.run_id,
@@ -506,8 +514,12 @@ def release_commitment(
             order.committed_units = max(0.0, order.committed_units - c.quantity)  # ONLY committed_units — fulfilled_units and status are untouched, by design
         c.released_at = datetime.now(timezone.utc)
         released.append({"order_id": c.order_id, "quantity": c.quantity})
+    released_workers = []
+    for wc in db.scalars(select(WorkerCommitment).where(WorkerCommitment.tenant_id == context.tenant_id, WorkerCommitment.run_id == run_id, WorkerCommitment.released_at.is_(None))):
+        wc.released_at = datetime.now(timezone.utc)
+        released_workers.append({"worker_id": wc.worker_id, "start_at": wc.start_at.isoformat(), "end_at": wc.end_at.isoformat()})
     db.flush()
-    return {"run_id": run_id, "released": released}
+    return {"run_id": run_id, "released": released, "released_worker_commitments": released_workers}
 
 
 @router.post("/run-comparisons")

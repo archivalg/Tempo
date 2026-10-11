@@ -106,6 +106,32 @@ export interface RunDetail {
   created_at?: string
   input_snapshot_id?: string
   recommendation_id?: string | null
+  // order_fulfillment only: whether THIS run's own request asked to commit (app.api.v1.runs.get_run).
+  committed?: boolean
+  // The original request body (app.api.v1.runs.get_run), used to resubmit a draft as a committed run.
+  request?: Record<string, unknown>
+}
+
+// app.solvers.order_workload.solve_order_fulfillment's result shape (order_fulfillment runs only).
+export interface OrderFulfillmentOrder {
+  order_ref: string
+  source: 'order' | 'forecast'
+  despatch_due: string
+  quantity: number
+  on_time: boolean
+  shortfall_quantity: number
+  steps: { sequence: number; activity: string; function: string | null; flow: string | null; release_at: string | null; completed_at: string | null; shortfall_quantity: number; shortfall_reason: string | null }[]
+}
+export interface OrderFulfillmentResult {
+  orders: OrderFulfillmentOrder[]
+  demand_mode: string
+  kpis: Record<string, unknown>
+  indirect_coverage_gaps: unknown[]
+  headcount_violations: unknown[]
+  equipment_violations: unknown[]
+  staging_delays: unknown[]
+  operating_hours_violations: unknown[]
+  orders_outside_horizon: { order_ref: string; order_received: string; despatch_due: string }[]
 }
 
 // Mirrors app/api/v1/runs.py's compare_runs response — one KPI object per

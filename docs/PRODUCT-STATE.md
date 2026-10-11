@@ -38,7 +38,7 @@ deployment.
   workforce mix, named roster, training coverage, leave/RDO, intraday reallocation, team composition,
   3PL margin, scenario) plus the order-driven scheduler (`order_fulfillment`) added this branch.
 - **Data ingestion** — CSV import (deployed, mature) and XLSX workbook import (deployed this branch,
-  API-only, fixture-tested — see §4).
+  Console, fixture-tested — see §4).
 - **Rostering** — versioned roster drafts, validation, approval, publication, reconciliation.
 - **Time & attendance** — native kiosk PIN/NFC capture, corrections, timesheets, variance reporting.
 - **External connections** — Deputy, UKG Pro WFM, UKG Ready, and a generic WMS ingestion path.
@@ -114,7 +114,7 @@ run type `order_fulfillment` (draft only — see §6 for why a committed run nee
 | Capability | Status | Evidence |
 |---|---|---|
 | CSV upload, 32 master/forecast/transaction/bulk entities, `CONTRACT_VERSION` 1.8 | **Deployed, Console** (`/data`) | [`data-contracts.md`](data-contracts.md) (regenerated 11 Oct 2026 from the live contract definitions) |
-| XLSX workbook upload (multi-sheet, v1/v2 field adapters, atomic apply) | **Deployed, API-only** | `tests/test_xlsx_import.py`; live-verified `POST /v1/imports/xlsx/inspect` against `https://tempo.ensemblesolutions.com.au/` on 11 Oct 2026 |
+| XLSX workbook upload (multi-sheet, v1/v2 field adapters, atomic apply) | **Deployed, Console** | `tests/test_xlsx_import.py`; `e2e/order-fulfillment.spec.ts` drives the console upload UI end to end |
 | **Actual Arch v1/v2 workbook compatibility** | **Unverified** | See §4 — this is fixture-tested import support, not confirmed compatibility with the real files, which have not been supplied to this programme |
 
 ### 2.4 Plan lifecycle (committed vs. actual)
@@ -122,10 +122,11 @@ run type `order_fulfillment` (draft only — see §6 for why a committed run nee
 | Capability | Status | Evidence |
 |---|---|---|
 | Draft (non-committed) run | **Deployed, Console** | Default `input.committed` |
-| Committed run (`input.committed: true`) | **Deployed, API-only** | No console toggle exists |
-| Release/cancel a commitment | **Deployed, API-only** | `POST /v1/runs/{run_id}/release-commitment`, no console button |
-| Explicit actual-completion confirmation | **Deployed, API-only** | `POST /v1/orders/{order_id}/complete`, no console button |
-| Outstanding vs. available-for-planning quantities | **Deployed, API-only** | `GET /v1/orders/{order_id}` |
+| Committed run (`input.committed: true`) | **Deployed, Console** | "Commit this plan" checkbox (New Run) and action (run detail) |
+| Release/cancel a commitment | **Deployed, Console** | "Release this commitment" button, run detail — `POST /v1/runs/{run_id}/release-commitment` |
+| Explicit actual-completion confirmation | **Deployed, Console** | Per-order lifecycle panel, run detail — `POST /v1/orders/{order_id}/complete` |
+| Outstanding vs. available-for-planning quantities | **Deployed, Console** | Per-order lifecycle panel, run detail — `GET /v1/orders/{order_id}` |
+| Shared worker commitments (order-driven ↔ roster publish) | **Deployed** | New `WorkerCommitment` ledger; `tests/test_shared_resource_conflicts.py` |
 | Automatic actuals-import correlation | **Planned** | Not built; explicit completion is the only supported path today |
 
 ### 2.5 Other modules (see §7 for detail; none assumed complete)
@@ -204,7 +205,7 @@ content-based "ignore the template's example row" feature was built, found to ri
 customer data, and deliberately reverted — see `order-driven-planning.md`'s "third pass" for the full
 account of that decision.
 
-### 4.2 XLSX workbook (Deployed this branch, **API-only**, fixture-tested)
+### 4.2 XLSX workbook (Deployed this branch, Console, fixture-tested)
 
 `POST /v1/imports/xlsx/inspect` (read-only preview) and `POST /v1/imports/xlsx/stage` (atomic
 stage-and-apply across every recognised sheet, in dependency order, in one transaction — any sheet's
@@ -232,9 +233,10 @@ programme at any point. The exact places to check first once they are: `_DATA_SH
 `_adapt_work_standards` (v1/v2 column names and conversions) — all in
 `services/tempo-api/app/imports/xlsx.py`. Full narrative: `order-driven-planning.md`'s "Sixth pass".
 
-No console UI exists for XLSX upload; it was verified through a real authenticated browser session
-using `page.request` directly (`services/tempo-console/e2e/order-fulfillment.spec.ts`), not a upload
-button, because none exists yet.
+Console UI: `XlsxUploadWizard`, on Data → Load data, alongside the existing per-contract CSV wizard —
+file picker → per-sheet inspect preview (recognised/unrecognised, rows, missing required columns) →
+one "Load N sheets" action. Verified through a real authenticated browser session driving that UI
+(`services/tempo-console/e2e/order-fulfillment.spec.ts`), not a direct `page.request` call.
 
 ---
 
@@ -286,8 +288,12 @@ scheduled — never a silent, misleadingly-"complete" result.
 
 **Scheduler limitations, stated plainly**:
 - Not a MILP — a greedy allocator can produce a worse plan than a globally optimal one would.
-- The ten forecast-driven run types and `order_fulfillment` do **not** share a worker pool; running
-  both for overlapping windows at one site risks double- or under-counting labour.
+- The ten forecast-driven run types and `order_fulfillment` do **not** share one scheduling pass or
+  worker pool for demand purposes; running both for overlapping windows at one site can still double-
+  or under-count *demand*. What they now DO share is **resource reservation**: a committed
+  `order_fulfillment` run and a published roster both check the new `WorkerCommitment` ledger (and
+  `ShiftAssignment.status="committed"`), so neither can double-book a worker's actual time once the
+  other has committed/published — see §6.
 - Cross-day accounting for a step spanning a day boundary is an approximation.
 - `customer`-scoped fill priority is rejected at import, not implemented.
 - Automatic actuals correlation is not built (§6).
@@ -301,11 +307,15 @@ and fixed on this branch (`order-driven-planning.md`'s "Fifth pass"):
 
 1. **Scheduled** — any run, draft or committed, that completed. A *preview* of what capacity could do.
 2. **Committed** — `input.committed: true` on the run request. Advances `Order.committed_units`, a
-   **planned allocation** that stops a *later* run from re-scheduling the same labour. Nothing about
-   the physical world is asserted. **API-only** — no console toggle for `committed` exists.
+   **planned allocation** that stops a *later* run from re-scheduling the same labour, AND reserves
+   the workers it allocated (`WorkerCommitment`) against a published roster for the same site.
+   Nothing about the physical world is asserted. **Console**: a "commit this plan" checkbox on New
+   Run (`order_fulfillment` only), and a "Commit this plan" action on a completed draft run's detail
+   page (`/runs/{id}`), which resubmits the same request with `committed: true`.
 3. **Actually fulfilled** — `Order.fulfilled_units`, advanced **only** by an explicit
-   `POST /v1/orders/{order_id}/complete` call. The solver never writes it. **API-only** — no console
-   button exists.
+   `POST /v1/orders/{order_id}/complete` call. The solver never writes it. **Console**: a per-order
+   lifecycle panel on the run detail page showing outstanding/committed/available/fulfilled quantities,
+   with a quantity input and "Confirm completion" action.
 
 A later run's remaining backlog is `units − max(committed_units, fulfilled_units)` — whichever is
 larger already means "don't reschedule this", for its own reason. `GET /v1/orders/{order_id}` exposes
@@ -314,19 +324,24 @@ both `outstanding_quantity` (`units − fulfilled_units`, the real-world remaini
 specifically because they diverge whenever something is committed but not yet confirmed done.
 
 **Cancellation/replacement**: `POST /v1/runs/{run_id}/release-commitment` releases exactly what that
-run committed (tracked per-run via the `OrderCommitment` ledger), making the work available to a new
-commitment again — a previously-blocked overlapping commitment is allowed once released. Idempotent.
-**API-only.**
+run committed (tracked per-run via the `OrderCommitment` ledger) AND the `WorkerCommitment` rows it
+holds, making the work and the worker time available to a new commitment again — a previously-blocked
+overlapping commitment (order-driven or a roster publish) is allowed once released; actual completion
+(`fulfilled_units`) is never touched by a release. Idempotent. **Console**: a "Release this commitment"
+action on a committed run's detail page, reporting exactly how many order allocations and worker
+reservations were released.
 
 **Repeated commit requests**: the existing `Idempotency-Key` mechanism (unchanged, pre-existing)
 prevents a retried identical request from committing twice; verified for `order_fulfillment`
 specifically in `tests/test_committed_vs_fulfilled.py`.
 
-**Missing console workflows, named explicitly**: there is no UI to (a) mark a run committed instead of
-draft, (b) release a commitment, (c) confirm actual completion, or (d) see the
-outstanding/available-for-planning split. All four are exercised today only via direct API calls or
-(for verification) a real browser session's `page.request` calls bypassing any UI — see the live
-verification evidence in `DEPLOYMENT.md`'s 11 Oct 2026 entry.
+**Console workflows, now complete**: the console has dedicated UI to (a) mark a plan committed
+instead of draft, (b) release a commitment, (c) confirm actual completion, and (d) see the
+outstanding/committed/available-for-planning/fulfilled split per order — see
+`docs/order-driven-planning.md`'s "Shared-resource conflicts and remaining browser workflows" section
+for the full detail and `e2e/order-fulfillment.spec.ts` for the browser-session verification of all
+four. Workbook (.xlsx) upload (inspect → preview → atomic apply) also has dedicated console UI on
+Data → Load data, alongside the existing per-contract CSV wizard.
 
 **Automatic actuals correlation** (matching imported `WorkloadEvent` actuals back to an order
 automatically, instead of the explicit endpoint) is **Planned**, not built — explicit completion is
@@ -391,9 +406,10 @@ owning model file include `tenant`/`tempo_user`/membership+grant tables (identit
 `customer`/`zone`/`exception_case` (directory.py), `plan_definition`/`tenant_subscription`/
 `smtp_config` (billing.py), `worker_user_link`/`shift_offer`/`leave_request`/`push_device` (mobile.py),
 `maestro_connection`/`connector_checkpoint`/`ingestion_dead_letter` (connectors.py),
-`import_batch`/`import_row`/`import_mapping` (imports.py). Ten Alembic migrations added this branch,
-`f1a2b3c4d5e6` → `d8e9f0a1b2c3`, all additive (verified: every `drop_*` call lives only in each
-migration's own `downgrade()`).
+`import_batch`/`import_row`/`import_mapping` (imports.py), `worker_commitment` (new, cross-run-type
+worker reservation ledger — orders.py). Eleven Alembic migrations added this branch, `f1a2b3c4d5e6` →
+`e9f0a1b2c3d4`, all additive (verified: every `drop_*` call lives only in each migration's own
+`downgrade()`).
 
 **Configuration** (`app/config.py`, `Settings(BaseSettings)`, env prefix `TEMPO_`) — names only, no
 values: `env` (local/test/uat/production), `database_url`/`database_migration_url` (non-owner/owner DB
@@ -464,38 +480,38 @@ tempo_migrate`; the one-shot job's `restart: "no"` means it will not silently re
 **Latest deployed revision**: `6723cb0` (`168c7d8` for this doc's own deployment-record commit), live
 at `https://tempo.ensemblesolutions.com.au/`, migration head `d8e9f0a1b2c3`.
 
-**Backend test suite**: 520 passed (`pytest -q`, real PostgreSQL, non-owner `tempo_app` role,
+**Backend test suite**: 524 passed (`pytest -q`, real PostgreSQL, non-owner `tempo_app` role,
 `tests/test_capacity.py` included — it was investigated and found to have no exclusion mechanism;
 it is simply part of the normal suite).
 
-**Browser evidence**: `services/tempo-console/e2e/order-fulfillment.spec.ts`, 3/3 passed —
-upload→validate→run→results (happy path), a deliberately constrained run showing an explained
-`feasible_with_slack` shortfall rather than a silent success, and XLSX upload + explicit order
-completion through a real authenticated browser session (`page.request`, since neither has console
-UI). Screenshots: `docs/screenshots/order-fulfillment-*.png`.
-
-**Live-deployment evidence** (11 Oct 2026, against the production URL, using a clearly-labelled
-verification order `DEPLOY-VERIFY-1`, left in place as evidence — no delete endpoint exists): login,
-workbook preview, a draft order-fulfillment run, and the full commit → release → explicit-completion
-sequence all confirmed working against the real deployed database. Full detail:
-`DEPLOYMENT.md`'s 11 Oct 2026 verification-record entry.
+**Browser evidence**: `services/tempo-console/e2e/order-fulfillment.spec.ts` drives every order-driven
+workflow through a real signed-in browser session against the console UI itself (not raw
+`page.request` calls): upload→validate→run→results (happy path); a deliberately constrained run
+showing an explained `feasible_with_slack` shortfall rather than a silent success; workbook (.xlsx)
+upload through the console's own upload wizard; draft → commit → partial completion → release
+(completion untouched by the release) → full completion, all through the run-detail page's UI; and a
+repeated completion confirmation past an order's own quantity, shown as reported truthfully rather
+than double-counted. Screenshots: `docs/screenshots/order-fulfillment-*.png`,
+`docs/screenshots/xlsx-upload-result.png`, `docs/screenshots/order-partial-completion.png`,
+`docs/screenshots/order-full-completion.png`.
 
 **Known gaps, prioritised**:
 
 1. **Actual Arch v1/v2 workbook compatibility is unverified** — the single largest open item against
-   the supplied brief. Needs the real files.
-2. **No console UI for the committed/release/complete plan lifecycle or for XLSX upload** — every one
-   of these is API-only today. The highest-value next console work, since the underlying capability is
-   already built and tested.
-3. **`order_fulfillment` and the ten forecast-driven run types do not share a worker pool** — running
-   both for overlapping windows at one site is unvalidated and risks double-/under-counting.
-4. **No automatic actuals-import correlation** — explicit completion is the only supported path to
+   the supplied brief. The exact files (Tempo v1/v2 templates, Bluegum samples) have not been supplied
+   to this programme; Google Drive is not reachable from here, and no file matching those names exists
+   anywhere in this repository or host. Only a programme-authored fixture built to the documented v1
+   layout has been exercised. Needed: the real files, by exact name.
+2. **`order_fulfillment` and the ten forecast-driven run types do not share a worker pool for demand
+   purposes** — running both for overlapping windows at one site can still double-/under-count
+   *demand* (though resource double-booking is now prevented — see §2.4's new shared-commitment row).
+3. **No automatic actuals-import correlation** — explicit completion is the only supported path to
    `fulfilled_units`.
-5. External connectors (Deputy/UKG/WMS) are real but uncertified against a live vendor sandbox; the
+4. External connectors (Deputy/UKG/WMS) are real but uncertified against a live vendor sandbox; the
    second connection (beyond Deputy) is still an open vendor choice (roadmap M4/M5).
-6. No automated/scheduled database backup; no secret vault; database connection is not TLS; single
+5. No automated/scheduled database backup; no secret vault; database connection is not TLS; single
    host, no failover (all pre-existing, unchanged by this branch).
-7. Shortfall reason codes remain coarser than the original brief's list (four codes, not a distinct
+6. Shortfall reason codes remain coarser than the original brief's list (four codes, not a distinct
    `insufficient_hours`/`unavailable_people`).
 
 ---
@@ -505,32 +521,28 @@ sequence all confirmed working against the real deployed database. Full detail:
 **What you can do through the browser today** (`https://tempo.ensemblesolutions.com.au/`, sign in as
 the demo tenant admin):
 1. `/data` → upload master data by CSV (workers, work standards, process templates/steps, orders,
-   rates, shifts, equipment, constraints — the full list in §3/§4.1).
-2. `/runs/new` → run type `order_fulfillment`, enter site ID(s) and a planning window → Create run.
-   This is always a **draft** — there is no commit toggle in the console.
+   rates, shifts, equipment, constraints — the full list in §3/§4.1), or by XLSX workbook (the
+   `XlsxUploadWizard` on the same page's "Load data" tab — pick a file, review the per-sheet preview,
+   "Load N sheets").
+2. `/runs/new` → run type `order_fulfillment`, enter site ID(s) and a planning window, optionally tick
+   "commit this plan" (reserves the workers/order quantity it allocates) → Create run.
 3. `/runs/:runId` → see the structured result: per-order steps, release/completion times, shortfall
    quantity and reason, KPIs (paid/productive hours, cost), `feasibility`, `missing_evidence`,
-   `operating_hours_violations`, `orders_outside_horizon`.
+   `operating_hours_violations`, `orders_outside_horizon`. A draft run offers "Commit this plan"; a
+   committed run offers "Release this commitment"; each order gets a lifecycle panel (outstanding/
+   committed/available-for-planning/fulfilled quantities) with a "Confirm completion" action.
 4. The same flow for any of the ten forecast-driven run types, plus the existing roster/attendance/
    reporting/billing/admin modules described in §7.
 
-**What currently requires the API** (no console UI exists yet):
-- XLSX workbook upload (`POST /v1/imports/xlsx/inspect`/`stage`).
-- Committing a plan (`input.committed: true` on the run request).
-- Releasing/cancelling a commitment (`POST /v1/runs/{run_id}/release-commitment`).
-- Confirming actual completion (`POST /v1/orders/{order_id}/complete`).
-- Reading the outstanding-vs-available-for-planning split (`GET /v1/orders/{order_id}`).
-
-A worked example of every API-only call above, including the exact request/response shapes, is in
-`order-driven-planning.md`'s "Walkthrough" section and this branch's test files
-(`tests/test_xlsx_import.py`, `tests/test_committed_vs_fulfilled.py`).
+A worked example of every call these actions make, including the exact request/response shapes, is in
+`order-driven-planning.md`'s "Walkthrough" and "Shared-resource conflicts and remaining browser
+workflows" sections and this branch's test files (`tests/test_xlsx_import.py`,
+`tests/test_committed_vs_fulfilled.py`, `tests/test_shared_resource_conflicts.py`).
 
 **Steps needed for full acceptance** (in priority order, matching §10's gap list):
 1. Supply the actual v1/v2 workbook files so source-file compatibility can be tested and confirmed,
    not just fixture-tested support.
-2. Decide whether the committed/release/complete/XLSX workflows need console UI before a pilot, or
-   whether API-only is acceptable for the first release.
-3. Decide the order-driven vs. forecast-driven worker-pool interaction policy for sites that might use
-   both.
-4. Confirm the automatic-actuals-correlation requirement is genuinely out of scope for this release
+2. Decide the order-driven vs. forecast-driven demand (not resource) interaction policy for sites that
+   might run both demand modes for overlapping windows.
+3. Confirm the automatic-actuals-correlation requirement is genuinely out of scope for this release
    (it is currently treated as a documented future enhancement, not a blocker).

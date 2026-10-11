@@ -7,6 +7,7 @@ import {
 import { useSite } from '../components/AppShell'
 import { SetupChecklist } from '../components/SetupChecklist'
 import { Result, UploadWizard } from '../components/UploadWizard'
+import { XlsxUploadWizard } from '../components/XlsxUploadWizard'
 import { Banner, Drawer, Empty, PageHead, Skeleton, Status } from '../components/ui'
 import { useTempoContext } from '../context/TempoContextProvider'
 import { fmtTime } from '../lib/format'
@@ -26,7 +27,12 @@ export default function DataPage() {
         {TABS.map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} aria-pressed={tab === k} onClick={() => go(k)}>{label}</button>)}
       </div>
       {tab === 'start' && <SetupChecklist />}
-      {tab === 'upload' && <UploadWizard key={`${initial?.dc}${initial?.entity}`} initial={initial} />}
+      {tab === 'upload' && (
+        <div className="tp-stack">
+          <UploadWizard key={`${initial?.dc}${initial?.entity}`} initial={initial} />
+          <XlsxUploadWizard />
+        </div>
+      )}
       {tab === 'history' && <History />}
       {tab === 'status' && <StatusTab />}
       {tab === 'api' && <ApiTab />}

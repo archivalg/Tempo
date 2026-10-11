@@ -689,6 +689,83 @@ browser whose `Intl.DateTimeFormat().resolvedOptions().timeZone` resolves to a r
 being handled — fixed by `_normalize_timezone_name`, with a regression test
 (`test_timezone_offset_string_is_normalized_instead_of_crashing`).
 
+## Shared-resource conflicts and remaining browser workflows (11 Oct 2026)
+
+Closes the two items left open after the Arch completion pass: order-driven and forecast-driven
+planning did not yet respect each other's worker commitments, and commit/release/confirm-completion/
+workbook-upload had no dedicated console UI (they were proven only via direct HTTP calls in
+`e2e/order-fulfillment.spec.ts`, noted there as "neither capability has dedicated console UI yet").
+
+**Shared-resource conflicts.** A new `WorkerCommitment` ledger (`app/models/orders.py`, migration
+`e9f0a1b2c3d4`) is the worker-time counterpart of the existing `OrderCommitment` ledger: when a
+COMMITTED `order_fulfillment` run allocates a worker to real time, that interval is persisted here
+(merged per worker) alongside the existing commitment. Two places now read it:
+- `solve_order_fulfillment` (`app/solvers/order_workload.py`) blocks a worker's committed
+  `WorkerCommitment` intervals AND any `ShiftAssignment` with `status="committed"` (roster's own
+  native committed-worker-time representation) the same way it already blocks dated leave —
+  reusing the existing `avail_blocks` mechanism rather than adding a parallel exclusion path. This
+  only activates for a COMMITTED run; a draft reuses capacity freely, as required.
+- Roster `publish()` (`app/api/v1/rosters.py`) now checks every shift in the version against active
+  `WorkerCommitment` rows for the same site before publishing, and raises `PolicyConflict` naming the
+  worker and the conflicting window if one overlaps — symmetric with order_fulfillment's own
+  commit-time check, applied at the moment a roster actually becomes a real commitment (publish), not
+  at draft/generation time.
+- `POST /v1/runs/{run_id}/release-commitment` now releases a run's `WorkerCommitment` rows alongside
+  its `OrderCommitment` rows, so cancelling or replacing a committed plan frees the worker time it
+  held without touching `Order.fulfilled_units` (actual completion is untouched by any commitment
+  change — enforced by `test_releasing_a_committed_order_run_lets_a_worker_be_rebooked`).
+
+Demand reconciliation (`Order.committed_units`/`fulfilled_units`) and resource reservation
+(`WorkerCommitment`/`ShiftAssignment`) are deliberately two separate mechanisms — a hybrid-demand run
+still reconciles orders exactly as before; this pass only adds a second, independent check so the
+same worker-hour cannot be claimed by two committed plans at once.
+
+New coverage in `tests/test_shared_resource_conflicts.py` (4 tests, all passing alongside the full
+pre-existing suite): a committed order run is blocked from double-booking a worker already on a
+published roster; the same for a partial-overlap and an overnight published shift; releasing a
+committed run's reservation lets the worker be rebooked; and a roster publish is blocked by an
+overlapping committed order run, then allowed once that commitment is released. Repeated-request
+idempotency for commitments was already covered by `tests/test_committed_vs_fulfilled.py` from an
+earlier pass and is unchanged.
+
+**Equipment is explicitly out of scope for this pass.** No run type other than `order_fulfillment`
+allocates named equipment, and `order_fulfillment`'s own existing `_check_committed_conflict`
+(`app/api/v1/runs.py`) already blocks a second committed `order_fulfillment` run from overlapping
+another in site and time window at all — which, as a side effect, already prevents two committed
+order-driven runs from double-booking equipment between them. There is no cross-run-type equipment
+conflict to resolve because no other run type touches `Equipment`/`EquipmentAssignment`. If a future
+run type is given named-equipment allocation, it will need the same treatment this pass gave workers.
+
+**Browser workflows.** The console now has dedicated UI for every action previously only reachable
+by direct HTTP call:
+- **Workbook (.xlsx) upload** (`XlsxUploadWizard`, mounted on Data → Load data, alongside the
+  existing per-contract CSV wizard): file picker → per-sheet inspect preview (recognised/unrecognised
+  sheets, rows, missing required columns) → one "Load N sheets" action that stages and applies every
+  recognised sheet atomically. A real per-sheet failure aborts the whole request (never a mixed
+  partial result), so the result view only ever reports success once reached.
+- **Commit a draft plan** (`RunDetail`): a completed `order_fulfillment` run shows a "Commitment"
+  panel; a draft offers "Commit this plan", which resubmits the run's own stored request
+  (`GET /v1/runs/{id}` now returns `request`) with `input.committed` forced true and navigates to the
+  new committed run, with copy noting capacity may have moved since the draft ran.
+- **Release/cancel a commitment**: the same panel offers "Release this commitment" for a committed
+  run, calling the existing `release-commitment` endpoint and reporting exactly how many order
+  allocations and worker reservations were released.
+- **Confirm partial or full actual completion**: each order in a run's result gets a lifecycle panel
+  (`getOrder`/`completeOrder`) showing total units, outstanding (not yet done), committed (held by a
+  plan), available for planning, and actually completed — then a quantity input and "Confirm
+  completion" action. A repeated confirmation past the order's own quantity is clamped server-side
+  and reported as `Confirmed 0 units completed`, never silently double-counted or hidden.
+- **New Run** gains a "commit this plan" checkbox and demand-mode/forecast-basis controls, shown only
+  for `order_fulfillment`, with inline copy explaining what committing actually reserves.
+- All new actions disable their trigger button while the request is in flight (no duplicate
+  submissions) and surface request failures through the existing `Banner`/`ApiError` pattern used
+  everywhere else in the console.
+
+`e2e/order-fulfillment.spec.ts` was extended to drive every one of these through a real signed-in
+browser session instead of raw `page.request` calls: workbook upload through the UI; draft → commit →
+partial completion → release (completion untouched by release) → full completion; and the
+repeated-completion-past-quantity case.
+
 ## Walkthrough (representative sample data)
 
 A customer can follow this exact sequence today (the same data the browser verification above used):
@@ -724,4 +801,7 @@ A customer can follow this exact sequence today (the same data the browser verif
 | Stage 2 (orders/process templates/task rates/unit conversion) | **Accepted** — deadline scheduling, personal/day rates, process precedence, unit conversion, equipment/zone, indirect coverage all enforced by one scheduler; hybrid forecast+order demand mode works; open-order backlog is now persisted (`order_.fulfilled_units`) and carried forward by committed runs only, with a test proving no duplication |
 | Stage 3 (fill priorities/absenteeism/equipment/headcount limits/dependencies/indirect coverage) | **Accepted** for activity+employment_type priority, absenteeism, equipment (now cross-activity), min- and max-headcount (both now integration-tested), indirect-coverage relief (both the gap and the success path tested), and dependency ordering (structurally cycle-free, with ambiguous-sequence rejection tested) |
 | Stage 4 (congestion/staging/costing/forecast) | **Accepted** for congestion, off-task, staging (with rescheduling), day rates, function/flow, award-based overtime costing AND award/skill-based eligibility (new); forecasting improvements remain open (unchanged, out of this programme's scope) |
+| Shared worker/equipment commitments between order-driven and forecast-driven planning | **Accepted** for workers — new `WorkerCommitment` ledger checked by both `order_fulfillment` (commit time) and roster `publish()`; releasing a commitment frees it without touching actual completion. Equipment has no cross-run-type conflict to resolve (no other run type allocates it) — explicitly scoped out, not silently skipped |
+| Remaining browser workflows: XLSX upload, commit/release/confirm-completion, lifecycle display | **Accepted** — dedicated console UI for all four, verified in `e2e/order-fulfillment.spec.ts` through a real signed-in browser session, not just HTTP calls |
+| Actual Tempo v1/v2 templates and Bluegum sample workbooks, through upload → preview → apply → planning | **Open — blocked on input.** The real files have not been supplied to this programme (checked Google Drive access is unavailable, and no file matching those names exists anywhere in this repository or host). Only a programme-authored fixture (`workers-v1.xlsx`, built from the documented v1 layout) has been exercised. Needed: the actual Tempo v1 and v2 template files and the Bluegum sample workbook(s), by exact filename, placed where this programme can read them |
 | Integration increment + two Arch completion passes | **Accepted, with limitations stated above** — all 17 acceptance-ledger items above are now Accepted; the remaining limitations (cross-day accounting approximation, indirect-coverage role matching unchanged, hybrid forecast bucket granularity) are documented simplifications, not defects found in testing. Full backend suite (see test run below) passes; real browser verification covers both a successful run and a deliberately constrained one, with the explained-shortfall path captured on screen. |

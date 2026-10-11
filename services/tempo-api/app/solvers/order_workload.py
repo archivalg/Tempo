@@ -23,13 +23,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.availability_pattern import WeeklyAvailabilityPattern
-from app.models.canonical import Availability, DemandBucket, LabourCostRule, SkillCertification, Worker, WorkerPerformanceProfile, WorkStandard
+from app.models.canonical import Availability, DemandBucket, LabourCostRule, ShiftAssignment, SkillCertification, Worker, WorkerPerformanceProfile, WorkStandard
 from app.models.constraints import AbsenteeismRule as AbsenteeismRuleModel
 from app.models.constraints import AwardEligibilityRestriction, AwardRule as AwardRuleModel
 from app.models.constraints import Equipment as EquipmentModel
 from app.models.constraints import FillPriority, HeadcountLimit
 from app.models.indirect import IndirectHeadcountRequirement
-from app.models.orders import DayRate, Order, OrderCommitment, ProcessStep, UnitConversion, WorkerActivityRate
+from app.models.orders import DayRate, Order, OrderCommitment, ProcessStep, UnitConversion, WorkerActivityRate, WorkerCommitment
 from app.models.scheduling import ShiftBreak, ShiftTemplate, OperatingCalendarDay, WEEKDAYS
 from app.models.stage4 import ProductivityLoss
 from app.models.stage4 import StagingCapacity as StagingCapacityModel
@@ -402,6 +402,15 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
     for a in db.scalars(select(Availability).where(Availability.tenant_id == tenant_id, Availability.worker_id.in_(worker_ids),
                                                     Availability.status.in_(("unavailable", "leave", "rdo")))):
         avail_blocks[a.worker_id].append((_aware(a.interval_start), _aware(a.interval_end)))
+    # Shared-resource conflicts (priority: order-driven and forecast-driven/roster planning must
+    # respect the SAME worker commitments at a site). A DRAFT run never reads this — it "may reuse
+    # resources" freely, since it promises nothing. Only when COMMITTING does an external commitment
+    # become a hard block, exactly like a dated Availability block, reusing the same mechanism.
+    if request.input.committed:
+        for wc in db.scalars(select(WorkerCommitment).where(WorkerCommitment.tenant_id == tenant_id, WorkerCommitment.worker_id.in_(worker_ids), WorkerCommitment.released_at.is_(None))):
+            avail_blocks[wc.worker_id].append((_aware(wc.start_at), _aware(wc.end_at)))
+        for sa in db.scalars(select(ShiftAssignment).where(ShiftAssignment.tenant_id == tenant_id, ShiftAssignment.worker_id.in_(worker_ids), ShiftAssignment.status == "committed")):
+            avail_blocks[sa.worker_id].append((_aware(sa.start_at), _aware(sa.end_at)))
     weekly_patterns: dict[tuple[str, str], tuple[bool, str | None, str | None]] = {
         (p.worker_id, p.weekday): (p.available, p.earliest_start, p.latest_finish)
         for p in db.scalars(select(WeeklyAvailabilityPattern).where(WeeklyAvailabilityPattern.tenant_id == tenant_id, WeeklyAvailabilityPattern.worker_id.in_(worker_ids)))
@@ -852,6 +861,24 @@ def solve_order_fulfillment(db: Session, tenant_id: str, site_ids: list[str], re
     if total_quantity > 1e-9 and total_produced <= 1e-9 and not any_assignment_made:
         raise SolverInfeasible(f"no feasible allocation found for any of {len(order_state)} order/demand line(s) at site '{site_id}' within the planning window — "
                                "no worker could be assigned to anything at all (check shifts, eligible workers, equipment and headcount limits)")
+
+    # Shared-resource conflicts, the other half: a COMMITTED run's own worker-time claims are recorded
+    # (merged into contiguous blocks per worker) so a LATER committed order_fulfillment run or roster
+    # publish can see them and refuse to double-book the same worker — never written by a draft.
+    if request.input.committed and run_id:
+        by_worker: dict[str, list[tuple[datetime, datetime]]] = defaultdict(list)
+        for a in worker_assignments:
+            by_worker[a["worker_id"]].append((datetime.fromisoformat(a["start_at"]), datetime.fromisoformat(a["end_at"])))
+        for worker_id, intervals in by_worker.items():
+            intervals.sort(key=lambda iv: iv[0])
+            merged: list[list[datetime]] = []
+            for s, e in intervals:
+                if merged and s <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], e)
+                else:
+                    merged.append([s, e])
+            for s, e in merged:
+                db.add(WorkerCommitment(tenant_id=tenant_id, site_id=site_id, worker_id=worker_id, run_id=run_id, start_at=s, end_at=e))
 
     coverage = 1.0 if total_quantity == 0 else max(0.0, 1 - total_shortfall / total_quantity)
     feasibility = "feasible"

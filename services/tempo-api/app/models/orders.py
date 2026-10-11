@@ -110,6 +110,29 @@ class OrderCommitment(Base):
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class WorkerCommitment(Base):
+    """One committed order_fulfillment run's claim on a specific worker's time — the cross-run-type
+    counterpart of `OrderCommitment` (that one tracks order QUANTITY; this one tracks WORKER TIME).
+    Exists so order-driven and forecast-driven (roster) planning can respect the SAME worker
+    commitments at a site without sharing a scheduler: a committed order_fulfillment run checks this
+    table AND published `ShiftAssignment` rows before claiming a worker's time, and a roster publish
+    checks this table before promoting its own shifts to committed — see
+    `app/solvers/order_workload.py` and `app/api/v1/rosters.py::publish`. A DRAFT run never reads or
+    writes this table (brief: "alternative draft scenarios may reuse resources")."""
+
+    __tablename__ = "worker_commitment"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(String, index=True)
+    site_id: Mapped[str] = mapped_column(String, index=True)
+    worker_id: Mapped[str] = mapped_column(String, index=True)
+    run_id: Mapped[str] = mapped_column(String, index=True)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class OrderTask(Base):
     """A generated link from an order to one of its process steps, for traceability (brief: "Persist
     generated order-task links for traceability"). Timing is computed by the solver at run time, not
